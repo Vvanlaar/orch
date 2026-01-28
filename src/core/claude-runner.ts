@@ -387,6 +387,23 @@ export function buildSelfReviewPrompt(): string {
 Provide a brief verdict: APPROVED (changes look good) or NEEDS ATTENTION (with explanation of issues found).`;
 }
 
+export function buildCommentResolutionPrompt(comments: NonNullable<Task['context']['reviewComments']>): string {
+  const commentList = comments.map((c, i) => `${i + 1}. [${c.path}:${c.line}] "${c.body}"`).join('\n');
+
+  return `Look at the git diff of the latest commit to see the changes just made. For each review comment below, describe what was done to resolve it.
+
+## Review Comments
+${commentList}
+
+Respond in JSON format ONLY (no markdown fences, no explanation):
+[
+  { "index": 0, "resolution": "Brief description of what was changed" },
+  ...
+]
+
+Use the 0-based index matching the comment order above. If a comment wasn't addressed, set resolution to "Not addressed in this change".`;
+}
+
 // Wrap prompt with retry context for failed tasks
 export function wrapRetryPrompt(basePrompt: string, error: string, retryCount: number): string {
   return `## RETRY ATTEMPT ${retryCount}

@@ -12,7 +12,7 @@ import {
   getTask,
 } from './task-queue.js';
 import { extractLesson, storeLearning, updateSkillIfRelevant } from './learnings.js';
-import { runClaude, runClaudeStreaming, runClaudeInTerminal, claudeEmitter, steerTask, buildPromptForTask, buildPrCommentFixPrompt, buildCodeSimplifierPrompt, buildSelfReviewPrompt } from './claude-runner.js';
+import { runClaude, runClaudeStreaming, runClaudeInTerminal, claudeEmitter, steerTask, buildPromptForTask, buildPrCommentFixPrompt, buildCodeSimplifierPrompt, buildSelfReviewPrompt, buildCommentResolutionPrompt } from './claude-runner.js';
 import {
   getGitStatus,
   getCurrentBranch,
@@ -233,11 +233,31 @@ async function processPrCommentFix(task: Task): Promise<void> {
       }
     }
 
-    // Step 5: Reply to each review comment
-    console.log(`[Task #${task.id}] Step 5: Replying to review comments`);
-    for (const comment of comments) {
+    // Step 5: Generate per-comment resolutions
+    console.log(`[Task #${task.id}] Step 5: Generating comment resolutions`);
+    let resolutions: Array<{ index: number; resolution: string }> = [];
+    try {
+      const resPrompt = buildCommentResolutionPrompt(comments);
+      const resResult = await runClaude(task, resPrompt, { allowEdits: false });
+      if (resResult.success) {
+        const jsonMatch = resResult.output.match(/\[[\s\S]*\]/);
+        if (jsonMatch) {
+          resolutions = JSON.parse(jsonMatch[0]);
+        }
+      }
+    } catch (err) {
+      console.error(`[Task #${task.id}] Failed to parse resolutions, falling back to generic reply`);
+    }
+
+    // Step 6: Reply to each review comment with resolution
+    console.log(`[Task #${task.id}] Step 6: Replying to review comments`);
+    for (let i = 0; i < comments.length; i++) {
+      const comment = comments[i];
       try {
-        const replyBody = `✅ Addressed in latest push.\n\n_Auto-fixed by Orch task #${task.id}_`;
+        const resolution = resolutions.find(r => r.index === i)?.resolution;
+        const replyBody = resolution
+          ? `✅ **Resolved:** ${resolution}\n\n_Auto-fixed by Orch task #${task.id}_`
+          : `✅ Addressed in latest push.\n\n_Auto-fixed by Orch task #${task.id}_`;
         await replyToReviewComment(task.repo, task.context.prNumber!, comment.id, replyBody);
       } catch (err) {
         console.error(`[Task #${task.id}] Failed to reply to comment ${comment.id}:`, err);
