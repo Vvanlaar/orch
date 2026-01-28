@@ -11,6 +11,7 @@ export interface Task {
   context: TaskContext;
   result?: string;
   error?: string;
+  output?: string; // persisted full output on completion/failure
   streamingOutput?: string; // live output during run
   pid?: number; // OS process ID when running
   createdAt: string;

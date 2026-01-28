@@ -83,11 +83,15 @@ export function startTask(id: number): void {
 }
 
 export function completeTask(id: number, result: string): void {
-  updateTask(id, { status: 'completed', result, pid: undefined, completedAt: new Date().toISOString() });
+  const output = streamingOutputs.get(id);
+  streamingOutputs.delete(id);
+  updateTask(id, { status: 'completed', result, output, pid: undefined, completedAt: new Date().toISOString() });
 }
 
 export function failTask(id: number, error: string): void {
-  updateTask(id, { status: 'failed', error, pid: undefined, completedAt: new Date().toISOString() });
+  const output = streamingOutputs.get(id);
+  streamingOutputs.delete(id);
+  updateTask(id, { status: 'failed', error, output, pid: undefined, completedAt: new Date().toISOString() });
 }
 
 export function updateTaskPid(id: number, pid: number | undefined): void {
@@ -136,12 +140,12 @@ export function clearStreamingOutput(id: number): void {
   streamingOutputs.delete(id);
 }
 
-// Get tasks with streaming output merged in
+// Get tasks with streaming output merged in (live output or persisted fallback)
 export function getAllTasksWithOutput(limit = 50): Task[] {
   const tasks = getAllTasks(limit);
   return tasks.map(t => ({
     ...t,
-    streamingOutput: streamingOutputs.get(t.id),
+    streamingOutput: streamingOutputs.get(t.id) || t.output,
   }));
 }
 
