@@ -71,11 +71,28 @@ function broadcastOutput(taskId: number, chunk: string): void {
 
 app.use(express.json());
 
-// Dashboard
-app.get('/', (_req, res) => {
-  const html = readFileSync(join(__dirname, '../dashboard/index.html'), 'utf-8');
-  res.type('html').send(html);
-});
+// Dashboard - serve built Svelte app or fallback to old HTML
+const distDashboard = join(__dirname, '../../dist/dashboard');
+const oldDashboard = join(__dirname, '../dashboard/index.old.html');
+
+if (existsSync(join(distDashboard, 'index.html'))) {
+  // Serve built Svelte dashboard
+  app.use(express.static(distDashboard));
+  app.get('/', (_req, res) => {
+    res.sendFile(join(distDashboard, 'index.html'));
+  });
+} else if (existsSync(oldDashboard)) {
+  // Fallback to old vanilla JS dashboard
+  app.get('/', (_req, res) => {
+    const html = readFileSync(oldDashboard, 'utf-8');
+    res.type('html').send(html);
+  });
+} else {
+  // Dev mode - Vite handles the dashboard
+  app.get('/', (_req, res) => {
+    res.send('Dashboard not built. Run npm run build:dashboard or use Vite dev server.');
+  });
+}
 
 // Health check
 app.get('/health', (_req, res) => {

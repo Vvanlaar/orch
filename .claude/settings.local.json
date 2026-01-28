@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(claude mcp add:*)",
+      "Bash(npm install:*)",
+      "Bash(npm ls:*)",
+      "Bash(npm:*)",
+      "Bash(npm config:*)"
+    ]
+  }
+}
