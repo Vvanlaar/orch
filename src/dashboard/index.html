@@ -158,6 +158,11 @@
       const key = `${pr.repo}#${pr.number}`;
       prCache.set(key, pr);
 
+      // Show "Fix Comments" button for PRs where user is author
+      const fixCommentsBtn = pr.role === 'author'
+        ? `<button class="action-btn" style="background:#a371f7;" onclick="fixPRCommentsByKey('${key}')">Fix Comments</button>`
+        : '';
+
       return `
         <div class="item">
           <div class="item-info">
@@ -170,6 +175,7 @@
             </div>
           </div>
           <div class="item-actions">
+            ${fixCommentsBtn}
             <button class="action-btn" onclick="reviewPRByKey('${key}')">Review</button>
             <a href="${escapeHtml(pr.url)}" target="_blank" class="action-btn secondary">View →</a>
           </div>
@@ -331,6 +337,37 @@
 
       try {
         const res = await fetch(API_BASE + '/api/actions/review-pr', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        });
+        const result = await res.json();
+        if (res.ok) {
+          alert(`Task #${result.taskId} created: ${result.message}`);
+        } else {
+          alert(`Error: ${result.error}`);
+        }
+      } catch (err) {
+        alert('Failed to create task: ' + err.message);
+      }
+    }
+
+    async function fixPRCommentsByKey(key) {
+      const pr = prCache.get(key);
+      if (!pr) { alert('PR not found'); return; }
+
+      const data = {
+        repo: pr.repo,
+        prNumber: pr.number,
+        source: 'github',
+        title: pr.title,
+        url: pr.url,
+        branch: pr.branch,
+        baseBranch: pr.baseBranch,
+      };
+
+      try {
+        const res = await fetch(API_BASE + '/api/actions/fix-pr-comments', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(data),

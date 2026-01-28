@@ -168,6 +168,57 @@ Format your response as:
 [Explanation]`;
 }
 
+export function buildPrCommentFixPrompt(context: Task['context']): string {
+  const comments = context.reviewComments || [];
+  const commentBlocks = comments.map((c, i) => `
+### Comment ${i + 1}
+- **File:** ${c.path}
+- **Line:** ${c.line}
+- **Feedback:** ${c.body}
+${c.diffHunk ? `\`\`\`diff\n${c.diffHunk}\n\`\`\`` : ''}
+`).join('\n');
+
+  return `Fix the following PR review comments by making the requested changes:
+
+## PR: ${context.title || 'PR #' + context.prNumber}
+Branch: ${context.branch || 'unknown'}
+
+## Review Comments to Address
+${commentBlocks}
+
+## Instructions
+1. For each comment, navigate to the file and line mentioned
+2. Understand the feedback and make the requested change
+3. Keep changes minimal and focused on addressing the feedback
+4. Maintain code style consistency with surrounding code
+
+After making all changes, provide a brief summary of what was fixed for each comment.`;
+}
+
+export function buildCodeSimplifierPrompt(modifiedFiles: string[]): string {
+  const fileList = modifiedFiles.map(f => `- ${f}`).join('\n');
+  return `Run /code-simplifier on the following files that were just modified:
+
+${fileList}
+
+Focus on:
+- Clarity and readability
+- Consistent formatting
+- Removing unnecessary complexity
+- Keeping all functionality intact`;
+}
+
+export function buildSelfReviewPrompt(): string {
+  return `Review the changes you just made to ensure they are correct:
+
+1. Check that all review comments were properly addressed
+2. Verify no regressions were introduced
+3. Confirm code style is consistent
+4. Look for any obvious issues
+
+Provide a brief verdict: APPROVED (changes look good) or NEEDS ATTENTION (with explanation of issues found).`;
+}
+
 export function buildPromptForTask(task: Task): string {
   switch (task.type) {
     case 'pr-review':
@@ -180,6 +231,8 @@ export function buildPromptForTask(task: Task): string {
       return buildPipelineFixPrompt(task.context);
     case 'resolution-review':
       return buildResolutionReviewPrompt(task.context);
+    case 'pr-comment-fix':
+      return buildPrCommentFixPrompt(task.context);
     case 'docs':
       return `Update documentation based on recent changes. Format as markdown.`;
     default:

@@ -154,6 +154,74 @@ app.post('/api/actions/analyze-workitem', (req, res) => {
   res.json({ taskId: task.id, message: `${taskType} task created` });
 });
 
+app.post('/api/actions/fix-pr-comments', async (req, res) => {
+  const { repo, prNumber, source, title, url, branch, baseBranch } = req.body;
+  const repoMapping = getEffectiveRepoMapping();
+  const localFolder = repoMapping[repo];
+
+  if (!localFolder) {
+    res.status(400).json({ error: `No local mapping for repo: ${repo}` });
+    return;
+  }
+
+  // Fetch review comments for this PR
+  const { Octokit } = await import('octokit');
+  const { config } = await import('../core/config.js');
+  const octokit = new Octokit({ auth: config.github.token });
+
+  const [owner, repoName] = repo.split('/');
+
+  try {
+    // Get authenticated user to filter out self-comments
+    const { data: user } = await octokit.rest.users.getAuthenticated();
+    const username = user.login;
+
+    // Fetch review comments
+    const { data: comments } = await octokit.rest.pulls.listReviewComments({
+      owner,
+      repo: repoName,
+      pull_number: prNumber,
+    });
+
+    // Filter to unresolved comments not by PR author
+    const unresolvedComments = comments.filter(c =>
+      c.user?.login !== username && !c.in_reply_to_id
+    );
+
+    if (unresolvedComments.length === 0) {
+      res.status(400).json({ error: 'No unresolved review comments found' });
+      return;
+    }
+
+    const reviewComments = unresolvedComments.map(c => ({
+      id: c.id,
+      path: c.path,
+      line: c.line || c.original_line || 0,
+      body: c.body,
+      diffHunk: c.diff_hunk,
+    }));
+
+    const repoPath = path.resolve(config.repos.baseDir, localFolder);
+    const task = createTask('pr-comment-fix', repo, repoPath, {
+      source: source || 'github',
+      event: 'manual.fix-pr-comments',
+      prNumber,
+      title,
+      url,
+      branch,
+      baseBranch,
+      reviewComments,
+    });
+
+    triggerUpdate();
+    broadcastTasks();
+    res.json({ taskId: task.id, message: `PR comment fix task created (${unresolvedComments.length} comments)` });
+  } catch (err) {
+    console.error('[fix-pr-comments] Error:', err);
+    res.status(500).json({ error: 'Failed to fetch review comments' });
+  }
+});
+
 app.post('/api/actions/review-resolution', (req, res) => {
   const { id, title, project, url, resolution, githubPrUrl, testNotes, body } = req.body;
   const repoMapping = getEffectiveRepoMapping();
