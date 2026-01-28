@@ -83,11 +83,15 @@ export function startTask(id: number): void {
 }
 
 export function completeTask(id: number, result: string): void {
-  updateTask(id, { status: 'completed', result, completedAt: new Date().toISOString() });
+  updateTask(id, { status: 'completed', result, pid: undefined, completedAt: new Date().toISOString() });
 }
 
 export function failTask(id: number, error: string): void {
-  updateTask(id, { status: 'failed', error, completedAt: new Date().toISOString() });
+  updateTask(id, { status: 'failed', error, pid: undefined, completedAt: new Date().toISOString() });
+}
+
+export function updateTaskPid(id: number, pid: number | undefined): void {
+  updateTask(id, { pid });
 }
 
 export function updateTaskStatus(id: number, status: TaskStatus): void {
@@ -96,6 +100,18 @@ export function updateTaskStatus(id: number, status: TaskStatus): void {
     updates.startedAt = new Date().toISOString();
   }
   updateTask(id, updates);
+}
+
+export function deleteTask(id: number): boolean {
+  const db = loadDb();
+  const idx = db.tasks.findIndex(t => t.id === id);
+  if (idx === -1) return false;
+  const task = db.tasks[idx];
+  // Only allow deleting non-running tasks
+  if (task.status === 'running') return false;
+  db.tasks.splice(idx, 1);
+  saveDb(db);
+  return true;
 }
 
 // In-memory streaming output (not persisted to disk for performance)
@@ -127,4 +143,23 @@ export function getAllTasksWithOutput(limit = 50): Task[] {
     ...t,
     streamingOutput: streamingOutputs.get(t.id),
   }));
+}
+
+// Get running tasks that have PIDs (for process management)
+export function getTasksWithPids(): Task[] {
+  const db = loadDb();
+  return db.tasks.filter(t => t.status === 'running' && t.pid);
+}
+
+// Create retry task from failed task
+export function retryTask(failedTaskId: number): Task | null {
+  const failedTask = getTask(failedTaskId);
+  if (!failedTask || failedTask.status !== 'failed') return null;
+
+  return createTask(failedTask.type, failedTask.repo, failedTask.repoPath, {
+    ...failedTask.context,
+    retryOfTaskId: failedTaskId,
+    retryError: failedTask.error || 'Unknown error',
+    retryCount: (failedTask.context.retryCount || 0) + 1,
+  });
 }

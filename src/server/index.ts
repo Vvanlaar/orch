@@ -11,7 +11,8 @@ import { startProcessor, setTaskUpdateCallback, setOutputCallback, triggerUpdate
 import { startPoller } from '../core/poller.js';
 import { getScannedRepos, getEffectiveRepoMapping } from '../core/repo-scanner.js';
 import { getMyGitHubPRs, getMyAdoWorkItems, getMyResolvedWorkItems } from '../core/user-items.js';
-import { getAllTasks, getAllTasksWithOutput, getTask, createTask } from '../core/task-queue.js';
+import { getAllTasks, getAllTasksWithOutput, getTask, createTask, deleteTask, failTask, completeTask, getTasksWithPids, retryTask } from '../core/task-queue.js';
+import { killTask } from '../core/claude-runner.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -95,6 +96,217 @@ app.get('/api/tasks/:id', (req, res) => {
     return;
   }
   res.json(task);
+});
+
+// Stop running task
+app.post('/api/tasks/:id/stop', async (req, res) => {
+  const id = parseInt(req.params.id);
+  const task = getTask(id);
+  if (!task) {
+    res.status(404).json({ error: 'Task not found' });
+    return;
+  }
+  if (task.status !== 'running') {
+    res.status(400).json({ error: 'Task not running' });
+    return;
+  }
+  killTask(id);
+  failTask(id, 'Stopped by user');
+  broadcastTasks();
+  res.json({ success: true });
+});
+
+// Delete task
+app.delete('/api/tasks/:id', async (req, res) => {
+  const id = parseInt(req.params.id);
+  const success = deleteTask(id);
+  if (!success) {
+    res.status(400).json({ error: 'Cannot delete task (not found or running)' });
+    return;
+  }
+  broadcastTasks();
+  res.json({ success: true });
+});
+
+// Retry failed task
+app.post('/api/tasks/:id/retry', (req, res) => {
+  const id = parseInt(req.params.id);
+  const task = getTask(id);
+  if (!task) {
+    res.status(404).json({ error: 'Task not found' });
+    return;
+  }
+  if (task.status !== 'failed') {
+    res.status(400).json({ error: 'Can only retry failed tasks' });
+    return;
+  }
+  const newTask = retryTask(id);
+  if (!newTask) {
+    res.status(500).json({ error: 'Failed to create retry task' });
+    return;
+  }
+  triggerUpdate();
+  broadcastTasks();
+  res.json({ taskId: newTask.id, message: `Retry task #${newTask.id} created (attempt ${newTask.context.retryCount})` });
+});
+
+// Complete task manually (for terminal mode)
+app.post('/api/tasks/:id/complete', (req, res) => {
+  const id = parseInt(req.params.id);
+  const task = getTask(id);
+  if (!task) {
+    res.status(404).json({ error: 'Task not found' });
+    return;
+  }
+  if (task.status !== 'running') {
+    res.status(400).json({ error: 'Task not running' });
+    return;
+  }
+  completeTask(id, req.body.result || 'Completed manually');
+  broadcastTasks();
+  res.json({ success: true });
+});
+
+// Open terminal in task's repo directory
+app.post('/api/tasks/:id/terminal', async (req, res) => {
+  const id = parseInt(req.params.id);
+  const task = getTask(id);
+  if (!task) {
+    res.status(404).json({ error: 'Task not found' });
+    return;
+  }
+  const { exec } = await import('child_process');
+  const repoPath = task.repoPath.replace(/\\/g, '/');
+  const title = `Task #${id}: ${task.repo}`;
+  // Open Windows Terminal in the repo directory
+  exec(`wt -w 0 nt --title "${title}" -d "${repoPath}"`, (err) => {
+    if (err) {
+      // Fallback to cmd
+      exec(`start "${title}" cmd /k "cd /d ${task.repoPath}"`, (cmdErr) => {
+        if (cmdErr) {
+          res.status(500).json({ error: 'Failed to open terminal' });
+        } else {
+          res.json({ success: true });
+        }
+      });
+    } else {
+      res.json({ success: true });
+    }
+  });
+});
+
+// Process management - only shows processes spawned by Orch tasks
+app.get('/api/processes', async (_req, res) => {
+  const { execSync } = await import('child_process');
+  try {
+    // Get tasks with PIDs from our database
+    const tasksWithPids = getTasksWithPids();
+    if (tasksWithPids.length === 0) {
+      res.json([]);
+      return;
+    }
+
+    // Build PID filter for PowerShell
+    const pidList = tasksWithPids.map(t => t.pid).join(',');
+    const result = execSync(
+      `powershell -Command "Get-CimInstance Win32_Process -Filter \\"ProcessId IN (${pidList})\\" | Select-Object ProcessId, Name, CreationDate, CommandLine | ConvertTo-Json"`,
+      { encoding: 'utf-8' }
+    );
+
+    if (!result.trim()) {
+      // PIDs no longer exist - processes have ended
+      res.json([]);
+      return;
+    }
+
+    const data = JSON.parse(result);
+    const arr = Array.isArray(data) ? data : [data];
+
+    // Map PID to task info for enriching response
+    const pidToTask = new Map(tasksWithPids.map(t => [t.pid, t]));
+
+    const processes = arr.map((p: { ProcessId: number; Name: string; CreationDate: string; CommandLine: string }) => {
+      const task = pidToTask.get(p.ProcessId);
+
+      // Parse CIM date format: /Date(1234567890000)/
+      let startTime: string | null = null;
+      if (p.CreationDate) {
+        const match = p.CreationDate.match(/\/Date\((\d+)\)\//);
+        if (match) {
+          startTime = new Date(parseInt(match[1])).toISOString();
+        }
+      }
+
+      return {
+        pid: p.ProcessId,
+        taskId: task?.id,
+        taskType: task?.type,
+        repo: task?.repo,
+        name: p.Name?.replace('.exe', '') || 'unknown',
+        startTime,
+      };
+    });
+
+    res.json(processes);
+  } catch (err) {
+    console.error('[processes] Error:', err);
+    res.json([]);
+  }
+});
+
+app.post('/api/processes/:pid/kill', async (req, res) => {
+  const pid = parseInt(req.params.pid);
+  const { execSync } = await import('child_process');
+  try {
+    execSync(`powershell -Command "Stop-Process -Id ${pid} -Force"`, { encoding: 'utf-8' });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: `Failed to kill process ${pid}` });
+  }
+});
+
+app.post('/api/processes/kill-old', async (_req, res) => {
+  const { execSync } = await import('child_process');
+  try {
+    // Only kill Orch processes older than 2 hours
+    const tasksWithPids = getTasksWithPids();
+    const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
+
+    let killed = 0;
+    for (const task of tasksWithPids) {
+      const startedAt = task.startedAt ? new Date(task.startedAt).getTime() : Date.now();
+      if (startedAt < twoHoursAgo && task.pid) {
+        try {
+          execSync(`powershell -Command "Stop-Process -Id ${task.pid} -Force -ErrorAction SilentlyContinue"`);
+          killed++;
+        } catch { /* ignore */ }
+      }
+    }
+    res.json({ success: true, message: `Killed ${killed} Orch process(es) older than 2 hours` });
+  } catch (err) {
+    res.status(400).json({ error: 'Failed to kill old processes' });
+  }
+});
+
+app.post('/api/processes/kill-all', async (_req, res) => {
+  const { execSync } = await import('child_process');
+  try {
+    // Only kill Orch processes
+    const tasksWithPids = getTasksWithPids();
+
+    let killed = 0;
+    for (const task of tasksWithPids) {
+      if (task.pid) {
+        try {
+          execSync(`powershell -Command "Stop-Process -Id ${task.pid} -Force -ErrorAction SilentlyContinue"`);
+          killed++;
+        } catch { /* ignore */ }
+      }
+    }
+    res.json({ success: true, message: `Killed ${killed} Orch process(es)` });
+  } catch (err) {
+    res.status(400).json({ error: 'Failed to kill processes' });
+  }
 });
 
 app.get('/api/repos', (_req, res) => {

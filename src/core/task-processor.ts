@@ -8,8 +8,11 @@ import {
   failTask,
   appendStreamingOutput,
   clearStreamingOutput,
+  updateTaskPid,
+  getTask,
 } from './task-queue.js';
-import { runClaude, runClaudeStreaming, claudeEmitter, steerTask, buildPromptForTask, buildPrCommentFixPrompt, buildCodeSimplifierPrompt, buildSelfReviewPrompt } from './claude-runner.js';
+import { extractLesson, storeLearning, updateSkillIfRelevant } from './learnings.js';
+import { runClaude, runClaudeStreaming, runClaudeInTerminal, claudeEmitter, steerTask, buildPromptForTask, buildPrCommentFixPrompt, buildCodeSimplifierPrompt, buildSelfReviewPrompt } from './claude-runner.js';
 import {
   getGitStatus,
   getCurrentBranch,
@@ -48,10 +51,36 @@ export function triggerUpdate(): void {
 // Re-export steerTask for server
 export { steerTask };
 
+async function extractAndStoreLearning(failedTask: Task, successTask: Task): Promise<void> {
+  console.log(`[learnings] Extracting lesson: failed #${failedTask.id} -> success #${successTask.id}`);
+  const learning = await extractLesson(failedTask, successTask);
+  if (!learning) return;
+
+  storeLearning(learning, successTask.repoPath);
+  await updateSkillIfRelevant(learning, successTask);
+}
+
+// Trigger learning extraction if this was a successful retry
+function triggerLearningExtraction(task: Task): void {
+  if (!task.context.retryOfTaskId) return;
+  const failedTask = getTask(task.context.retryOfTaskId);
+  if (!failedTask) return;
+
+  extractAndStoreLearning(failedTask, task).catch(err => {
+    console.error('[learnings] Error extracting lesson:', err);
+  });
+}
+
 // Wire up streaming output from claudeEmitter
 claudeEmitter.on('output', (taskId: number, chunk: string) => {
   appendStreamingOutput(taskId, chunk);
   onOutputChunk?.(taskId, chunk);
+});
+
+// Wire up PID tracking
+claudeEmitter.on('pid', (taskId: number, pid: number) => {
+  updateTaskPid(taskId, pid);
+  console.log(`[Task #${taskId}] Process started with PID ${pid}`);
 });
 
 async function postGitHubPrComment(repo: string, prNumber: number, body: string): Promise<void> {
@@ -141,13 +170,19 @@ async function processPrCommentFix(task: Task): Promise<void> {
   const originalBranch = getCurrentBranch(task.repoPath);
 
   try {
-    // Fetch and checkout PR branch
+    // Checkout PR branch using gh cli (handles remote branches automatically)
     const { execSync } = await import('child_process');
-    execSync('git fetch origin', { cwd: task.repoPath, stdio: 'pipe' });
-    execSync(`git checkout ${targetBranch}`, { cwd: task.repoPath, stdio: 'pipe' });
-    execSync(`git pull origin ${targetBranch}`, { cwd: task.repoPath, stdio: 'pipe' });
+    const prNumber = task.context.prNumber;
+    if (prNumber) {
+      execSync(`gh pr checkout ${prNumber}`, { cwd: task.repoPath, stdio: 'pipe' });
+    } else {
+      // Fallback to git checkout if no PR number
+      execSync('git fetch origin', { cwd: task.repoPath, stdio: 'pipe' });
+      execSync(`git checkout ${targetBranch}`, { cwd: task.repoPath, stdio: 'pipe' });
+      execSync(`git pull origin ${targetBranch}`, { cwd: task.repoPath, stdio: 'pipe' });
+    }
   } catch (err) {
-    console.error(`[Task #${task.id}] Failed to checkout branch ${targetBranch}:`, err);
+    console.error(`[Task #${task.id}] Failed to checkout PR #${task.context.prNumber || targetBranch}:`, err);
     failTask(task.id, `Failed to checkout branch: ${err}`);
     checkoutBranch(task.repoPath, originalBranch);
     notifyUpdate();
@@ -212,6 +247,7 @@ async function processPrCommentFix(task: Task): Promise<void> {
     const resultSummary = `Fixed ${comments.length} review comment(s) and pushed to ${targetBranch}\n\n${fixResult.output}`;
     completeTask(task.id, resultSummary);
     console.log(`[Task #${task.id}] Completed successfully`);
+    triggerLearningExtraction(task);
     notifyUpdate();
 
   } catch (err) {
@@ -316,6 +352,18 @@ async function processTask(task: Task): Promise<void> {
 
   try {
     const prompt = buildPromptForTask(task);
+
+    // Terminal mode: open in separate window, task stays "running" until manually completed
+    if (config.claude.terminalMode) {
+      const termResult = await runClaudeInTerminal(task.id, task, prompt, { allowEdits });
+      if (!termResult.success) {
+        failTask(task.id, termResult.error || 'Failed to open terminal');
+        notifyUpdate();
+      }
+      // Task stays "running" - user must manually complete/fail via dashboard
+      return;
+    }
+
     const result = await runClaudeStreaming(task.id, task, prompt, { allowEdits });
 
     if (result.success) {
@@ -349,6 +397,7 @@ async function processTask(task: Task): Promise<void> {
       const resultWithPr = prUrl ? `${result.output}\n\nPR: ${prUrl}` : result.output;
       completeTask(task.id, resultWithPr);
       console.log(`Task #${task.id} completed${prUrl ? ` (PR: ${prUrl})` : ''}`);
+      triggerLearningExtraction(task);
       notifyUpdate();
     } else {
       failTask(task.id, result.error || 'Unknown error');

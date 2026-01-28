@@ -1,7 +1,11 @@
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, ChildProcess, exec } from 'child_process';
 import { EventEmitter } from 'events';
+import { writeFileSync, mkdirSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 import type { Task } from './types.js';
 import { config } from './config.js';
+import { loadLearnings } from './learnings.js';
 
 // Process registry for steering running tasks
 const runningProcesses = new Map<number, ChildProcess>();
@@ -21,15 +25,22 @@ export interface RunOptions {
 
 export async function runClaude(task: Task, prompt: string, options: RunOptions = {}): Promise<ClaudeResult> {
   return new Promise((resolve) => {
+    // Use stdin to pass prompt (avoids command line length limits on Windows)
     const args = options.allowEdits
-      ? ['--dangerously-skip-permissions', '-p', prompt]
-      : ['--print', '--dangerously-skip-permissions', prompt];
+      ? ['--dangerously-skip-permissions', '-p', '-']
+      : ['--print', '--dangerously-skip-permissions', '-'];
 
     const proc = spawn('claude', args, {
       cwd: task.repoPath,
       shell: true,
       timeout: config.claude.timeout,
     });
+
+    // Send prompt via stdin
+    if (proc.stdin) {
+      proc.stdin.write(prompt);
+      proc.stdin.end();
+    }
 
     let stdout = '';
     let stderr = '';
@@ -64,9 +75,16 @@ export async function runClaudeStreaming(
   options: RunOptions = {}
 ): Promise<ClaudeResult> {
   return new Promise((resolve) => {
+    // Write prompt to temp file to avoid ENAMETOOLONG on Windows
+    const promptDir = join(tmpdir(), 'orch-prompts');
+    mkdirSync(promptDir, { recursive: true });
+    const promptFile = join(promptDir, `task-${taskId}.txt`);
+    writeFileSync(promptFile, prompt, 'utf-8');
+
+    // Use stdin to pass prompt (avoids command line length limits)
     const args = options.allowEdits
-      ? ['--dangerously-skip-permissions', '-p', prompt]
-      : ['--print', '--dangerously-skip-permissions', prompt];
+      ? ['--dangerously-skip-permissions', '-p', '-']
+      : ['--print', '--dangerously-skip-permissions', '-'];
 
     const proc = spawn('claude', args, {
       cwd: task.repoPath,
@@ -76,6 +94,17 @@ export async function runClaudeStreaming(
 
     // Register for steering
     runningProcesses.set(taskId, proc);
+
+    // Emit PID for tracking
+    if (proc.pid) {
+      claudeEmitter.emit('pid', taskId, proc.pid);
+    }
+
+    // Send prompt via stdin
+    if (proc.stdin) {
+      proc.stdin.write(prompt);
+      proc.stdin.end();
+    }
 
     let stdout = '';
     let stderr = '';
@@ -118,6 +147,74 @@ export function steerTask(taskId: number, input: string): boolean {
 
 export function isTaskRunning(taskId: number): boolean {
   return runningProcesses.has(taskId);
+}
+
+export function killTask(taskId: number): boolean {
+  const proc = runningProcesses.get(taskId);
+  if (!proc) return false;
+  proc.kill('SIGTERM');
+  runningProcesses.delete(taskId);
+  return true;
+}
+
+// Get PIDs of all running tasks (for process management UI)
+export function getRunningTaskPids(): { taskId: number; pid: number }[] {
+  const result: { taskId: number; pid: number }[] = [];
+  for (const [taskId, proc] of runningProcesses) {
+    if (proc.pid) {
+      result.push({ taskId, pid: proc.pid });
+    }
+  }
+  return result;
+}
+
+// Run Claude in a separate terminal window (Windows Terminal or cmd)
+export async function runClaudeInTerminal(
+  taskId: number,
+  task: Task,
+  prompt: string,
+  options: RunOptions = {}
+): Promise<ClaudeResult> {
+  // Write prompt to temp file (prompts can be very long)
+  const promptDir = join(tmpdir(), 'orch-prompts');
+  mkdirSync(promptDir, { recursive: true });
+  const promptFile = join(promptDir, `task-${taskId}.txt`);
+  writeFileSync(promptFile, prompt, 'utf-8');
+
+  const claudeArgs = options.allowEdits
+    ? `--dangerously-skip-permissions -p "$(cat '${promptFile.replace(/\\/g, '/')}')"`
+    : `--print --dangerously-skip-permissions "$(cat '${promptFile.replace(/\\/g, '/')}')"`;
+
+  // Build command for Windows Terminal (wt) or fallback to cmd
+  const repoPath = task.repoPath.replace(/\\/g, '/');
+  const title = `Task #${taskId}: ${task.type}`;
+
+  // Try Windows Terminal first, fall back to cmd
+  const wtCmd = `wt -w 0 nt --title "${title}" -d "${repoPath}" cmd /k "claude ${claudeArgs}"`;
+  const cmdCmd = `start "${title}" cmd /k "cd /d ${task.repoPath} && claude ${claudeArgs}"`;
+
+  return new Promise((resolve) => {
+    // Try wt first
+    exec(wtCmd, (err) => {
+      if (err) {
+        // Fallback to cmd
+        exec(cmdCmd, (cmdErr) => {
+          if (cmdErr) {
+            console.error('[terminal] Failed to open terminal:', cmdErr);
+            resolve({ success: false, output: '', error: 'Failed to open terminal window' });
+          } else {
+            console.log(`[terminal] Opened cmd window for task #${taskId}`);
+            claudeEmitter.emit('output', taskId, `[Terminal opened - running in external window]\nPrompt file: ${promptFile}\n`);
+            resolve({ success: true, output: 'Running in external terminal' });
+          }
+        });
+      } else {
+        console.log(`[terminal] Opened Windows Terminal for task #${taskId}`);
+        claudeEmitter.emit('output', taskId, `[Windows Terminal opened - running in external window]\nPrompt file: ${promptFile}\n`);
+        resolve({ success: true, output: 'Running in external terminal' });
+      }
+    });
+  });
 }
 
 export function buildPrReviewPrompt(context: Task['context']): string {
@@ -290,23 +387,53 @@ export function buildSelfReviewPrompt(): string {
 Provide a brief verdict: APPROVED (changes look good) or NEEDS ATTENTION (with explanation of issues found).`;
 }
 
+// Wrap prompt with retry context for failed tasks
+export function wrapRetryPrompt(basePrompt: string, error: string, retryCount: number): string {
+  return `## RETRY ATTEMPT ${retryCount}
+
+A previous attempt at this task FAILED with the following error:
+
+\`\`\`
+${error}
+\`\`\`
+
+Analyze what went wrong and try a different approach. Consider:
+- If a file wasn't found, check if the path is correct
+- If a command failed, check the command syntax
+- If there was a logic error, reconsider the approach
+- If permissions failed, try an alternative method
+
+---
+
+${basePrompt}`;
+}
+
+const promptBuilders: Record<string, (ctx: Task['context']) => string> = {
+  'pr-review': buildPrReviewPrompt,
+  'issue-fix': buildIssueFixPrompt,
+  'code-gen': buildCodeGenPrompt,
+  'pipeline-fix': buildPipelineFixPrompt,
+  'resolution-review': buildResolutionReviewPrompt,
+  'pr-comment-fix': buildPrCommentFixPrompt,
+  'docs': () => 'Update documentation based on recent changes. Format as markdown.',
+};
+
 export function buildPromptForTask(task: Task): string {
-  switch (task.type) {
-    case 'pr-review':
-      return buildPrReviewPrompt(task.context);
-    case 'issue-fix':
-      return buildIssueFixPrompt(task.context);
-    case 'code-gen':
-      return buildCodeGenPrompt(task.context);
-    case 'pipeline-fix':
-      return buildPipelineFixPrompt(task.context);
-    case 'resolution-review':
-      return buildResolutionReviewPrompt(task.context);
-    case 'pr-comment-fix':
-      return buildPrCommentFixPrompt(task.context);
-    case 'docs':
-      return `Update documentation based on recent changes. Format as markdown.`;
-    default:
-      return `Analyze: ${task.context.title}\n\n${task.context.body || ''}`;
+  const builder = promptBuilders[task.type];
+  let prompt = builder
+    ? builder(task.context)
+    : `Analyze: ${task.context.title}\n\n${task.context.body || ''}`;
+
+  // Prepend learnings if available
+  const learnings = loadLearnings(task.repoPath);
+  if (learnings) {
+    prompt = `## Relevant Learnings from Previous Tasks\n\n${learnings}\n\n---\n\n${prompt}`;
   }
+
+  // Wrap with retry context if retrying a failed task
+  if (task.context.retryOfTaskId && task.context.retryError) {
+    return wrapRetryPrompt(prompt, task.context.retryError, task.context.retryCount || 1);
+  }
+
+  return prompt;
 }

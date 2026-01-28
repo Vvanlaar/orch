@@ -21,6 +21,7 @@ export const config: Config = {
   claude: {
     maxConcurrentTasks: parseInt(envOr('MAX_CONCURRENT_TASKS', '2')),
     timeout: parseInt(envOr('CLAUDE_TIMEOUT', '300000')),
+    terminalMode: envOr('CLAUDE_TERMINAL_MODE', 'false') === 'true',
   },
   repos: {
     baseDir: envOr('REPOS_BASE_DIR', '../'),

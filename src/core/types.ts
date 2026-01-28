@@ -12,6 +12,7 @@ export interface Task {
   result?: string;
   error?: string;
   streamingOutput?: string; // live output during run
+  pid?: number; // OS process ID when running
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
@@ -38,6 +39,10 @@ export interface TaskContext {
     body: string;
     diffHunk?: string;
   }>;
+  // Retry
+  retryOfTaskId?: number;
+  retryError?: string;
+  retryCount?: number;
 }
 
 export interface Config {
@@ -56,6 +61,7 @@ export interface Config {
   claude: {
     maxConcurrentTasks: number;
     timeout: number;
+    terminalMode: boolean; // open tasks in separate terminal windows
   };
   repos: {
     baseDir: string;

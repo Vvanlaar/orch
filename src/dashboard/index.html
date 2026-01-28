@@ -43,8 +43,8 @@
 
     .empty { padding: 48px; text-align: center; color: #8b949e; }
 
-    .tasks { margin-bottom: 24px; }
-    .task { display: grid; grid-template-columns: 60px 90px 1fr 100px 100px; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #21262d; align-items: center; }
+    .tasks { margin-bottom: 24px; overflow-x: hidden; }
+    .task { display: grid; grid-template-columns: 60px 90px minmax(0, 1fr) 80px auto; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #21262d; align-items: center; overflow: hidden; }
     .task:hover { background: #1c2128; }
     .task-id { font-family: monospace; color: #8b949e; font-size: 13px; }
     .task-status { font-size: 11px; padding: 2px 8px; border-radius: 12px; text-align: center; }
@@ -52,6 +52,8 @@
     .task-status.running { background: #58a6ff20; color: #58a6ff; }
     .task-status.completed { background: #3fb95020; color: #3fb950; }
     .task-status.failed { background: #f8514920; color: #f85149; }
+    .action-btn.retry { background: #f0883e; }
+    .action-btn.retry:hover { background: #d97706; }
     .task-info { overflow: hidden; }
     .task-type { font-size: 11px; color: #8b949e; }
     .task-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
@@ -81,7 +83,9 @@
       padding: 12px;
       max-height: 400px;
       overflow-y: auto;
+      overflow-x: hidden;
       white-space: pre-wrap;
+      word-break: break-word;
       color: #8b949e;
       border-top: 1px solid #21262d;
       display: none;
@@ -107,7 +111,7 @@
       font-size: 12px;
     }
     .steer-input input:focus { outline: none; border-color: #58a6ff; }
-    .task-wrapper { border-bottom: 1px solid #21262d; }
+    .task-wrapper { border-bottom: 1px solid #21262d; overflow-x: hidden; }
     .task-wrapper:last-child { border-bottom: none; }
     .task { border-bottom: none; }
   </style>
@@ -144,6 +148,20 @@
       <h2>Orch Tasks</h2>
       <div class="card-list" id="taskList">
         <div class="empty">No tasks yet</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top: 24px;">
+      <h2 style="display:flex;justify-content:space-between;align-items:center;">
+        <span>Processes</span>
+        <div style="display:flex;gap:8px;">
+          <button class="action-btn secondary" onclick="fetchProcesses()">Refresh</button>
+          <button class="action-btn" style="background:#f0883e;" onclick="killOldProcesses()">Kill Old (2h+)</button>
+          <button class="action-btn" style="background:#f85149;" onclick="killAllProcesses()">Kill All</button>
+        </div>
+      </h2>
+      <div class="card-list" id="processList" style="max-height:300px;">
+        <div class="empty">Click Refresh to load</div>
       </div>
     </div>
   </div>
@@ -271,19 +289,36 @@
 
     function renderTask(task) {
       const isRunning = task.status === 'running';
+      const isFailed = task.status === 'failed';
+      const canDelete = task.status !== 'running';
       const hasOutput = task.streamingOutput || task.result || task.error;
+      const retryInfo = task.context?.retryCount ? ` (retry #${task.context.retryCount})` : '';
+
+      let actionBtn = `<button class="action-btn secondary" onclick="event.stopPropagation(); openTerminal(${task.id})">Terminal</button>`;
+      if (isRunning) {
+        actionBtn += `
+          <button class="action-btn" style="background:#3fb950;" onclick="event.stopPropagation(); completeTask(${task.id})">Done</button>
+          <button class="action-btn" style="background:#f85149;" onclick="event.stopPropagation(); stopTask(${task.id})">Stop</button>`;
+      } else if (isFailed) {
+        actionBtn += `<button class="action-btn retry" onclick="event.stopPropagation(); retryTask(${task.id})">Retry</button>`;
+        actionBtn += `<button class="action-btn secondary" onclick="event.stopPropagation(); deleteTask(${task.id})">Delete</button>`;
+      } else if (canDelete) {
+        actionBtn += `<button class="action-btn secondary" onclick="event.stopPropagation(); deleteTask(${task.id})">Delete</button>`;
+      }
+
       return `
         <div class="task-wrapper" data-task-id="${task.id}">
           <div class="task task-row" onclick="toggleTaskOutput(${task.id})">
             <div class="task-id">#${task.id}</div>
             <div class="task-status ${task.status}">${task.status}</div>
             <div class="task-info">
-              <div class="task-type">${task.type}</div>
+              <div class="task-type">${task.type}${retryInfo}</div>
               <div class="task-title">${escapeHtml(task.context?.title || task.repo)}</div>
             </div>
             <div class="task-time">${formatTime(task.createdAt)}</div>
-            <div class="task-link">
-              ${task.context?.url ? `<a href="${escapeHtml(task.context.url)}" target="_blank" onclick="event.stopPropagation()">View</a>` : ''}
+            <div class="task-actions" style="display:flex;gap:8px;align-items:center;">
+              ${actionBtn}
+              ${task.context?.url ? `<a href="${escapeHtml(task.context.url)}" target="_blank" class="action-btn secondary" onclick="event.stopPropagation()">View</a>` : ''}
             </div>
           </div>
           <div class="task-output" id="output-${task.id}">${hasOutput ? `<span class="chunk">${escapeHtml(task.streamingOutput || task.result || task.error || '')}</span>` : '<span style="color:#8b949e">No output yet...</span>'}</div>
@@ -393,6 +428,72 @@
         list.innerHTML = tasks.map(renderTask).join('');
       } catch (err) {
         console.error('Failed to fetch tasks:', err);
+      }
+    }
+
+    async function fetchProcesses() {
+      const list = document.getElementById('processList');
+      list.innerHTML = '<div class="empty">Loading...</div>';
+      try {
+        const res = await fetch(API_BASE + '/api/processes');
+        const procs = await res.json();
+        if (procs.length === 0) {
+          list.innerHTML = '<div class="empty">No Orch processes running</div>';
+          return;
+        }
+        // Sort by start time (oldest first)
+        procs.sort((a, b) => new Date(a.startTime || 0) - new Date(b.startTime || 0));
+        list.innerHTML = procs.map(p => {
+          const age = p.startTime ? formatTime(p.startTime) : 'unknown';
+          const taskInfo = p.taskId ? `Task #${p.taskId} (${p.taskType})` : 'Unknown task';
+          const repoInfo = p.repo ? escapeHtml(p.repo) : '';
+          return `
+            <div class="item" style="grid-template-columns: 1fr auto;">
+              <div class="item-info">
+                <div class="item-title">${taskInfo} - PID ${p.pid}</div>
+                <div class="item-meta">
+                  ${repoInfo ? `<span>${repoInfo}</span>` : ''}
+                  <span>Started ${age}</span>
+                </div>
+              </div>
+              <div class="item-actions">
+                <button class="action-btn" style="background:#f85149;" onclick="killProcess(${p.pid})">Kill</button>
+              </div>
+            </div>
+          `;
+        }).join('');
+      } catch (err) {
+        list.innerHTML = '<div class="empty">Error loading processes</div>';
+      }
+    }
+
+    async function killProcess(pid) {
+      if (!confirm(`Kill process ${pid}?`)) return;
+      try {
+        await fetch(`${API_BASE}/api/processes/${pid}/kill`, { method: 'POST' });
+        fetchProcesses();
+      } catch (err) {
+        alert('Failed to kill process');
+      }
+    }
+
+    async function killOldProcesses() {
+      if (!confirm('Kill Orch task processes older than 2 hours?')) return;
+      try {
+        await fetch(`${API_BASE}/api/processes/kill-old`, { method: 'POST' });
+        fetchProcesses();
+      } catch (err) {
+        alert('Failed to kill old processes');
+      }
+    }
+
+    async function killAllProcesses() {
+      if (!confirm('Kill all Orch task processes?')) return;
+      try {
+        await fetch(`${API_BASE}/api/processes/kill-all`, { method: 'POST' });
+        fetchProcesses();
+      } catch (err) {
+        alert('Failed to kill processes');
       }
     }
 
@@ -579,6 +680,64 @@
       ws.send(JSON.stringify({ type: 'steer', taskId, input: input.value }));
       appendOutput(taskId, `\n> ${input.value}\n`);
       input.value = '';
+    }
+
+    async function stopTask(taskId) {
+      if (!confirm(`Stop task #${taskId}?`)) return;
+      try {
+        const res = await fetch(`${API_BASE}/api/tasks/${taskId}/stop`, { method: 'POST' });
+        const result = await res.json();
+        if (!res.ok) alert(`Error: ${result.error}`);
+      } catch (err) {
+        alert('Failed to stop task: ' + err.message);
+      }
+    }
+
+    async function deleteTask(taskId) {
+      if (!confirm(`Delete task #${taskId}?`)) return;
+      try {
+        const res = await fetch(`${API_BASE}/api/tasks/${taskId}`, { method: 'DELETE' });
+        const result = await res.json();
+        if (!res.ok) alert(`Error: ${result.error}`);
+      } catch (err) {
+        alert('Failed to delete task: ' + err.message);
+      }
+    }
+
+    async function retryTask(taskId) {
+      try {
+        const res = await fetch(`${API_BASE}/api/tasks/${taskId}/retry`, { method: 'POST' });
+        if (!res.ok) {
+          const result = await res.json();
+          alert(`Error: ${result.error}`);
+        }
+      } catch (err) {
+        alert('Failed to retry task: ' + err.message);
+      }
+    }
+
+    async function completeTask(taskId) {
+      try {
+        const res = await fetch(`${API_BASE}/api/tasks/${taskId}/complete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ result: 'Completed via terminal' })
+        });
+        const result = await res.json();
+        if (!res.ok) alert(`Error: ${result.error}`);
+      } catch (err) {
+        alert('Failed to complete task: ' + err.message);
+      }
+    }
+
+    async function openTerminal(taskId) {
+      try {
+        const res = await fetch(`${API_BASE}/api/tasks/${taskId}/terminal`, { method: 'POST' });
+        const result = await res.json();
+        if (!res.ok) alert(`Error: ${result.error}`);
+      } catch (err) {
+        alert('Failed to open terminal: ' + err.message);
+      }
     }
 
     function connectWebSocket() {
