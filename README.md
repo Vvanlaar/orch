@@ -1,0 +1,100 @@
+# Orch - Claude Code Orchestrator
+
+Event-driven orchestrator that connects GitHub and Azure DevOps to Claude Code.
+
+## Features
+
+- **PR Reviews**: Auto-review PRs when opened/updated
+- **Issue Analysis**: Analyze and propose fixes for issues/work items
+- **Code Generation**: Generate code from feature requests
+- **Pipeline Fixes**: Analyze build failures and suggest fixes
+- **Real-time Dashboard**: Monitor tasks at http://localhost:3003
+- **Polling Mode**: No ngrok needed - polls APIs directly
+
+## Setup
+
+```bash
+npm install
+cp .env.example .env
+# Edit .env with your tokens and repo mapping
+npm run dev
+```
+
+## Modes
+
+### Polling (default, recommended for local dev)
+Polls GitHub/ADO APIs periodically. No external access needed.
+
+```env
+POLLING_ENABLED=true
+POLLING_INTERVAL_MS=60000
+```
+
+### Webhooks (for production/instant response)
+Requires exposing your server via ngrok/cloudflared.
+
+```env
+POLLING_ENABLED=false
+```
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `PORT` | Server port (default: 3003) |
+| `GITHUB_WEBHOOK_SECRET` | Secret for GitHub webhook verification |
+| `GITHUB_TOKEN` | GitHub PAT for posting comments |
+| `ADO_ORG` | Azure DevOps organization name |
+| `ADO_PAT` | Azure DevOps Personal Access Token |
+| `REPOS_BASE_DIR` | Base directory for repos (default: `../`) |
+| `REPOS_AUTO_SCAN` | Auto-discover git repos (default: `true`) |
+| `REPOS_MAPPING` | Manual repo mapping (optional, merged with auto) |
+| `POLLING_ENABLED` | Enable polling mode (default: `true`) |
+| `POLLING_INTERVAL_MS` | Poll interval in ms (default: `60000`) |
+
+### Repo Discovery
+
+By default, Orch auto-scans `REPOS_BASE_DIR` for git repos and reads their remotes:
+
+```env
+REPOS_BASE_DIR=../
+REPOS_AUTO_SCAN=true
+```
+
+On startup, it logs discovered repos:
+```
+Discovered 3 repos:
+  🐙 owner/frontend -> frontend
+  🐙 owner/backend -> backend
+  🔷 MyOrg/Project/api -> api
+```
+
+### Manual Mapping (optional)
+
+Override or add repos manually:
+
+```env
+REPOS_MAPPING={"owner/special-repo": "my-local-name"}
+```
+
+## Webhooks
+
+Expose the server via ngrok/cloudflared, then configure:
+
+### GitHub
+- URL: `https://your-tunnel/webhooks/github`
+- Content type: `application/json`
+- Events: Pull requests, Issues
+
+### Azure DevOps
+- URL: `https://your-tunnel/webhooks/ado`
+- Events: Pull request created/updated, Work item created, Build completed
+
+## Branch Naming (ADO)
+
+Work items auto-generate branches: `[type]/[id]-short-description`
+- Bug → `bug/12345-fix-issue`
+- Feature/Story → `feat/12346-new-feature`
+- Other → `maintenance/12347-task`

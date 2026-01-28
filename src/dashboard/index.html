@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Orch Dashboard</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #0d1117; color: #c9d1d9; }
+    .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+    h1 { font-size: 24px; font-weight: 600; }
+    h2 { font-size: 16px; font-weight: 600; padding: 16px; border-bottom: 1px solid #30363d; }
+    .status { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #3fb950; }
+    .status-dot.disconnected { background: #f85149; }
+
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px; }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+    .card { background: #161b22; border: 1px solid #30363d; border-radius: 6px; overflow: hidden; }
+    .card-list { max-height: 400px; overflow-y: auto; }
+
+    .item { display: grid; grid-template-columns: 1fr auto; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #21262d; align-items: center; }
+    .item:hover { background: #1c2128; }
+    .item-info { overflow: hidden; }
+    .item-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
+    .item-meta { font-size: 12px; color: #8b949e; margin-top: 4px; display: flex; gap: 12px; flex-wrap: wrap; }
+    .item-link a { color: #58a6ff; text-decoration: none; font-size: 13px; white-space: nowrap; }
+    .item-link a:hover { text-decoration: underline; }
+
+    .badge { font-size: 11px; padding: 2px 8px; border-radius: 12px; }
+    .badge.state { background: #30363d; color: #8b949e; }
+    .badge.state-active, .badge.state-open { background: #3fb95020; color: #3fb950; }
+    .badge.state-new { background: #58a6ff20; color: #58a6ff; }
+    .badge.state-resolved, .badge.state-closed { background: #8b949e20; color: #8b949e; }
+    .badge.role-author { background: #a371f720; color: #a371f7; }
+    .badge.role-reviewer { background: #f0883e20; color: #f0883e; }
+    .badge.type { background: #21262d; color: #8b949e; }
+    .badge.type-bug { background: #f8514920; color: #f85149; }
+    .badge.type-feature, .badge.type-story { background: #3fb95020; color: #3fb950; }
+    .badge.type-task { background: #58a6ff20; color: #58a6ff; }
+
+    .empty { padding: 48px; text-align: center; color: #8b949e; }
+
+    .tasks { margin-bottom: 24px; }
+    .task { display: grid; grid-template-columns: 60px 90px 1fr 100px 100px; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #21262d; align-items: center; }
+    .task:hover { background: #1c2128; }
+    .task-id { font-family: monospace; color: #8b949e; font-size: 13px; }
+    .task-status { font-size: 11px; padding: 2px 8px; border-radius: 12px; text-align: center; }
+    .task-status.pending { background: #f0883e20; color: #f0883e; }
+    .task-status.running { background: #58a6ff20; color: #58a6ff; }
+    .task-status.completed { background: #3fb95020; color: #3fb950; }
+    .task-status.failed { background: #f8514920; color: #f85149; }
+    .task-info { overflow: hidden; }
+    .task-type { font-size: 11px; color: #8b949e; }
+    .task-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+    .task-time { font-size: 12px; color: #8b949e; }
+    .task-link a { color: #58a6ff; text-decoration: none; font-size: 12px; }
+
+    .refresh-btn { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+    .refresh-btn:hover { background: #30363d; }
+
+    .action-btn { background: #238636; border: none; color: #fff; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; white-space: nowrap; }
+    .action-btn:hover { background: #2ea043; }
+    .action-btn:disabled { background: #21262d; color: #8b949e; cursor: not-allowed; }
+    .action-btn.secondary { background: #30363d; }
+    .action-btn.secondary:hover { background: #3d444d; }
+    .item-actions { display: flex; gap: 8px; align-items: center; }
+
+    .filters { display: flex; gap: 8px; padding: 12px 16px; border-bottom: 1px solid #30363d; flex-wrap: wrap; }
+    .filter-btn { background: transparent; border: 1px solid #30363d; color: #8b949e; padding: 4px 12px; border-radius: 16px; cursor: pointer; font-size: 12px; }
+    .filter-btn:hover { border-color: #58a6ff; color: #c9d1d9; }
+    .filter-btn.active { background: #58a6ff20; border-color: #58a6ff; color: #58a6ff; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Orch Dashboard</h1>
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <button class="refresh-btn" onclick="refreshAll()">Refresh</button>
+        <div class="status">
+          <div class="status-dot" id="statusDot"></div>
+          <span id="statusText">Connected</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="grid">
+      <div class="card">
+        <h2>🐙 My GitHub PRs</h2>
+        <div class="card-list" id="prList">
+          <div class="empty">Loading...</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>🔷 My ADO Work Items</h2>
+        <div class="filters" id="adoFilters">
+          <button class="filter-btn active" data-filter="all">All</button>
+          <button class="filter-btn" data-filter="new">To Do</button>
+          <button class="filter-btn" data-filter="active">In Progress</button>
+          <button class="filter-btn" data-filter="resolved">Resolved</button>
+          <button class="filter-btn" data-filter="reviewed">Reviewed</button>
+        </div>
+        <div class="card-list" id="workItemList">
+          <div class="empty">Loading...</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card tasks">
+      <h2>Orch Tasks</h2>
+      <div class="card-list" id="taskList">
+        <div class="empty">No tasks yet</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = '';
+    let ws;
+    let allWorkItems = [];
+    let currentAdoFilter = 'all';
+
+    function formatTime(iso) {
+      if (!iso) return '-';
+      const d = new Date(iso);
+      const now = new Date();
+      const diff = now - d;
+      if (diff < 60000) return 'just now';
+      if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+      if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
+      return Math.floor(diff / 86400000) + 'd ago';
+    }
+
+    function stateClass(state) {
+      const s = state.toLowerCase();
+      if (s === 'open' || s === 'active' || s === 'in progress') return 'state-active';
+      if (s === 'new') return 'state-new';
+      if (s === 'closed' || s === 'resolved' || s === 'done') return 'state-resolved';
+      return '';
+    }
+
+    function typeClass(type) {
+      const t = type.toLowerCase();
+      if (t.includes('bug')) return 'type-bug';
+      if (t.includes('feature') || t.includes('story')) return 'type-feature';
+      if (t.includes('task')) return 'type-task';
+      return '';
+    }
+
+    function renderPR(pr) {
+      const prData = encodeURIComponent(JSON.stringify({
+        repo: pr.repo,
+        prNumber: pr.number,
+        source: 'github',
+        title: pr.title,
+        url: pr.url,
+      }));
+      return `
+        <div class="item">
+          <div class="item-info">
+            <div class="item-title">${pr.title}</div>
+            <div class="item-meta">
+              <span>${pr.repo}#${pr.number}</span>
+              <span class="badge role-${pr.role}">${pr.role}</span>
+              <span class="badge state ${stateClass(pr.state)}">${pr.draft ? 'draft' : pr.state}</span>
+              <span>${formatTime(pr.updatedAt)}</span>
+            </div>
+          </div>
+          <div class="item-actions">
+            <button class="action-btn" onclick="reviewPR('${prData}')">Review</button>
+            <a href="${pr.url}" target="_blank" class="action-btn secondary">View →</a>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderWorkItem(wi) {
+      const wiData = encodeURIComponent(JSON.stringify({
+        id: wi.id,
+        title: wi.title,
+        project: wi.project,
+        url: wi.url,
+        type: wi.type,
+      }));
+      const actionLabel = wi.type.toLowerCase().includes('bug') ? 'Fix' : 'Implement';
+      return `
+        <div class="item">
+          <div class="item-info">
+            <div class="item-title">${wi.title}</div>
+            <div class="item-meta">
+              <span>${wi.project} #${wi.id}</span>
+              <span class="badge type ${typeClass(wi.type)}">${wi.type}</span>
+              <span class="badge state ${stateClass(wi.state)}">${wi.state}</span>
+              <span>${formatTime(wi.updatedAt)}</span>
+            </div>
+          </div>
+          <div class="item-actions">
+            <button class="action-btn" onclick="analyzeWorkItem('${wiData}')">${actionLabel}</button>
+            <a href="${wi.url}" target="_blank" class="action-btn secondary">View →</a>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderTask(task) {
+      return `
+        <div class="task">
+          <div class="task-id">#${task.id}</div>
+          <div class="task-status ${task.status}">${task.status}</div>
+          <div class="task-info">
+            <div class="task-type">${task.type}</div>
+            <div class="task-title">${task.context?.title || task.repo}</div>
+          </div>
+          <div class="task-time">${formatTime(task.createdAt)}</div>
+          <div class="task-link">
+            ${task.context?.url ? `<a href="${task.context.url}" target="_blank">View</a>` : ''}
+          </div>
+        </div>
+      `;
+    }
+
+    async function fetchPRs() {
+      try {
+        const res = await fetch(API_BASE + '/api/my/prs');
+        const prs = await res.json();
+        const list = document.getElementById('prList');
+        if (prs.length === 0) {
+          list.innerHTML = '<div class="empty">No open PRs</div>';
+          return;
+        }
+        list.innerHTML = prs.map(renderPR).join('');
+      } catch (err) {
+        console.error('Failed to fetch PRs:', err);
+        document.getElementById('prList').innerHTML = '<div class="empty">Failed to load</div>';
+      }
+    }
+
+    async function fetchWorkItems() {
+      try {
+        const res = await fetch(API_BASE + '/api/my/workitems');
+        allWorkItems = await res.json();
+        renderWorkItems();
+      } catch (err) {
+        console.error('Failed to fetch work items:', err);
+        document.getElementById('workItemList').innerHTML = '<div class="empty">Failed to load</div>';
+      }
+    }
+
+    function renderWorkItems() {
+      const list = document.getElementById('workItemList');
+      let filtered = allWorkItems
+        .filter(wi => {
+          const state = wi.state.toLowerCase();
+          // Always exclude completed/done/closed
+          if (state === 'completed' || state === 'done' || state === 'closed') return false;
+          if (currentAdoFilter === 'all') return true;
+          if (currentAdoFilter === 'new') return state === 'new' || state === 'to do';
+          if (currentAdoFilter === 'active') return state === 'active' || state === 'in progress';
+          if (currentAdoFilter === 'resolved') return state === 'resolved';
+          if (currentAdoFilter === 'reviewed') return state === 'reviewed';
+          return true;
+        })
+        .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+
+      if (filtered.length === 0) {
+        list.innerHTML = '<div class="empty">No work items match filter</div>';
+        return;
+      }
+      list.innerHTML = filtered.map(renderWorkItem).join('');
+    }
+
+    function setAdoFilter(filter) {
+      currentAdoFilter = filter;
+      document.querySelectorAll('#adoFilters .filter-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.filter === filter);
+      });
+      renderWorkItems();
+    }
+
+    async function fetchTasks() {
+      try {
+        const res = await fetch(API_BASE + '/api/tasks');
+        const tasks = await res.json();
+        const list = document.getElementById('taskList');
+        if (tasks.length === 0) {
+          list.innerHTML = '<div class="empty">No tasks yet</div>';
+          return;
+        }
+        list.innerHTML = tasks.map(renderTask).join('');
+      } catch (err) {
+        console.error('Failed to fetch tasks:', err);
+      }
+    }
+
+    function refreshAll() {
+      fetchPRs();
+      fetchWorkItems();
+      fetchTasks();
+    }
+
+    async function reviewPR(encodedData) {
+      const data = JSON.parse(decodeURIComponent(encodedData));
+      try {
+        const res = await fetch(API_BASE + '/api/actions/review-pr', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        });
+        const result = await res.json();
+        if (res.ok) {
+          alert(`Task #${result.taskId} created: ${result.message}`);
+        } else {
+          alert(`Error: ${result.error}`);
+        }
+      } catch (err) {
+        alert('Failed to create task: ' + err.message);
+      }
+    }
+
+    async function analyzeWorkItem(encodedData) {
+      const data = JSON.parse(decodeURIComponent(encodedData));
+      try {
+        const res = await fetch(API_BASE + '/api/actions/analyze-workitem', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        });
+        const result = await res.json();
+        if (res.ok) {
+          alert(`Task #${result.taskId} created: ${result.message}`);
+        } else {
+          alert(`Error: ${result.error}`);
+        }
+      } catch (err) {
+        alert('Failed to create task: ' + err.message);
+      }
+    }
+
+    function connectWebSocket() {
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${protocol}//${location.host}/ws`);
+
+      ws.onopen = () => {
+        document.getElementById('statusDot').classList.remove('disconnected');
+        document.getElementById('statusText').textContent = 'Connected';
+      };
+
+      ws.onclose = () => {
+        document.getElementById('statusDot').classList.add('disconnected');
+        document.getElementById('statusText').textContent = 'Disconnected';
+        setTimeout(connectWebSocket, 3000);
+      };
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === 'tasks') {
+          const list = document.getElementById('taskList');
+          if (data.tasks.length === 0) {
+            list.innerHTML = '<div class="empty">No tasks yet</div>';
+          } else {
+            list.innerHTML = data.tasks.map(renderTask).join('');
+          }
+        }
+      };
+    }
+
+    // Filter button handlers
+    document.querySelectorAll('#adoFilters .filter-btn').forEach(btn => {
+      btn.addEventListener('click', () => setAdoFilter(btn.dataset.filter));
+    });
+
+    // Initial load
+    fetchPRs();
+    fetchWorkItems();
+    fetchTasks();
+    connectWebSocket();
+
+    // Refresh every 2 minutes
+    setInterval(refreshAll, 120000);
+  </script>
+</body>
+</html>
