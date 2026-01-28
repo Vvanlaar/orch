@@ -8,9 +8,15 @@ export interface ClaudeResult {
   error?: string;
 }
 
-export async function runClaude(task: Task, prompt: string): Promise<ClaudeResult> {
+export interface RunOptions {
+  allowEdits?: boolean; // If true, Claude can make file changes (no --print)
+}
+
+export async function runClaude(task: Task, prompt: string, options: RunOptions = {}): Promise<ClaudeResult> {
   return new Promise((resolve) => {
-    const args = ['--print', '--dangerously-skip-permissions', prompt];
+    const args = options.allowEdits
+      ? ['--dangerously-skip-permissions', '-p', prompt]
+      : ['--print', '--dangerously-skip-permissions', prompt];
 
     const proc = spawn('claude', args, {
       cwd: task.repoPath,
@@ -60,45 +66,106 @@ Be concise and actionable. Format your response as markdown suitable for a PR co
 }
 
 export function buildIssueFixPrompt(context: Task['context']): string {
-  return `Analyze this issue and propose a fix:
+  return `Fix this issue by making the necessary code changes:
 
 Title: ${context.title}
 Description: ${context.body || 'No description provided'}
 
-1. Identify the root cause
-2. Propose a solution
-3. If straightforward, implement the fix
+Instructions:
+1. Analyze the codebase to understand the issue
+2. Identify the root cause
+3. Implement the fix by editing the relevant files
+4. Verify the fix makes sense
 
-Format your response as markdown. If you made changes, summarize what was changed.`;
+After making changes, provide a brief markdown summary of what was fixed and which files were modified.`;
 }
 
 export function buildCodeGenPrompt(context: Task['context']): string {
-  return `Implement the following feature request:
+  return `Implement the following feature by making the necessary code changes:
 
 Title: ${context.title}
 Description: ${context.body || 'No description provided'}
-${context.branch ? `Target branch: ${context.branch}` : ''}
 
-1. Understand the requirements
+Instructions:
+1. Understand the existing codebase structure and patterns
 2. Plan the implementation
-3. Write the code
-4. Add appropriate tests if the project has a test suite
+3. Write the code by creating/editing files as needed
+4. Add tests if the project has a test suite
+5. Follow existing code style and conventions
 
-Format your response as markdown summarizing what was implemented.`;
+After making changes, provide a brief markdown summary of what was implemented and which files were created/modified.`;
 }
 
 export function buildPipelineFixPrompt(context: Task['context']): string {
-  return `Analyze this pipeline failure and suggest fixes:
+  return `Fix this pipeline failure by making the necessary code changes:
 
 ${context.title}
 ${context.body || ''}
 Branch: ${context.branch || 'unknown'}
 
-1. Identify what failed
-2. Determine the root cause
-3. Suggest or implement a fix
+Instructions:
+1. Analyze the error to understand what failed
+2. Identify the root cause in the code
+3. Implement a fix by editing the relevant files
+4. Verify the fix addresses the failure
 
-Format your response as markdown.`;
+After making changes, provide a brief markdown summary of what was fixed.`;
+}
+
+export function buildResolutionReviewPrompt(context: Task['context']): string {
+  // Extract PR number if we have a GitHub URL
+  let prInfo = '';
+  if (context.prUrl) {
+    const match = context.prUrl.match(/\/pull\/(\d+)/);
+    if (match) {
+      prInfo = `\nUse \`gh pr view ${match[1]}\` and \`gh pr diff ${match[1]}\` to review the PR.`;
+    }
+  }
+
+  return `Review this resolved work item to verify the fix is complete and correct.
+
+## Work Item Details
+- **Title:** ${context.title}
+- **ID:** #${context.workItemId || 'N/A'}
+- **PR:** ${context.prUrl || 'Not provided'}
+${prInfo}
+
+## Resolution Notes
+${context.resolution || 'No resolution notes provided'}
+
+## Test Notes / Acceptance Criteria
+${context.testNotes || 'No test notes provided'}
+
+## Original Description
+${context.body || 'No description provided'}
+
+## Instructions
+Follow the review-resolution skill process:
+
+1. **Understand the Original Issue** - What problem was being solved?
+2. **Review the PR Changes** - What code changes were made?
+3. **Compare Against Test Notes** - Are all acceptance criteria met?
+4. **Code Quality Check** - Any issues with the implementation?
+5. **Provide Verdict** - APPROVED, NEEDS CHANGES, or NEEDS DISCUSSION
+
+Format your response as:
+
+## Resolution Review: ${context.title}
+
+### Summary
+[Brief summary of changes]
+
+### Checklist
+- [ ] Changes address the original issue
+- [ ] Test notes/acceptance criteria met
+- [ ] Code quality acceptable
+- [ ] No obvious regressions
+
+### Findings
+[Detailed findings]
+
+### Verdict: [APPROVED / NEEDS CHANGES / NEEDS DISCUSSION]
+[Explanation]`;
 }
 
 export function buildPromptForTask(task: Task): string {
@@ -111,6 +178,8 @@ export function buildPromptForTask(task: Task): string {
       return buildCodeGenPrompt(task.context);
     case 'pipeline-fix':
       return buildPipelineFixPrompt(task.context);
+    case 'resolution-review':
+      return buildResolutionReviewPrompt(task.context);
     case 'docs':
       return `Update documentation based on recent changes. Format as markdown.`;
     default:

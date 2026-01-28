@@ -26,6 +26,10 @@ export interface AdoWorkItem {
   project: string;
   createdAt: string;
   updatedAt: string;
+  resolution?: string;
+  githubPrUrl?: string;
+  testNotes?: string;
+  body?: string;
 }
 
 export async function getMyGitHubPRs(): Promise<GitHubPR[]> {
@@ -42,15 +46,15 @@ export async function getMyGitHubPRs(): Promise<GitHubPR[]> {
     console.log(`[UserItems] Fetching PRs for GitHub user: ${user.login}`);
     const username = user.login;
 
-    // PRs authored by me
-    const { data: authored } = await octokit.rest.search.issuesAndPullRequests({
-      q: `is:pr is:open author:${username}`,
-      sort: 'updated',
-      order: 'desc',
-      per_page: 20,
-    });
+    // PRs authored by me - use graphql or REST pulls endpoint
+    // Using REST search with type:pr instead of deprecated issuesAndPullRequests
+    const authoredRes = await fetch(
+      `https://api.github.com/search/issues?q=is:pr+is:open+author:${username}&sort=updated&order=desc&per_page=20`,
+      { headers: { Authorization: `token ${config.github.token}`, Accept: 'application/vnd.github.v3+json' } }
+    );
+    const authored = await authoredRes.json();
 
-    for (const pr of authored.items) {
+    for (const pr of authored.items || []) {
       const repoParts = pr.repository_url.split('/');
       const repo = `${repoParts[repoParts.length - 2]}/${repoParts[repoParts.length - 1]}`;
       prs.push({
@@ -68,14 +72,13 @@ export async function getMyGitHubPRs(): Promise<GitHubPR[]> {
     }
 
     // PRs where I'm requested as reviewer
-    const { data: reviewing } = await octokit.rest.search.issuesAndPullRequests({
-      q: `is:pr is:open review-requested:${username}`,
-      sort: 'updated',
-      order: 'desc',
-      per_page: 20,
-    });
+    const reviewingRes = await fetch(
+      `https://api.github.com/search/issues?q=is:pr+is:open+review-requested:${username}&sort=updated&order=desc&per_page=20`,
+      { headers: { Authorization: `token ${config.github.token}`, Accept: 'application/vnd.github.v3+json' } }
+    );
+    const reviewing = await reviewingRes.json();
 
-    for (const pr of reviewing.items) {
+    for (const pr of reviewing.items || []) {
       // Skip if already added as author
       if (prs.some(p => p.url === pr.html_url)) continue;
 
@@ -149,26 +152,53 @@ export async function getMyAdoWorkItems(): Promise<AdoWorkItem[]> {
 
     // Fetch work item details
     const idsParam = workItemIds.join(',');
-    const detailsUrl = `https://dev.azure.com/${config.ado.organization}/_apis/wit/workitems?ids=${idsParam}&fields=System.Id,System.Title,System.State,System.WorkItemType,System.AssignedTo,System.TeamProject,System.CreatedDate,System.ChangedDate&api-version=7.1`;
+    const detailsUrl = `https://dev.azure.com/${config.ado.organization}/_apis/wit/workitems?ids=${idsParam}&api-version=7.1`;
 
     const detailsRes = await fetch(detailsUrl, {
       headers: { Authorization: `Basic ${auth}` },
     });
 
+    if (!detailsRes.ok) {
+      console.error(`[UserItems] ADO details fetch failed (${detailsRes.status}):`, await detailsRes.text());
+      return items;
+    }
+
     const detailsData = await detailsRes.json();
 
     for (const wi of detailsData.value || []) {
-      const fields = wi.fields;
+      const fields = wi.fields || {};
+
+      // Look for resolution in various possible fields
+      const resolution = fields['Microsoft.VSTS.Common.Resolution']
+        || fields['System.Description']
+        || '';
+
+      // Look for GitHub PR URL in various fields or extract from resolution/description
+      let githubPrUrl = '';
+      const allText = JSON.stringify(fields);
+      const prMatch = allText.match(/https:\/\/github\.com\/[^"'\s]+\/pull\/\d+/);
+      if (prMatch) githubPrUrl = prMatch[0];
+
+      // Look for test notes in various possible fields
+      const testNotes = fields['Microsoft.VSTS.TCM.TestNotes']
+        || fields['Microsoft.VSTS.Common.AcceptanceCriteria']
+        || fields['Custom.TestNotes']
+        || '';
+
       items.push({
         id: wi.id,
-        title: fields['System.Title'],
-        state: fields['System.State'],
-        type: fields['System.WorkItemType'],
-        url: `https://dev.azure.com/${config.ado.organization}/${fields['System.TeamProject']}/_workitems/edit/${wi.id}`,
+        title: fields['System.Title'] || 'Untitled',
+        state: fields['System.State'] || 'Unknown',
+        type: fields['System.WorkItemType'] || 'Item',
+        url: `https://dev.azure.com/${config.ado.organization}/${fields['System.TeamProject'] || '_'}/_workitems/edit/${wi.id}`,
         assignedTo: fields['System.AssignedTo']?.displayName || '',
-        project: fields['System.TeamProject'],
-        createdAt: fields['System.CreatedDate'],
-        updatedAt: fields['System.ChangedDate'],
+        project: fields['System.TeamProject'] || '',
+        createdAt: fields['System.CreatedDate'] || '',
+        updatedAt: fields['System.ChangedDate'] || '',
+        resolution,
+        githubPrUrl,
+        testNotes,
+        body: fields['System.Description'] || '',
       });
     }
 

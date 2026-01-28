@@ -1,6 +1,6 @@
 export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed';
 
-export type TaskType = 'pr-review' | 'issue-fix' | 'code-gen' | 'docs' | 'pipeline-fix';
+export type TaskType = 'pr-review' | 'issue-fix' | 'code-gen' | 'docs' | 'pipeline-fix' | 'resolution-review';
 
 export interface Task {
   id: number;
@@ -27,6 +27,9 @@ export interface TaskContext {
   title?: string;
   body?: string;
   url?: string;
+  prUrl?: string;
+  resolution?: string;
+  testNotes?: string;
 }
 
 export interface Config {

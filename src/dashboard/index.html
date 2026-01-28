@@ -151,18 +151,17 @@
       return '';
     }
 
+    // Store PR data for action handlers
+    const prCache = new Map();
+
     function renderPR(pr) {
-      const prData = encodeURIComponent(JSON.stringify({
-        repo: pr.repo,
-        prNumber: pr.number,
-        source: 'github',
-        title: pr.title,
-        url: pr.url,
-      }));
+      const key = `${pr.repo}#${pr.number}`;
+      prCache.set(key, pr);
+
       return `
         <div class="item">
           <div class="item-info">
-            <div class="item-title">${pr.title}</div>
+            <div class="item-title">${escapeHtml(pr.title)}</div>
             <div class="item-meta">
               <span>${pr.repo}#${pr.number}</span>
               <span class="badge role-${pr.role}">${pr.role}</span>
@@ -171,39 +170,55 @@
             </div>
           </div>
           <div class="item-actions">
-            <button class="action-btn" onclick="reviewPR('${prData}')">Review</button>
-            <a href="${pr.url}" target="_blank" class="action-btn secondary">View →</a>
+            <button class="action-btn" onclick="reviewPRByKey('${key}')">Review</button>
+            <a href="${escapeHtml(pr.url)}" target="_blank" class="action-btn secondary">View →</a>
           </div>
         </div>
       `;
     }
 
+    // Store work item data for action handlers
+    const workItemCache = new Map();
+
     function renderWorkItem(wi) {
-      const wiData = encodeURIComponent(JSON.stringify({
-        id: wi.id,
-        title: wi.title,
-        project: wi.project,
-        url: wi.url,
-        type: wi.type,
-      }));
-      const actionLabel = wi.type.toLowerCase().includes('bug') ? 'Fix' : 'Implement';
+      // Cache the full work item data
+      workItemCache.set(wi.id, wi);
+
+      const isResolved = wi.state.toLowerCase() === 'resolved' || wi.state.toLowerCase() === 'reviewed';
+      const hasPr = wi.githubPrUrl || (wi.resolution && wi.resolution.includes('github.com'));
+
+      let actionBtn;
+      if (isResolved && hasPr) {
+        actionBtn = `<button class="action-btn" onclick="reviewResolutionById(${wi.id})">Review</button>`;
+      } else {
+        const actionLabel = wi.type.toLowerCase().includes('bug') ? 'Fix' : 'Implement';
+        actionBtn = `<button class="action-btn" onclick="analyzeWorkItemById(${wi.id})">${actionLabel}</button>`;
+      }
+
       return `
         <div class="item">
           <div class="item-info">
-            <div class="item-title">${wi.title}</div>
+            <div class="item-title">${escapeHtml(wi.title)}</div>
             <div class="item-meta">
               <span>${wi.project} #${wi.id}</span>
               <span class="badge type ${typeClass(wi.type)}">${wi.type}</span>
               <span class="badge state ${stateClass(wi.state)}">${wi.state}</span>
+              ${hasPr ? '<span class="badge" style="background:#3fb95020;color:#3fb950;">PR</span>' : ''}
               <span>${formatTime(wi.updatedAt)}</span>
             </div>
           </div>
           <div class="item-actions">
-            <button class="action-btn" onclick="analyzeWorkItem('${wiData}')">${actionLabel}</button>
-            <a href="${wi.url}" target="_blank" class="action-btn secondary">View →</a>
+            ${actionBtn}
+            ${wi.githubPrUrl ? `<a href="${escapeHtml(wi.githubPrUrl)}" target="_blank" class="action-btn secondary">PR</a>` : ''}
+            <a href="${escapeHtml(wi.url)}" target="_blank" class="action-btn secondary">View →</a>
           </div>
         </div>
       `;
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
     function renderTask(task) {
@@ -302,8 +317,18 @@
       fetchTasks();
     }
 
-    async function reviewPR(encodedData) {
-      const data = JSON.parse(decodeURIComponent(encodedData));
+    async function reviewPRByKey(key) {
+      const pr = prCache.get(key);
+      if (!pr) { alert('PR not found'); return; }
+
+      const data = {
+        repo: pr.repo,
+        prNumber: pr.number,
+        source: 'github',
+        title: pr.title,
+        url: pr.url,
+      };
+
       try {
         const res = await fetch(API_BASE + '/api/actions/review-pr', {
           method: 'POST',
@@ -321,10 +346,52 @@
       }
     }
 
-    async function analyzeWorkItem(encodedData) {
-      const data = JSON.parse(decodeURIComponent(encodedData));
+    async function analyzeWorkItemById(id) {
+      const wi = workItemCache.get(id);
+      if (!wi) { alert('Work item not found'); return; }
+
+      const data = {
+        id: wi.id,
+        title: wi.title,
+        project: wi.project,
+        url: wi.url,
+        type: wi.type,
+      };
+
       try {
         const res = await fetch(API_BASE + '/api/actions/analyze-workitem', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        });
+        const result = await res.json();
+        if (res.ok) {
+          alert(`Task #${result.taskId} created: ${result.message}`);
+        } else {
+          alert(`Error: ${result.error}`);
+        }
+      } catch (err) {
+        alert('Failed to create task: ' + err.message);
+      }
+    }
+
+    async function reviewResolutionById(id) {
+      const wi = workItemCache.get(id);
+      if (!wi) { alert('Work item not found'); return; }
+
+      const data = {
+        id: wi.id,
+        title: wi.title,
+        project: wi.project,
+        url: wi.url,
+        resolution: wi.resolution,
+        githubPrUrl: wi.githubPrUrl,
+        testNotes: wi.testNotes,
+        body: wi.body,
+      };
+
+      try {
+        const res = await fetch(API_BASE + '/api/actions/review-resolution', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(data),

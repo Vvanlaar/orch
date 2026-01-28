@@ -154,6 +154,76 @@ app.post('/api/actions/analyze-workitem', (req, res) => {
   res.json({ taskId: task.id, message: `${taskType} task created` });
 });
 
+app.post('/api/actions/review-resolution', (req, res) => {
+  const { id, title, project, url, resolution, githubPrUrl, testNotes, body } = req.body;
+  const repoMapping = getEffectiveRepoMapping();
+
+  console.log(`[review-resolution] Project: ${project}, PR URL: ${githubPrUrl}`);
+  console.log(`[review-resolution] Available repos:`, Object.keys(repoMapping));
+
+  // Try to find repo from GitHub PR URL
+  let repoPath: string | null = null;
+  let repoName = '';
+
+  if (githubPrUrl) {
+    const prMatch = githubPrUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull/);
+    if (prMatch) {
+      const ghRepo = prMatch[1];
+      console.log(`[review-resolution] Extracted GitHub repo: ${ghRepo}`);
+      if (repoMapping[ghRepo]) {
+        repoPath = path.resolve(config.repos.baseDir, repoMapping[ghRepo]);
+        repoName = ghRepo;
+        console.log(`[review-resolution] Found mapping: ${ghRepo} -> ${repoMapping[ghRepo]}`);
+      }
+    }
+  }
+
+  // Fallback to project-based lookup
+  if (!repoPath && project) {
+    for (const [remote, local] of Object.entries(repoMapping)) {
+      if (remote.toLowerCase().includes(project.toLowerCase())) {
+        repoPath = path.resolve(config.repos.baseDir, local);
+        repoName = remote;
+        console.log(`[review-resolution] Found by project: ${remote} -> ${local}`);
+        break;
+      }
+    }
+  }
+
+  // Use first available repo as fallback
+  if (!repoPath) {
+    const entries = Object.entries(repoMapping);
+    console.log(`[review-resolution] No match found, trying first of ${entries.length} repos`);
+    if (entries.length > 0) {
+      const [firstRemote, firstLocal] = entries[0];
+      repoPath = path.resolve(config.repos.baseDir, firstLocal);
+      repoName = firstRemote;
+      console.log(`[review-resolution] Using fallback: ${firstRemote} -> ${firstLocal}`);
+    }
+  }
+
+  if (!repoPath) {
+    console.log(`[review-resolution] No repos available at all`);
+    res.status(400).json({ error: 'No repos available' });
+    return;
+  }
+
+  const task = createTask('resolution-review', repoName, repoPath, {
+    source: 'ado',
+    event: 'manual.resolution-review',
+    workItemId: id,
+    title,
+    url,
+    body,
+    prUrl: githubPrUrl,
+    resolution,
+    testNotes,
+  });
+  triggerUpdate();
+  broadcastTasks();
+  res.json({ taskId: task.id, message: 'Resolution review task created' });
+});
+
 // Start server
 server.listen(config.server.port, () => {
   console.log(`Orch server listening on port ${config.server.port}`);

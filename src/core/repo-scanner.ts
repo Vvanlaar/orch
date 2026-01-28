@@ -81,10 +81,15 @@ export function scanRepos(): RepoInfo[] {
     const remote = getGitRemote(fullPath);
     const parsed = remote ? parseRemoteUrl(remote) : { fullName: null, source: 'unknown' as const };
 
+    // Log unrecognized remotes so we can add support for them
+    if (remote && parsed.source === 'unknown') {
+      console.log(`[Scanner] Unknown remote format for ${entry}: ${remote}`);
+    }
+
     repos.push({
       localPath: fullPath,
       localName: entry,
-      remote: parsed.fullName,
+      remote: parsed.fullName || entry, // Use local name as fallback
       source: parsed.source,
     });
   }
@@ -98,8 +103,11 @@ export function buildRepoMapping(): Record<string, string> {
 
   for (const repo of repos) {
     if (repo.remote && repo.source !== 'unknown') {
+      // Use full remote name for known sources (github, ado)
       mapping[repo.remote] = repo.localName;
     }
+    // Also add by local name for fallback lookups
+    mapping[repo.localName] = repo.localName;
   }
 
   return mapping;
@@ -116,9 +124,9 @@ export function getEffectiveRepoMapping(): Record<string, string> {
   // Merge auto-scanned repos if enabled
   if (config.repos.autoScan) {
     const scanned = buildRepoMapping();
-    for (const [remote, local] of Object.entries(scanned)) {
-      if (!mapping[remote]) {
-        mapping[remote] = local;
+    for (const [key, local] of Object.entries(scanned)) {
+      if (!mapping[key]) {
+        mapping[key] = local;
       }
     }
   }
