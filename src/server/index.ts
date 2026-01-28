@@ -3,7 +3,8 @@ import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { fileURLToPath } from 'url';
 import path, { dirname, join } from 'path';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
+import { homedir } from 'os';
 import { config } from '../core/config.js';
 import { githubRouter } from './webhooks/github.js';
 import { adoRouter } from './webhooks/ado.js';
@@ -328,6 +329,39 @@ app.get('/api/my/workitems', async (_req, res) => {
 app.get('/api/my/resolved-workitems', async (_req, res) => {
   const items = await getMyResolvedWorkItems();
   res.json(items);
+});
+
+app.get('/api/claude/usage', async (_req, res) => {
+  try {
+    const credsPath = join(homedir(), '.claude', '.credentials.json');
+    if (!existsSync(credsPath)) {
+      res.status(404).json({ error: 'Claude credentials not found' });
+      return;
+    }
+    const creds = JSON.parse(readFileSync(credsPath, 'utf-8'));
+    const token = creds?.claudeAiOauth?.accessToken;
+    if (!token) {
+      res.status(401).json({ error: 'No access token in credentials' });
+      return;
+    }
+    const resp = await fetch('https://api.anthropic.com/api/oauth/usage', {
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'claude-code/2.1.22',
+        'Authorization': `Bearer ${token}`,
+        'anthropic-beta': 'oauth-2025-04-20',
+      },
+    });
+    if (!resp.ok) {
+      res.status(resp.status).json({ error: `API error: ${resp.status}` });
+      return;
+    }
+    const usage = await resp.json();
+    res.json(usage);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
 });
 
 // Trigger actions from dashboard

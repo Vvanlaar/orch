@@ -15,6 +15,11 @@
     .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #3fb950; }
     .status-dot.disconnected { background: #f85149; }
 
+    progress { appearance: none; border-radius: 4px; overflow: hidden; }
+    progress::-webkit-progress-bar { background: #21262d; border-radius: 4px; }
+    progress.bright::-webkit-progress-value { background: #58a6ff; }
+    progress.dim::-webkit-progress-value { background: #484f58; }
+
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px; }
     @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
 
@@ -121,7 +126,10 @@
     <header>
       <h1>Orch Dashboard</h1>
       <div style="display: flex; gap: 12px; align-items: center;">
-        <a href="https://claude.ai/settings/usage" target="_blank" rel="noopener" class="refresh-btn" style="text-decoration:none;color:#c9d1d9;">Claude usage ↗</a>
+        <div style="display:flex;gap:8px;align-items:center;font-size:12px;color:#8b949e;">
+          <span>5h</span><progress id="usage5h" class="bright" value="0" max="100" title="..." style="width:60px;height:8px;"></progress><span id="pct5h">-</span>
+          <span style="margin-left:4px;">7d</span><progress id="usage7d" class="dim" value="0" max="100" title="..." style="width:60px;height:8px;"></progress><span id="pct7d">-</span>
+        </div>
         <button class="refresh-btn" onclick="refreshAll()">Refresh</button>
         <div class="status">
           <div class="status-dot" id="statusDot"></div>
@@ -503,6 +511,34 @@
       fetchWorkItems();
       fetchResolvedByMe();
       fetchTasks();
+      fetchClaudeUsage();
+    }
+
+    function formatResetTime(iso) {
+      if (!iso) return '';
+      const ms = new Date(iso) - Date.now();
+      if (ms <= 0) return 'resets soon';
+      const h = Math.floor(ms / 3600000);
+      const m = Math.floor((ms % 3600000) / 60000);
+      return h > 0 ? `resets in ${h}h ${m}m` : `resets in ${m}m`;
+    }
+
+    async function fetchClaudeUsage() {
+      const p5h = document.getElementById('usage5h');
+      const p7d = document.getElementById('usage7d');
+      const pct5h = document.getElementById('pct5h');
+      const pct7d = document.getElementById('pct7d');
+      try {
+        const res = await fetch(API_BASE + '/api/claude/usage');
+        if (!res.ok) return;
+        const u = await res.json();
+        const v5h = Math.round(u.five_hour?.utilization ?? 0);
+        const v7d = Math.round(u.seven_day?.utilization ?? 0);
+        p5h.value = v5h; p5h.title = formatResetTime(u.five_hour?.resets_at);
+        p7d.value = v7d; p7d.title = formatResetTime(u.seven_day?.resets_at);
+        pct5h.textContent = `${v5h}%`;
+        pct7d.textContent = `${v7d}%`;
+      } catch {}
     }
 
     async function reviewPRByKey(key) {
@@ -793,6 +829,7 @@
     fetchWorkItems();
     fetchResolvedByMe();
     fetchTasks();
+    fetchClaudeUsage();
     connectWebSocket();
 
     // Refresh every 2 minutes
