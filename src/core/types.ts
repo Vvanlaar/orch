@@ -58,6 +58,9 @@ export interface Config {
   ado: {
     organization: string;
     pat: string;
+    project?: string;
+    team?: string;
+    reviewedByField?: string;
   };
   claude: {
     maxConcurrentTasks: number;

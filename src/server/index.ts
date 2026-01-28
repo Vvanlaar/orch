@@ -1,19 +1,21 @@
+import { execSync } from 'child_process';
 import express from 'express';
+import { existsSync, readFileSync } from 'fs';
 import { createServer } from 'http';
-import { WebSocketServer, WebSocket } from 'ws';
-import { fileURLToPath } from 'url';
-import path, { dirname, join } from 'path';
-import { readFileSync, existsSync } from 'fs';
 import { homedir } from 'os';
-import { config } from '../core/config.js';
-import { githubRouter } from './webhooks/github.js';
-import { adoRouter } from './webhooks/ado.js';
-import { startProcessor, setTaskUpdateCallback, setOutputCallback, triggerUpdate, steerTask } from '../core/task-processor.js';
-import { startPoller } from '../core/poller.js';
-import { getScannedRepos, getEffectiveRepoMapping } from '../core/repo-scanner.js';
-import { getMyGitHubPRs, getMyAdoWorkItems, getMyResolvedWorkItems } from '../core/user-items.js';
-import { getAllTasks, getAllTasksWithOutput, getTask, createTask, deleteTask, failTask, completeTask, getTasksWithPids, retryTask } from '../core/task-queue.js';
+import path, { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
+import { WebSocket, WebSocketServer } from 'ws';
+
 import { killTask } from '../core/claude-runner.js';
+import { config } from '../core/config.js';
+import { startPoller } from '../core/poller.js';
+import { getEffectiveRepoMapping, getScannedRepos } from '../core/repo-scanner.js';
+import { completeTask, createTask, deleteTask, failTask, getAllTasks, getAllTasksWithOutput, getTask, getTasksWithPids, retryTask } from '../core/task-queue.js';
+import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
+import { getMyAdoWorkItems, getMyGitHubPRs, getMyResolvedWorkItems, getReviewedItemsInSprint, getTeamMembers } from '../core/user-items.js';
+import { adoRouter } from './webhooks/ado.js';
+import { githubRouter } from './webhooks/github.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -196,18 +198,44 @@ app.post('/api/tasks/:id/terminal', async (req, res) => {
   });
 });
 
-// Process management - only shows processes spawned by Orch tasks
-app.get('/api/processes', async (_req, res) => {
-  const { execSync } = await import('child_process');
+function resolveRepoPath(repo: string): { repoPath: string; localFolder: string } | null {
+  const repoMapping = getEffectiveRepoMapping();
+  let localFolder = repoMapping[repo];
+
+  if (!localFolder) {
+    const repoNameOnly = repo.split('/').pop();
+    if (repoNameOnly) localFolder = repoMapping[repoNameOnly];
+  }
+
+  if (!localFolder) return null;
+  return { repoPath: path.resolve(config.repos.baseDir, localFolder), localFolder };
+}
+
+function killProcessByPid(pid: number, silent = false): boolean {
   try {
-    // Get tasks with PIDs from our database
+    const silentFlag = silent ? ' -ErrorAction SilentlyContinue' : '';
+    execSync(`powershell -Command "Stop-Process -Id ${pid} -Force${silentFlag}"`, { encoding: 'utf-8' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function parseCimDate(cimDate: string): string | null {
+  if (!cimDate) return null;
+  const match = cimDate.match(/\/Date\((\d+)\)\//);
+  return match ? new Date(parseInt(match[1])).toISOString() : null;
+}
+
+// Process management - only shows processes spawned by Orch tasks
+app.get('/api/processes', (_req, res) => {
+  try {
     const tasksWithPids = getTasksWithPids();
     if (tasksWithPids.length === 0) {
       res.json([]);
       return;
     }
 
-    // Build PID filter for PowerShell
     const pidList = tasksWithPids.map(t => t.pid).join(',');
     const result = execSync(
       `powershell -Command "Get-CimInstance Win32_Process -Filter \\"ProcessId IN (${pidList})\\" | Select-Object ProcessId, Name, CreationDate, CommandLine | ConvertTo-Json"`,
@@ -215,36 +243,23 @@ app.get('/api/processes', async (_req, res) => {
     );
 
     if (!result.trim()) {
-      // PIDs no longer exist - processes have ended
       res.json([]);
       return;
     }
 
     const data = JSON.parse(result);
     const arr = Array.isArray(data) ? data : [data];
-
-    // Map PID to task info for enriching response
     const pidToTask = new Map(tasksWithPids.map(t => [t.pid, t]));
 
     const processes = arr.map((p: { ProcessId: number; Name: string; CreationDate: string; CommandLine: string }) => {
       const task = pidToTask.get(p.ProcessId);
-
-      // Parse CIM date format: /Date(1234567890000)/
-      let startTime: string | null = null;
-      if (p.CreationDate) {
-        const match = p.CreationDate.match(/\/Date\((\d+)\)\//);
-        if (match) {
-          startTime = new Date(parseInt(match[1])).toISOString();
-        }
-      }
-
       return {
         pid: p.ProcessId,
         taskId: task?.id,
         taskType: task?.type,
         repo: task?.repo,
         name: p.Name?.replace('.exe', '') || 'unknown',
-        startTime,
+        startTime: parseCimDate(p.CreationDate),
       };
     });
 
@@ -255,59 +270,38 @@ app.get('/api/processes', async (_req, res) => {
   }
 });
 
-app.post('/api/processes/:pid/kill', async (req, res) => {
+app.post('/api/processes/:pid/kill', (req, res) => {
   const pid = parseInt(req.params.pid);
-  const { execSync } = await import('child_process');
-  try {
-    execSync(`powershell -Command "Stop-Process -Id ${pid} -Force"`, { encoding: 'utf-8' });
+  if (killProcessByPid(pid)) {
     res.json({ success: true });
-  } catch (err) {
+  } else {
     res.status(400).json({ error: `Failed to kill process ${pid}` });
   }
 });
 
-app.post('/api/processes/kill-old', async (_req, res) => {
-  const { execSync } = await import('child_process');
-  try {
-    // Only kill Orch processes older than 2 hours
-    const tasksWithPids = getTasksWithPids();
-    const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
+app.post('/api/processes/kill-old', (_req, res) => {
+  const tasksWithPids = getTasksWithPids();
+  const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
 
-    let killed = 0;
-    for (const task of tasksWithPids) {
-      const startedAt = task.startedAt ? new Date(task.startedAt).getTime() : Date.now();
-      if (startedAt < twoHoursAgo && task.pid) {
-        try {
-          execSync(`powershell -Command "Stop-Process -Id ${task.pid} -Force -ErrorAction SilentlyContinue"`);
-          killed++;
-        } catch { /* ignore */ }
-      }
+  let killed = 0;
+  for (const task of tasksWithPids) {
+    const startedAt = task.startedAt ? new Date(task.startedAt).getTime() : Date.now();
+    if (startedAt < twoHoursAgo && task.pid && killProcessByPid(task.pid, true)) {
+      killed++;
     }
-    res.json({ success: true, message: `Killed ${killed} Orch process(es) older than 2 hours` });
-  } catch (err) {
-    res.status(400).json({ error: 'Failed to kill old processes' });
   }
+  res.json({ success: true, message: `Killed ${killed} Orch process(es) older than 2 hours` });
 });
 
-app.post('/api/processes/kill-all', async (_req, res) => {
-  const { execSync } = await import('child_process');
-  try {
-    // Only kill Orch processes
-    const tasksWithPids = getTasksWithPids();
-
-    let killed = 0;
-    for (const task of tasksWithPids) {
-      if (task.pid) {
-        try {
-          execSync(`powershell -Command "Stop-Process -Id ${task.pid} -Force -ErrorAction SilentlyContinue"`);
-          killed++;
-        } catch { /* ignore */ }
-      }
+app.post('/api/processes/kill-all', (_req, res) => {
+  const tasksWithPids = getTasksWithPids();
+  let killed = 0;
+  for (const task of tasksWithPids) {
+    if (task.pid && killProcessByPid(task.pid, true)) {
+      killed++;
     }
-    res.json({ success: true, message: `Killed ${killed} Orch process(es)` });
-  } catch (err) {
-    res.status(400).json({ error: 'Failed to kill processes' });
   }
+  res.json({ success: true, message: `Killed ${killed} Orch process(es)` });
 });
 
 app.get('/api/repos', (_req, res) => {
@@ -329,6 +323,16 @@ app.get('/api/my/workitems', async (_req, res) => {
 app.get('/api/my/resolved-workitems', async (_req, res) => {
   const items = await getMyResolvedWorkItems();
   res.json(items);
+});
+
+app.get('/api/sprint/reviewed-items', async (_req, res) => {
+  const result = await getReviewedItemsInSprint();
+  res.json(result);
+});
+
+app.get('/api/team/members', async (_req, res) => {
+  const members = await getTeamMembers();
+  res.json(members);
 });
 
 app.get('/api/claude/usage', async (_req, res) => {
@@ -367,22 +371,14 @@ app.get('/api/claude/usage', async (_req, res) => {
 // Trigger actions from dashboard
 app.post('/api/actions/review-pr', (req, res) => {
   const { repo, prNumber, source, title, url, branch, baseBranch } = req.body;
-  const repoMapping = getEffectiveRepoMapping();
-  let localFolder = repoMapping[repo];
+  const resolved = resolveRepoPath(repo);
 
-  // Try repo name only (without owner prefix)
-  if (!localFolder) {
-    const repoNameOnly = repo.split('/').pop();
-    if (repoNameOnly) localFolder = repoMapping[repoNameOnly];
-  }
-
-  if (!localFolder) {
+  if (!resolved) {
     res.status(400).json({ error: `No local mapping for repo: ${repo}` });
     return;
   }
 
-  const repoPath = path.resolve(config.repos.baseDir, localFolder);
-  const task = createTask('pr-review', repo, repoPath, {
+  const task = createTask('pr-review', repo, resolved.repoPath, {
     source: source || 'github',
     event: 'manual.pr-review',
     prNumber,
@@ -440,30 +436,20 @@ app.post('/api/actions/analyze-workitem', (req, res) => {
 
 app.post('/api/actions/fix-pr-comments', async (req, res) => {
   const { repo, prNumber, source, title, url, branch, baseBranch } = req.body;
-  const repoMapping = getEffectiveRepoMapping();
-  let localFolder = repoMapping[repo];
+  const resolved = resolveRepoPath(repo);
 
-  // Try repo name only (without owner prefix)
-  if (!localFolder) {
-    const repoNameOnly = repo.split('/').pop();
-    if (repoNameOnly) localFolder = repoMapping[repoNameOnly];
-  }
-
-  if (!localFolder) {
+  if (!resolved) {
     res.status(400).json({ error: `No local mapping for repo: ${repo}` });
     return;
   }
 
-  // Fetch review comments for this PR
   const { Octokit } = await import('octokit');
-  const { config } = await import('../core/config.js');
   const octokit = new Octokit({ auth: config.github.token });
-
   const [owner, repoName] = repo.split('/');
 
-  // Fetch branch info if not provided (GitHub search API doesn't return it)
   let headBranch = branch;
   let baseBranchRef = baseBranch;
+
   if (!headBranch) {
     try {
       const { data: prData } = await octokit.rest.pulls.get({ owner, repo: repoName, pull_number: prNumber });
@@ -478,20 +464,15 @@ app.post('/api/actions/fix-pr-comments', async (req, res) => {
   }
 
   try {
-    // Get authenticated user to filter out self-comments
     const { data: user } = await octokit.rest.users.getAuthenticated();
-    const username = user.login;
-
-    // Fetch review comments
     const { data: comments } = await octokit.rest.pulls.listReviewComments({
       owner,
       repo: repoName,
       pull_number: prNumber,
     });
 
-    // Filter to unresolved comments not by PR author
     const unresolvedComments = comments.filter(c =>
-      c.user?.login !== username && !c.in_reply_to_id
+      c.user?.login !== user.login && !c.in_reply_to_id
     );
 
     if (unresolvedComments.length === 0) {
@@ -507,8 +488,7 @@ app.post('/api/actions/fix-pr-comments', async (req, res) => {
       diffHunk: c.diff_hunk,
     }));
 
-    const repoPath = path.resolve(config.repos.baseDir, localFolder);
-    const task = createTask('pr-comment-fix', repo, repoPath, {
+    const task = createTask('pr-comment-fix', repo, resolved.repoPath, {
       source: source || 'github',
       event: 'manual.fix-pr-comments',
       prNumber,
@@ -533,29 +513,20 @@ app.post('/api/actions/review-resolution', (req, res) => {
   const repoMapping = getEffectiveRepoMapping();
 
   console.log(`[review-resolution] Project: ${project}, PR URL: ${githubPrUrl}`);
-  console.log(`[review-resolution] Available repos:`, Object.keys(repoMapping));
 
-  // Try to find repo from GitHub PR URL
   let repoPath: string | null = null;
   let repoName = '';
 
+  // Try to find repo from GitHub PR URL
   if (githubPrUrl) {
     const prMatch = githubPrUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull/);
     if (prMatch) {
       const ghRepo = prMatch[1];
-      console.log(`[review-resolution] Extracted GitHub repo: ${ghRepo}`);
-      if (repoMapping[ghRepo]) {
-        repoPath = path.resolve(config.repos.baseDir, repoMapping[ghRepo]);
+      const resolved = resolveRepoPath(ghRepo);
+      if (resolved) {
+        repoPath = resolved.repoPath;
         repoName = ghRepo;
-        console.log(`[review-resolution] Found mapping: ${ghRepo} -> ${repoMapping[ghRepo]}`);
-      } else {
-        // Try repo name only (without owner prefix)
-        const repoNameOnly = ghRepo.split('/').pop();
-        if (repoNameOnly && repoMapping[repoNameOnly]) {
-          repoPath = path.resolve(config.repos.baseDir, repoMapping[repoNameOnly]);
-          repoName = ghRepo;
-          console.log(`[review-resolution] Found by repo name: ${repoNameOnly} -> ${repoMapping[repoNameOnly]}`);
-        }
+        console.log(`[review-resolution] Found mapping for ${ghRepo}`);
       }
     }
   }
@@ -573,8 +544,7 @@ app.post('/api/actions/review-resolution', (req, res) => {
   }
 
   if (!repoPath) {
-    const hint = githubPrUrl ? `for GitHub repo from PR URL` : `for project "${project}"`;
-    console.log(`[review-resolution] No repo found ${hint}`);
+    const hint = githubPrUrl ? 'for GitHub repo from PR URL' : `for project "${project}"`;
     res.status(400).json({ error: `No local repo mapping found ${hint}. Clone the repo or add manual mapping.` });
     return;
   }

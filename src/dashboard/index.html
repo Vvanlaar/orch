@@ -119,6 +119,16 @@
     .task-wrapper { border-bottom: 1px solid #21262d; overflow-x: hidden; }
     .task-wrapper:last-child { border-bottom: none; }
     .task { border-bottom: none; }
+
+    /* Testing Assignment section */
+    .team-selection { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 16px; border-bottom: 1px solid #30363d; }
+    .team-member { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 16px; background: #21262d; cursor: pointer; font-size: 12px; }
+    .team-member:hover { background: #30363d; }
+    .team-member.selected { background: #238636; color: #fff; }
+    .sprint-header { padding: 12px 16px; background: #21262d; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
+    .assign-controls { padding: 12px 16px; border-top: 1px solid #30363d; display: flex; gap: 8px; justify-content: flex-end; }
+    .reviewed-meta { display: flex; gap: 8px; margin-top: 4px; }
+    .reviewed-meta .badge-person { background: #30363d; color: #c9d1d9; padding: 2px 8px; border-radius: 4px; font-size: 11px; }
   </style>
 </head>
 <body>
@@ -153,6 +163,25 @@
       </div>
     </div>
 
+    <div class="card" style="margin-bottom: 24px;">
+      <h2>Testing Assignment</h2>
+      <div class="sprint-header" id="sprintHeader">
+        <span id="sprintName">Loading sprint...</span>
+        <span id="reviewedCount">0 items</span>
+      </div>
+      <div class="team-selection" id="teamSelection">
+        <div class="empty" style="padding: 0; width: 100%;">Loading team members...</div>
+      </div>
+      <div class="card-list" id="reviewedList" style="max-height: 300px;">
+        <div class="empty">Loading reviewed items...</div>
+      </div>
+      <div class="assign-controls">
+        <button class="action-btn secondary" onclick="selectAllTeam()">Select All</button>
+        <button class="action-btn secondary" onclick="deselectAllTeam()">Deselect All</button>
+        <button class="action-btn" onclick="generateAssignCommand()">Copy Assign Command</button>
+      </div>
+    </div>
+
     <div class="card tasks">
       <h2>Orch Tasks</h2>
       <div class="card-list" id="taskList">
@@ -182,6 +211,11 @@
     let allWorkItems = [];
     let resolvedByMeItems = [];
     let currentFilter = 'all';
+
+    // Testing Assignment state
+    let reviewedItems = [];
+    let teamMembers = [];
+    let selectedTeamMembers = new Set();
 
     function formatTime(iso) {
       if (!iso) return '-';
@@ -506,12 +540,118 @@
       }
     }
 
+    async function fetchReviewedItems() {
+      try {
+        const res = await fetch(API_BASE + '/api/sprint/reviewed-items');
+        const data = await res.json();
+        reviewedItems = data.items || [];
+        document.getElementById('sprintName').textContent = data.sprintName || 'No sprint';
+        document.getElementById('reviewedCount').textContent = `${reviewedItems.length} items`;
+        renderReviewedItems();
+      } catch (err) {
+        console.error('Failed to fetch reviewed items:', err);
+        document.getElementById('reviewedList').innerHTML = '<div class="empty">Failed to load</div>';
+      }
+    }
+
+    async function fetchTeamMembers() {
+      try {
+        const res = await fetch(API_BASE + '/api/team/members');
+        teamMembers = await res.json();
+        renderTeamSelection();
+      } catch (err) {
+        console.error('Failed to fetch team members:', err);
+        document.getElementById('teamSelection').innerHTML = '<div class="empty" style="padding:0;width:100%;">Failed to load team</div>';
+      }
+    }
+
+    function renderTeamSelection() {
+      const container = document.getElementById('teamSelection');
+      if (teamMembers.length === 0) {
+        container.innerHTML = '<div class="empty" style="padding:0;width:100%;">No team members found. Set ADO_PROJECT and ADO_TEAM env vars.</div>';
+        return;
+      }
+      container.innerHTML = teamMembers.map(m => {
+        const selected = selectedTeamMembers.has(m.email);
+        return `
+          <span class="team-member ${selected ? 'selected' : ''}" onclick="toggleTeamMember('${escapeHtml(m.email)}')">
+            ${escapeHtml(m.displayName)}
+          </span>
+        `;
+      }).join('');
+    }
+
+    function toggleTeamMember(email) {
+      if (selectedTeamMembers.has(email)) {
+        selectedTeamMembers.delete(email);
+      } else {
+        selectedTeamMembers.add(email);
+      }
+      renderTeamSelection();
+    }
+
+    function selectAllTeam() {
+      teamMembers.forEach(m => selectedTeamMembers.add(m.email));
+      renderTeamSelection();
+    }
+
+    function deselectAllTeam() {
+      selectedTeamMembers.clear();
+      renderTeamSelection();
+    }
+
+    function renderReviewedItems() {
+      const list = document.getElementById('reviewedList');
+      if (reviewedItems.length === 0) {
+        list.innerHTML = '<div class="empty">No reviewed items in current sprint</div>';
+        return;
+      }
+      list.innerHTML = reviewedItems.map(wi => `
+        <div class="item">
+          <div class="item-info">
+            <div class="item-title">${escapeHtml(wi.title)}</div>
+            <div class="item-meta">
+              <span>#${wi.id}</span>
+              <span class="badge type ${typeClass(wi.type)}">${wi.type}</span>
+            </div>
+            <div class="reviewed-meta">
+              <span class="badge-person">Resolved: ${escapeHtml(wi.resolvedBy || 'N/A')}</span>
+              <span class="badge-person">Reviewed: ${escapeHtml(wi.reviewedBy || 'N/A')}</span>
+            </div>
+          </div>
+          <div class="item-actions">
+            <a href="${escapeHtml(wi.url)}" target="_blank" class="action-btn secondary">View →</a>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function generateAssignCommand() {
+      if (selectedTeamMembers.size === 0) {
+        alert('Select at least one team member');
+        return;
+      }
+      if (reviewedItems.length === 0) {
+        alert('No reviewed items to assign');
+        return;
+      }
+      const users = Array.from(selectedTeamMembers).join(',');
+      const cmd = `/assign-testing --users "${users}"`;
+      navigator.clipboard.writeText(cmd).then(() => {
+        alert(`Copied to clipboard:\n${cmd}\n\nPaste in Claude Code to run the skill.`);
+      }).catch(() => {
+        prompt('Copy this command:', cmd);
+      });
+    }
+
     function refreshAll() {
       fetchPRs();
       fetchWorkItems();
       fetchResolvedByMe();
       fetchTasks();
       fetchClaudeUsage();
+      fetchReviewedItems();
+      fetchTeamMembers();
     }
 
     function formatResetTime(iso) {
@@ -830,6 +970,8 @@
     fetchResolvedByMe();
     fetchTasks();
     fetchClaudeUsage();
+    fetchReviewedItems();
+    fetchTeamMembers();
     connectWebSocket();
 
     // Refresh every 2 minutes

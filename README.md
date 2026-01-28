@@ -48,6 +48,9 @@ POLLING_ENABLED=false
 | `GITHUB_TOKEN` | GitHub PAT for posting comments |
 | `ADO_ORG` | Azure DevOps organization name |
 | `ADO_PAT` | Azure DevOps Personal Access Token |
+| `ADO_PROJECT` | ADO project name (for Testing Assignment) |
+| `ADO_TEAM` | ADO team name (for Testing Assignment) |
+| `ADO_REVIEWED_BY_FIELD` | Custom field for reviewer (default: `Custom.ReviewedBy`) |
 | `REPOS_BASE_DIR` | Base directory for repos (default: `../`) |
 | `REPOS_AUTO_SCAN` | Auto-discover git repos (default: `true`) |
 | `REPOS_MAPPING` | Manual repo mapping (optional, merged with auto) |
@@ -98,3 +101,29 @@ Work items auto-generate branches: `[type]/[id]-short-description`
 - Bug → `bug/12345-fix-issue`
 - Feature/Story → `feat/12346-new-feature`
 - Other → `maintenance/12347-task`
+
+## Testing Assignment
+
+Bulk-assign "Reviewed" work items to team members for testing.
+
+### Setup
+
+```env
+ADO_PROJECT=MyProject
+ADO_TEAM=MyTeam
+ADO_REVIEWED_BY_FIELD=Custom.ReviewedBy
+```
+
+### Usage
+
+1. Open dashboard at http://localhost:3003
+2. Find "Testing Assignment" section - shows all reviewed items in current sprint
+3. Select team members who are available for testing
+4. Click "Copy Assign Command"
+5. Paste `/assign-testing --users "..."` in Claude Code
+
+### Rules
+
+- Items are distributed evenly among selected users
+- Never assigns to the person who resolved the item
+- Never assigns to the person who reviewed the item
