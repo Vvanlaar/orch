@@ -11,6 +11,7 @@ export interface Task {
   context: TaskContext;
   result?: string;
   error?: string;
+  streamingOutput?: string; // live output during run
   createdAt: string;
   startedAt?: string;
   completedAt?: string;

@@ -72,6 +72,44 @@
     .filter-btn { background: transparent; border: 1px solid #30363d; color: #8b949e; padding: 4px 12px; border-radius: 16px; cursor: pointer; font-size: 12px; }
     .filter-btn:hover { border-color: #58a6ff; color: #c9d1d9; }
     .filter-btn.active { background: #58a6ff20; border-color: #58a6ff; color: #58a6ff; }
+
+    .task-row { cursor: pointer; }
+    .task-output {
+      font-family: 'Monaco', 'Consolas', monospace;
+      font-size: 12px;
+      background: #0d1117;
+      padding: 12px;
+      max-height: 400px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      color: #8b949e;
+      border-top: 1px solid #21262d;
+      display: none;
+    }
+    .task-output.visible { display: block; }
+    .task-output .chunk { color: #c9d1d9; }
+    .steer-input {
+      display: none;
+      padding: 8px 12px;
+      gap: 8px;
+      border-top: 1px solid #21262d;
+      background: #161b22;
+    }
+    .steer-input.visible { display: flex; }
+    .steer-input input {
+      flex: 1;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      color: #c9d1d9;
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-family: 'Monaco', 'Consolas', monospace;
+      font-size: 12px;
+    }
+    .steer-input input:focus { outline: none; border-color: #58a6ff; }
+    .task-wrapper { border-bottom: 1px solid #21262d; }
+    .task-wrapper:last-child { border-bottom: none; }
+    .task { border-bottom: none; }
   </style>
 </head>
 <body>
@@ -87,26 +125,18 @@
       </div>
     </header>
 
-    <div class="grid">
-      <div class="card">
-        <h2>🐙 My GitHub PRs</h2>
-        <div class="card-list" id="prList">
-          <div class="empty">Loading...</div>
-        </div>
+    <div class="card" style="margin-bottom: 24px;">
+      <h2>My Work Items</h2>
+      <div class="filters" id="workFilters">
+        <button class="filter-btn active" data-filter="all">All</button>
+        <button class="filter-btn" data-filter="new">To Do</button>
+        <button class="filter-btn" data-filter="active">In Progress</button>
+        <button class="filter-btn" data-filter="resolved">Resolved</button>
+        <button class="filter-btn" data-filter="reviewed">Reviewed</button>
+        <button class="filter-btn" data-filter="resolved-by-me">Resolved by me</button>
       </div>
-
-      <div class="card">
-        <h2>🔷 My ADO Work Items</h2>
-        <div class="filters" id="adoFilters">
-          <button class="filter-btn active" data-filter="all">All</button>
-          <button class="filter-btn" data-filter="new">To Do</button>
-          <button class="filter-btn" data-filter="active">In Progress</button>
-          <button class="filter-btn" data-filter="resolved">Resolved</button>
-          <button class="filter-btn" data-filter="reviewed">Reviewed</button>
-        </div>
-        <div class="card-list" id="workItemList">
-          <div class="empty">Loading...</div>
-        </div>
+      <div class="card-list" id="workList">
+        <div class="empty">Loading...</div>
       </div>
     </div>
 
@@ -121,8 +151,10 @@
   <script>
     const API_BASE = '';
     let ws;
+    let allPRs = [];
     let allWorkItems = [];
-    let currentAdoFilter = 'all';
+    let resolvedByMeItems = [];
+    let currentFilter = 'all';
 
     function formatTime(iso) {
       if (!iso) return '-';
@@ -154,9 +186,17 @@
     // Store PR data for action handlers
     const prCache = new Map();
 
+    function extractAdoTicket(title) {
+      // Match patterns like #12345, AB#12345, ADO#12345
+      const match = title.match(/(?:AB|ADO)?#(\d{4,6})/i);
+      return match ? match[1] : null;
+    }
+
     function renderPR(pr) {
       const key = `${pr.repo}#${pr.number}`;
       prCache.set(key, pr);
+
+      const adoTicket = extractAdoTicket(pr.title);
 
       // Show "Fix Comments" button for PRs where user is author
       const fixCommentsBtn = pr.role === 'author'
@@ -168,9 +208,11 @@
           <div class="item-info">
             <div class="item-title">${escapeHtml(pr.title)}</div>
             <div class="item-meta">
+              <span class="badge" style="background:#a371f720;color:#a371f7;">PR</span>
               <span>${pr.repo}#${pr.number}</span>
               <span class="badge role-${pr.role}">${pr.role}</span>
               <span class="badge state ${stateClass(pr.state)}">${pr.draft ? 'draft' : pr.state}</span>
+              ${adoTicket ? `<span class="badge" style="background:#58a6ff20;color:#58a6ff;">ADO#${adoTicket}</span>` : ''}
               <span>${formatTime(pr.updatedAt)}</span>
             </div>
           </div>
@@ -228,18 +270,29 @@
     }
 
     function renderTask(task) {
+      const isRunning = task.status === 'running';
+      const hasOutput = task.streamingOutput || task.result || task.error;
       return `
-        <div class="task">
-          <div class="task-id">#${task.id}</div>
-          <div class="task-status ${task.status}">${task.status}</div>
-          <div class="task-info">
-            <div class="task-type">${task.type}</div>
-            <div class="task-title">${task.context?.title || task.repo}</div>
+        <div class="task-wrapper" data-task-id="${task.id}">
+          <div class="task task-row" onclick="toggleTaskOutput(${task.id})">
+            <div class="task-id">#${task.id}</div>
+            <div class="task-status ${task.status}">${task.status}</div>
+            <div class="task-info">
+              <div class="task-type">${task.type}</div>
+              <div class="task-title">${escapeHtml(task.context?.title || task.repo)}</div>
+            </div>
+            <div class="task-time">${formatTime(task.createdAt)}</div>
+            <div class="task-link">
+              ${task.context?.url ? `<a href="${escapeHtml(task.context.url)}" target="_blank" onclick="event.stopPropagation()">View</a>` : ''}
+            </div>
           </div>
-          <div class="task-time">${formatTime(task.createdAt)}</div>
-          <div class="task-link">
-            ${task.context?.url ? `<a href="${task.context.url}" target="_blank">View</a>` : ''}
+          <div class="task-output" id="output-${task.id}">${hasOutput ? `<span class="chunk">${escapeHtml(task.streamingOutput || task.result || task.error || '')}</span>` : '<span style="color:#8b949e">No output yet...</span>'}</div>
+          ${isRunning ? `
+          <div class="steer-input" id="steer-${task.id}">
+            <input type="text" placeholder="Send input to Claude..." onkeydown="handleSteerKey(event, ${task.id})">
+            <button class="action-btn" onclick="sendSteer(${task.id})">Send</button>
           </div>
+          ` : ''}
         </div>
       `;
     }
@@ -247,16 +300,12 @@
     async function fetchPRs() {
       try {
         const res = await fetch(API_BASE + '/api/my/prs');
-        const prs = await res.json();
-        const list = document.getElementById('prList');
-        if (prs.length === 0) {
-          list.innerHTML = '<div class="empty">No open PRs</div>';
-          return;
-        }
-        list.innerHTML = prs.map(renderPR).join('');
+        allPRs = await res.json();
+        renderUnifiedList();
       } catch (err) {
         console.error('Failed to fetch PRs:', err);
-        document.getElementById('prList').innerHTML = '<div class="empty">Failed to load</div>';
+        allPRs = [];
+        renderUnifiedList();
       }
     }
 
@@ -264,42 +313,72 @@
       try {
         const res = await fetch(API_BASE + '/api/my/workitems');
         allWorkItems = await res.json();
-        renderWorkItems();
+        renderUnifiedList();
       } catch (err) {
         console.error('Failed to fetch work items:', err);
-        document.getElementById('workItemList').innerHTML = '<div class="empty">Failed to load</div>';
+        allWorkItems = [];
+        renderUnifiedList();
       }
     }
 
-    function renderWorkItems() {
-      const list = document.getElementById('workItemList');
-      let filtered = allWorkItems
-        .filter(wi => {
-          const state = wi.state.toLowerCase();
-          // Always exclude completed/done/closed
-          if (state === 'completed' || state === 'done' || state === 'closed') return false;
-          if (currentAdoFilter === 'all') return true;
-          if (currentAdoFilter === 'new') return state === 'new' || state === 'to do';
-          if (currentAdoFilter === 'active') return state === 'active' || state === 'in progress';
-          if (currentAdoFilter === 'resolved') return state === 'resolved';
-          if (currentAdoFilter === 'reviewed') return state === 'reviewed';
-          return true;
-        })
-        .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+    async function fetchResolvedByMe() {
+      try {
+        const res = await fetch(API_BASE + '/api/my/resolved-workitems');
+        resolvedByMeItems = await res.json();
+        // Only re-render if that filter is active
+        if (currentFilter === 'resolved-by-me') {
+          renderUnifiedList();
+        }
+      } catch (err) {
+        console.error('Failed to fetch resolved-by-me items:', err);
+        resolvedByMeItems = [];
+      }
+    }
 
-      if (filtered.length === 0) {
-        list.innerHTML = '<div class="empty">No work items match filter</div>';
+    function renderUnifiedList() {
+      const list = document.getElementById('workList');
+
+      // Filter work items
+      let filteredWorkItems;
+      if (currentFilter === 'resolved-by-me') {
+        filteredWorkItems = resolvedByMeItems;
+      } else {
+        filteredWorkItems = allWorkItems.filter(wi => {
+          const state = wi.state.toLowerCase();
+          if (state === 'completed' || state === 'done' || state === 'closed') return false;
+          if (currentFilter === 'all') return true;
+          if (currentFilter === 'new') return state === 'new' || state === 'to do';
+          if (currentFilter === 'active') return state === 'active' || state === 'in progress';
+          if (currentFilter === 'resolved') return state === 'resolved';
+          if (currentFilter === 'reviewed') return state === 'reviewed';
+          return true;
+        });
+      }
+
+      // PRs only show if filter is not resolved-by-me
+      const showPRs = currentFilter !== 'resolved-by-me';
+      const prsToShow = showPRs ? allPRs : [];
+
+      // Sort work items by updated date
+      filteredWorkItems.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+
+      if (prsToShow.length === 0 && filteredWorkItems.length === 0) {
+        list.innerHTML = '<div class="empty">No items match filter</div>';
         return;
       }
-      list.innerHTML = filtered.map(renderWorkItem).join('');
+
+      // PRs at top, then work items
+      const prHtml = prsToShow.map(renderPR).join('');
+      const wiHtml = filteredWorkItems.map(renderWorkItem).join('');
+      list.innerHTML = prHtml + wiHtml;
     }
 
-    function setAdoFilter(filter) {
-      currentAdoFilter = filter;
-      document.querySelectorAll('#adoFilters .filter-btn').forEach(btn => {
+    function setFilter(filter) {
+      currentFilter = filter;
+      document.querySelectorAll('#workFilters .filter-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.filter === filter);
       });
-      renderWorkItems();
+      renderUnifiedList();
     }
 
     async function fetchTasks() {
@@ -320,6 +399,7 @@
     function refreshAll() {
       fetchPRs();
       fetchWorkItems();
+      fetchResolvedByMe();
       fetchTasks();
     }
 
@@ -444,6 +524,63 @@
       }
     }
 
+    // Track expanded tasks
+    const expandedTasks = new Set();
+
+    function toggleTaskOutput(taskId) {
+      const outputEl = document.getElementById(`output-${taskId}`);
+      const steerEl = document.getElementById(`steer-${taskId}`);
+      if (!outputEl) return;
+
+      const isExpanded = expandedTasks.has(taskId);
+      if (isExpanded) {
+        expandedTasks.delete(taskId);
+        outputEl.classList.remove('visible');
+        if (steerEl) steerEl.classList.remove('visible');
+      } else {
+        expandedTasks.add(taskId);
+        outputEl.classList.add('visible');
+        if (steerEl) steerEl.classList.add('visible');
+        // Scroll to bottom
+        outputEl.scrollTop = outputEl.scrollHeight;
+      }
+    }
+
+    function appendOutput(taskId, chunk) {
+      const outputEl = document.getElementById(`output-${taskId}`);
+      if (!outputEl) return;
+
+      // Get or create the chunk span
+      let chunkEl = outputEl.querySelector('.chunk');
+      if (!chunkEl) {
+        outputEl.innerHTML = '<span class="chunk"></span>';
+        chunkEl = outputEl.querySelector('.chunk');
+      }
+      chunkEl.textContent += chunk;
+
+      // Auto-scroll if expanded
+      if (expandedTasks.has(taskId)) {
+        outputEl.scrollTop = outputEl.scrollHeight;
+      }
+    }
+
+    function handleSteerKey(event, taskId) {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        sendSteer(taskId);
+      }
+    }
+
+    function sendSteer(taskId) {
+      const steerEl = document.getElementById(`steer-${taskId}`);
+      const input = steerEl?.querySelector('input');
+      if (!input?.value || !ws) return;
+
+      ws.send(JSON.stringify({ type: 'steer', taskId, input: input.value }));
+      appendOutput(taskId, `\n> ${input.value}\n`);
+      input.value = '';
+    }
+
     function connectWebSocket() {
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
       ws = new WebSocket(`${protocol}//${location.host}/ws`);
@@ -467,19 +604,34 @@
             list.innerHTML = '<div class="empty">No tasks yet</div>';
           } else {
             list.innerHTML = data.tasks.map(renderTask).join('');
+            // Restore expanded state
+            expandedTasks.forEach(taskId => {
+              const outputEl = document.getElementById(`output-${taskId}`);
+              const steerEl = document.getElementById(`steer-${taskId}`);
+              if (outputEl) {
+                outputEl.classList.add('visible');
+                outputEl.scrollTop = outputEl.scrollHeight;
+              }
+              if (steerEl) steerEl.classList.add('visible');
+            });
           }
+        } else if (data.type === 'output') {
+          appendOutput(data.taskId, data.chunk);
+        } else if (data.type === 'steerResult' && !data.success) {
+          console.warn(`Failed to steer task ${data.taskId}`);
         }
       };
     }
 
     // Filter button handlers
-    document.querySelectorAll('#adoFilters .filter-btn').forEach(btn => {
-      btn.addEventListener('click', () => setAdoFilter(btn.dataset.filter));
+    document.querySelectorAll('#workFilters .filter-btn').forEach(btn => {
+      btn.addEventListener('click', () => setFilter(btn.dataset.filter));
     });
 
     // Initial load
     fetchPRs();
     fetchWorkItems();
+    fetchResolvedByMe();
     fetchTasks();
     connectWebSocket();
 

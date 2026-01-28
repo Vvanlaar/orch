@@ -97,3 +97,34 @@ export function updateTaskStatus(id: number, status: TaskStatus): void {
   }
   updateTask(id, updates);
 }
+
+// In-memory streaming output (not persisted to disk for performance)
+const streamingOutputs = new Map<number, string>();
+const MAX_STREAMING_OUTPUT = 100 * 1024; // 100KB cap
+
+export function appendStreamingOutput(id: number, chunk: string): void {
+  let current = streamingOutputs.get(id) || '';
+  current += chunk;
+  // Truncate from beginning if too large
+  if (current.length > MAX_STREAMING_OUTPUT) {
+    current = '...[truncated]...\n' + current.slice(-MAX_STREAMING_OUTPUT + 20);
+  }
+  streamingOutputs.set(id, current);
+}
+
+export function getStreamingOutput(id: number): string {
+  return streamingOutputs.get(id) || '';
+}
+
+export function clearStreamingOutput(id: number): void {
+  streamingOutputs.delete(id);
+}
+
+// Get tasks with streaming output merged in
+export function getAllTasksWithOutput(limit = 50): Task[] {
+  const tasks = getAllTasks(limit);
+  return tasks.map(t => ({
+    ...t,
+    streamingOutput: streamingOutputs.get(t.id),
+  }));
+}

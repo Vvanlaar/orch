@@ -23,6 +23,7 @@ export interface AdoWorkItem {
   type: string;
   url: string;
   assignedTo: string;
+  resolvedBy?: string;
   project: string;
   createdAt: string;
   updatedAt: string;
@@ -192,6 +193,7 @@ export async function getMyAdoWorkItems(): Promise<AdoWorkItem[]> {
         type: fields['System.WorkItemType'] || 'Item',
         url: `https://dev.azure.com/${config.ado.organization}/${fields['System.TeamProject'] || '_'}/_workitems/edit/${wi.id}`,
         assignedTo: fields['System.AssignedTo']?.displayName || '',
+        resolvedBy: fields['Microsoft.VSTS.Common.ResolvedBy']?.displayName || '',
         project: fields['System.TeamProject'] || '',
         createdAt: fields['System.CreatedDate'] || '',
         updatedAt: fields['System.ChangedDate'] || '',
@@ -205,6 +207,105 @@ export async function getMyAdoWorkItems(): Promise<AdoWorkItem[]> {
     console.log(`[UserItems] Found ${items.length} ADO work items`);
   } catch (err) {
     console.error('[UserItems] Error fetching ADO work items:', err);
+  }
+
+  return items;
+}
+
+export async function getMyResolvedWorkItems(): Promise<AdoWorkItem[]> {
+  if (!config.ado.pat) {
+    console.log('[UserItems] No ADO_PAT configured');
+    return [];
+  }
+  if (!config.ado.organization) {
+    console.log('[UserItems] No ADO_ORG configured');
+    return [];
+  }
+
+  console.log(`[UserItems] Fetching resolved-by-me work items from ADO org: ${config.ado.organization}`);
+  const items: AdoWorkItem[] = [];
+  const auth = Buffer.from(`:${config.ado.pat}`).toString('base64');
+
+  try {
+    // WIQL query for work items resolved by me (not assigned to me)
+    const wiqlUrl = `https://dev.azure.com/${config.ado.organization}/_apis/wit/wiql?api-version=7.1`;
+
+    const wiqlRes = await fetch(wiqlUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Basic ${auth}`,
+      },
+      body: JSON.stringify({
+        query: `SELECT [System.Id] FROM WorkItems WHERE [Microsoft.VSTS.Common.ResolvedBy] = @Me AND [System.AssignedTo] <> @Me AND ([System.State] = 'Resolved' OR [System.State] = 'Active' OR [System.State] = 'In Progress') ORDER BY [System.ChangedDate] DESC`,
+      }),
+    });
+
+    if (!wiqlRes.ok) {
+      const errText = await wiqlRes.text();
+      console.error(`[UserItems] ADO WIQL failed (${wiqlRes.status}):`, errText);
+      return items;
+    }
+
+    const wiqlData = await wiqlRes.json();
+    const workItemIds = (wiqlData.workItems || []).slice(0, 30).map((w: { id: number }) => w.id);
+    console.log(`[UserItems] ADO WIQL returned ${workItemIds.length} resolved-by-me work item IDs`);
+
+    if (workItemIds.length === 0) return items;
+
+    // Fetch work item details
+    const idsParam = workItemIds.join(',');
+    const detailsUrl = `https://dev.azure.com/${config.ado.organization}/_apis/wit/workitems?ids=${idsParam}&api-version=7.1`;
+
+    const detailsRes = await fetch(detailsUrl, {
+      headers: { Authorization: `Basic ${auth}` },
+    });
+
+    if (!detailsRes.ok) {
+      console.error(`[UserItems] ADO details fetch failed (${detailsRes.status}):`, await detailsRes.text());
+      return items;
+    }
+
+    const detailsData = await detailsRes.json();
+
+    for (const wi of detailsData.value || []) {
+      const fields = wi.fields || {};
+
+      const resolution = fields['Microsoft.VSTS.Common.Resolution']
+        || fields['System.Description']
+        || '';
+
+      let githubPrUrl = '';
+      const allText = JSON.stringify(fields);
+      const prMatch = allText.match(/https:\/\/github\.com\/[^"'\s]+\/pull\/\d+/);
+      if (prMatch) githubPrUrl = prMatch[0];
+
+      const testNotes = fields['Microsoft.VSTS.TCM.TestNotes']
+        || fields['Microsoft.VSTS.Common.AcceptanceCriteria']
+        || fields['Custom.TestNotes']
+        || '';
+
+      items.push({
+        id: wi.id,
+        title: fields['System.Title'] || 'Untitled',
+        state: fields['System.State'] || 'Unknown',
+        type: fields['System.WorkItemType'] || 'Item',
+        url: `https://dev.azure.com/${config.ado.organization}/${fields['System.TeamProject'] || '_'}/_workitems/edit/${wi.id}`,
+        assignedTo: fields['System.AssignedTo']?.displayName || '',
+        resolvedBy: fields['Microsoft.VSTS.Common.ResolvedBy']?.displayName || '',
+        project: fields['System.TeamProject'] || '',
+        createdAt: fields['System.CreatedDate'] || '',
+        updatedAt: fields['System.ChangedDate'] || '',
+        resolution,
+        githubPrUrl,
+        testNotes,
+        body: fields['System.Description'] || '',
+      });
+    }
+
+    console.log(`[UserItems] Found ${items.length} resolved-by-me ADO work items`);
+  } catch (err) {
+    console.error('[UserItems] Error fetching resolved-by-me ADO work items:', err);
   }
 
   return items;

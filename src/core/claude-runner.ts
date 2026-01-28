@@ -1,6 +1,13 @@
-import { spawn } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
+import { EventEmitter } from 'events';
 import type { Task } from './types.js';
 import { config } from './config.js';
+
+// Process registry for steering running tasks
+const runningProcesses = new Map<number, ChildProcess>();
+
+// EventEmitter for streaming output
+export const claudeEmitter = new EventEmitter();
 
 export interface ClaudeResult {
   success: boolean;
@@ -47,6 +54,70 @@ export async function runClaude(task: Task, prompt: string, options: RunOptions 
       resolve({ success: false, output: '', error: err.message });
     });
   });
+}
+
+// Streaming version that emits output chunks in real-time
+export async function runClaudeStreaming(
+  taskId: number,
+  task: Task,
+  prompt: string,
+  options: RunOptions = {}
+): Promise<ClaudeResult> {
+  return new Promise((resolve) => {
+    const args = options.allowEdits
+      ? ['--dangerously-skip-permissions', '-p', prompt]
+      : ['--print', '--dangerously-skip-permissions', prompt];
+
+    const proc = spawn('claude', args, {
+      cwd: task.repoPath,
+      shell: true,
+      timeout: config.claude.timeout,
+    });
+
+    // Register for steering
+    runningProcesses.set(taskId, proc);
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', (data) => {
+      const chunk = data.toString();
+      stdout += chunk;
+      claudeEmitter.emit('output', taskId, chunk);
+    });
+
+    proc.stderr.on('data', (data) => {
+      const chunk = data.toString();
+      stderr += chunk;
+      claudeEmitter.emit('output', taskId, `[stderr] ${chunk}`);
+    });
+
+    proc.on('close', (code) => {
+      runningProcesses.delete(taskId);
+      if (code === 0) {
+        resolve({ success: true, output: stdout });
+      } else {
+        resolve({ success: false, output: stdout, error: stderr || `Exit code: ${code}` });
+      }
+    });
+
+    proc.on('error', (err) => {
+      runningProcesses.delete(taskId);
+      resolve({ success: false, output: '', error: err.message });
+    });
+  });
+}
+
+// Send input to a running Claude process (for steering)
+export function steerTask(taskId: number, input: string): boolean {
+  const proc = runningProcesses.get(taskId);
+  if (!proc?.stdin) return false;
+  proc.stdin.write(input + '\n');
+  return true;
+}
+
+export function isTaskRunning(taskId: number): boolean {
+  return runningProcesses.has(taskId);
 }
 
 export function buildPrReviewPrompt(context: Task['context']): string {

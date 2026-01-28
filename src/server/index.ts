@@ -7,11 +7,11 @@ import { readFileSync } from 'fs';
 import { config } from '../core/config.js';
 import { githubRouter } from './webhooks/github.js';
 import { adoRouter } from './webhooks/ado.js';
-import { startProcessor, setTaskUpdateCallback, triggerUpdate } from '../core/task-processor.js';
+import { startProcessor, setTaskUpdateCallback, setOutputCallback, triggerUpdate, steerTask } from '../core/task-processor.js';
 import { startPoller } from '../core/poller.js';
 import { getScannedRepos, getEffectiveRepoMapping } from '../core/repo-scanner.js';
-import { getMyGitHubPRs, getMyAdoWorkItems } from '../core/user-items.js';
-import { getAllTasks, getTask, createTask } from '../core/task-queue.js';
+import { getMyGitHubPRs, getMyAdoWorkItems, getMyResolvedWorkItems } from '../core/user-items.js';
+import { getAllTasks, getAllTasksWithOutput, getTask, createTask } from '../core/task-queue.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -23,14 +23,41 @@ const clients = new Set<WebSocket>();
 
 wss.on('connection', (ws) => {
   clients.add(ws);
-  // Send current tasks on connect
-  ws.send(JSON.stringify({ type: 'tasks', tasks: getAllTasks(100) }));
+  // Send current tasks with streaming output on connect
+  ws.send(JSON.stringify({ type: 'tasks', tasks: getAllTasksWithOutput(100) }));
+
+  ws.on('message', (data) => {
+    try {
+      const msg = JSON.parse(data.toString());
+      if (msg.type === 'steer' && typeof msg.taskId === 'number' && typeof msg.input === 'string') {
+        const success = steerTask(msg.taskId, msg.input);
+        ws.send(JSON.stringify({ type: 'steerResult', taskId: msg.taskId, success }));
+      }
+    } catch {
+      // ignore malformed messages
+    }
+  });
+
   ws.on('close', () => clients.delete(ws));
 });
 
 export function broadcastTasks(): void {
-  const tasks = getAllTasks(100);
+  const tasks = getAllTasksWithOutput(100);
   const message = JSON.stringify({ type: 'tasks', tasks });
+  clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(message);
+    }
+  });
+}
+
+function broadcastOutput(taskId: number, chunk: string): void {
+  const message = JSON.stringify({
+    type: 'output',
+    taskId,
+    chunk,
+    timestamp: new Date().toISOString(),
+  });
   clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
       client.send(message);
@@ -86,11 +113,22 @@ app.get('/api/my/workitems', async (_req, res) => {
   res.json(items);
 });
 
+app.get('/api/my/resolved-workitems', async (_req, res) => {
+  const items = await getMyResolvedWorkItems();
+  res.json(items);
+});
+
 // Trigger actions from dashboard
 app.post('/api/actions/review-pr', (req, res) => {
   const { repo, prNumber, source, title, url, branch, baseBranch } = req.body;
   const repoMapping = getEffectiveRepoMapping();
-  const localFolder = repoMapping[repo];
+  let localFolder = repoMapping[repo];
+
+  // Try repo name only (without owner prefix)
+  if (!localFolder) {
+    const repoNameOnly = repo.split('/').pop();
+    if (repoNameOnly) localFolder = repoMapping[repoNameOnly];
+  }
 
   if (!localFolder) {
     res.status(400).json({ error: `No local mapping for repo: ${repo}` });
@@ -157,7 +195,13 @@ app.post('/api/actions/analyze-workitem', (req, res) => {
 app.post('/api/actions/fix-pr-comments', async (req, res) => {
   const { repo, prNumber, source, title, url, branch, baseBranch } = req.body;
   const repoMapping = getEffectiveRepoMapping();
-  const localFolder = repoMapping[repo];
+  let localFolder = repoMapping[repo];
+
+  // Try repo name only (without owner prefix)
+  if (!localFolder) {
+    const repoNameOnly = repo.split('/').pop();
+    if (repoNameOnly) localFolder = repoMapping[repoNameOnly];
+  }
 
   if (!localFolder) {
     res.status(400).json({ error: `No local mapping for repo: ${repo}` });
@@ -170,6 +214,22 @@ app.post('/api/actions/fix-pr-comments', async (req, res) => {
   const octokit = new Octokit({ auth: config.github.token });
 
   const [owner, repoName] = repo.split('/');
+
+  // Fetch branch info if not provided (GitHub search API doesn't return it)
+  let headBranch = branch;
+  let baseBranchRef = baseBranch;
+  if (!headBranch) {
+    try {
+      const { data: prData } = await octokit.rest.pulls.get({ owner, repo: repoName, pull_number: prNumber });
+      headBranch = prData.head.ref;
+      baseBranchRef = prData.base.ref;
+      console.log(`[fix-pr-comments] Fetched branch info: ${headBranch} -> ${baseBranchRef}`);
+    } catch (err) {
+      console.error('[fix-pr-comments] Failed to fetch PR branch info:', err);
+      res.status(400).json({ error: 'Failed to fetch PR branch info' });
+      return;
+    }
+  }
 
   try {
     // Get authenticated user to filter out self-comments
@@ -208,8 +268,8 @@ app.post('/api/actions/fix-pr-comments', async (req, res) => {
       prNumber,
       title,
       url,
-      branch,
-      baseBranch,
+      branch: headBranch,
+      baseBranch: baseBranchRef,
       reviewComments,
     });
 
@@ -242,6 +302,14 @@ app.post('/api/actions/review-resolution', (req, res) => {
         repoPath = path.resolve(config.repos.baseDir, repoMapping[ghRepo]);
         repoName = ghRepo;
         console.log(`[review-resolution] Found mapping: ${ghRepo} -> ${repoMapping[ghRepo]}`);
+      } else {
+        // Try repo name only (without owner prefix)
+        const repoNameOnly = ghRepo.split('/').pop();
+        if (repoNameOnly && repoMapping[repoNameOnly]) {
+          repoPath = path.resolve(config.repos.baseDir, repoMapping[repoNameOnly]);
+          repoName = ghRepo;
+          console.log(`[review-resolution] Found by repo name: ${repoNameOnly} -> ${repoMapping[repoNameOnly]}`);
+        }
       }
     }
   }
@@ -258,21 +326,10 @@ app.post('/api/actions/review-resolution', (req, res) => {
     }
   }
 
-  // Use first available repo as fallback
   if (!repoPath) {
-    const entries = Object.entries(repoMapping);
-    console.log(`[review-resolution] No match found, trying first of ${entries.length} repos`);
-    if (entries.length > 0) {
-      const [firstRemote, firstLocal] = entries[0];
-      repoPath = path.resolve(config.repos.baseDir, firstLocal);
-      repoName = firstRemote;
-      console.log(`[review-resolution] Using fallback: ${firstRemote} -> ${firstLocal}`);
-    }
-  }
-
-  if (!repoPath) {
-    console.log(`[review-resolution] No repos available at all`);
-    res.status(400).json({ error: 'No repos available' });
+    const hint = githubPrUrl ? `for GitHub repo from PR URL` : `for project "${project}"`;
+    console.log(`[review-resolution] No repo found ${hint}`);
+    res.status(400).json({ error: `No local repo mapping found ${hint}. Clone the repo or add manual mapping.` });
     return;
   }
 
@@ -310,6 +367,7 @@ server.listen(config.server.port, () => {
   }
 
   setTaskUpdateCallback(broadcastTasks);
+  setOutputCallback(broadcastOutput);
   startProcessor();
 
   if (config.polling.enabled) {

@@ -6,8 +6,10 @@ import {
   startTask,
   completeTask,
   failTask,
+  appendStreamingOutput,
+  clearStreamingOutput,
 } from './task-queue.js';
-import { runClaude, buildPromptForTask, buildPrCommentFixPrompt, buildCodeSimplifierPrompt, buildSelfReviewPrompt } from './claude-runner.js';
+import { runClaude, runClaudeStreaming, claudeEmitter, steerTask, buildPromptForTask, buildPrCommentFixPrompt, buildCodeSimplifierPrompt, buildSelfReviewPrompt } from './claude-runner.js';
 import {
   getGitStatus,
   getCurrentBranch,
@@ -25,9 +27,14 @@ import type { Task } from './types.js';
 const octokit = new Octokit({ auth: config.github.token });
 
 let onTaskUpdate: (() => void) | null = null;
+let onOutputChunk: ((taskId: number, chunk: string) => void) | null = null;
 
 export function setTaskUpdateCallback(callback: () => void): void {
   onTaskUpdate = callback;
+}
+
+export function setOutputCallback(callback: (taskId: number, chunk: string) => void): void {
+  onOutputChunk = callback;
 }
 
 function notifyUpdate(): void {
@@ -37,6 +44,15 @@ function notifyUpdate(): void {
 export function triggerUpdate(): void {
   notifyUpdate();
 }
+
+// Re-export steerTask for server
+export { steerTask };
+
+// Wire up streaming output from claudeEmitter
+claudeEmitter.on('output', (taskId: number, chunk: string) => {
+  appendStreamingOutput(taskId, chunk);
+  onOutputChunk?.(taskId, chunk);
+});
 
 async function postGitHubPrComment(repo: string, prNumber: number, body: string): Promise<void> {
   const [owner, repoName] = repo.split('/');
@@ -291,6 +307,7 @@ async function processTask(task: Task): Promise<void> {
     return processPrCommentFix(task);
   }
 
+  clearStreamingOutput(task.id);
   startTask(task.id);
   notifyUpdate();
 
@@ -299,7 +316,7 @@ async function processTask(task: Task): Promise<void> {
 
   try {
     const prompt = buildPromptForTask(task);
-    const result = await runClaude(task, prompt, { allowEdits });
+    const result = await runClaudeStreaming(task.id, task, prompt, { allowEdits });
 
     if (result.success) {
       let prUrl: string | null = null;
