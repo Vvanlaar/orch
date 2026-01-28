@@ -121,12 +121,15 @@
     .task { border-bottom: none; }
 
     /* Testing Assignment section */
-    .team-selection { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 16px; border-bottom: 1px solid #30363d; }
-    .team-member { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 16px; background: #21262d; cursor: pointer; font-size: 12px; }
+    .assign-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-top: 1px solid #30363d; gap: 16px; }
+    .assign-left { display: flex; align-items: center; gap: 12px; flex: 1; flex-wrap: wrap; }
+    .assign-label { font-size: 12px; color: #8b949e; white-space: nowrap; }
+    .team-selection { display: flex; flex-wrap: wrap; gap: 6px; }
+    .team-member { padding: 3px 8px; border-radius: 12px; background: #21262d; cursor: pointer; font-size: 11px; }
     .team-member:hover { background: #30363d; }
     .team-member.selected { background: #238636; color: #fff; }
     .sprint-header { padding: 12px 16px; background: #21262d; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
-    .assign-controls { padding: 12px 16px; border-top: 1px solid #30363d; display: flex; gap: 8px; justify-content: flex-end; }
+    .assign-controls { display: flex; gap: 6px; flex-shrink: 0; }
     .reviewed-meta { display: flex; gap: 8px; margin-top: 4px; }
     .reviewed-meta .badge-person { background: #30363d; color: #c9d1d9; padding: 2px 8px; border-radius: 4px; font-size: 11px; }
   </style>
@@ -169,16 +172,21 @@
         <span id="sprintName">Loading sprint...</span>
         <span id="reviewedCount">0 items</span>
       </div>
-      <div class="team-selection" id="teamSelection">
-        <div class="empty" style="padding: 0; width: 100%;">Loading team members...</div>
-      </div>
       <div class="card-list" id="reviewedList" style="max-height: 300px;">
         <div class="empty">Loading reviewed items...</div>
       </div>
-      <div class="assign-controls">
-        <button class="action-btn secondary" onclick="selectAllTeam()">Select All</button>
-        <button class="action-btn secondary" onclick="deselectAllTeam()">Deselect All</button>
-        <button class="action-btn" onclick="generateAssignCommand()">Copy Assign Command</button>
+      <div class="assign-row">
+        <div class="assign-left">
+          <span class="assign-label">Assign to:</span>
+          <div class="team-selection" id="teamSelection">
+            <div class="empty" style="padding: 0;">Loading...</div>
+          </div>
+        </div>
+        <div class="assign-controls">
+          <button class="action-btn secondary" onclick="selectAllTeam()">All</button>
+          <button class="action-btn secondary" onclick="deselectAllTeam()">None</button>
+          <button class="action-btn" onclick="generateAssignCommand()">Copy Command</button>
+        </div>
       </div>
     </div>
 
@@ -606,13 +614,22 @@
         list.innerHTML = '<div class="empty">No reviewed items in current sprint</div>';
         return;
       }
-      list.innerHTML = reviewedItems.map(wi => `
+      // Sort by assignedTo (unassigned first, then alphabetically)
+      const sorted = [...reviewedItems].sort((a, b) => {
+        const aAssigned = a.assignedTo || '';
+        const bAssigned = b.assignedTo || '';
+        if (!aAssigned && bAssigned) return -1;
+        if (aAssigned && !bAssigned) return 1;
+        return aAssigned.localeCompare(bAssigned);
+      });
+      list.innerHTML = sorted.map(wi => `
         <div class="item">
           <div class="item-info">
             <div class="item-title">${escapeHtml(wi.title)}</div>
             <div class="item-meta">
               <span>#${wi.id}</span>
               <span class="badge type ${typeClass(wi.type)}">${wi.type}</span>
+              ${wi.assignedTo ? `<span class="badge-person" style="background:#2d5016;color:#90ee90;">Assigned: ${escapeHtml(wi.assignedTo)}</span>` : '<span class="badge-person" style="background:#501616;color:#ee9090;">Unassigned</span>'}
             </div>
             <div class="reviewed-meta">
               <span class="badge-person">Resolved: ${escapeHtml(wi.resolvedBy || 'N/A')}</span>

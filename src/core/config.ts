@@ -19,7 +19,7 @@ export const config: Config = {
     pat: envOr('ADO_PAT', ''),
     project: envOr('ADO_PROJECT', ''),
     team: envOr('ADO_TEAM', ''),
-    reviewedByField: envOr('ADO_REVIEWED_BY_FIELD', 'Custom.ReviewedBy'),
+    reviewedByField: envOr('ADO_REVIEWED_BY_FIELD', 'Microsoft.VSTS.Common.ReviewedBy'),
   },
   claude: {
     maxConcurrentTasks: parseInt(envOr('MAX_CONCURRENT_TASKS', '2')),
