@@ -1,8 +1,9 @@
 # Orch - Event-driven Claude Code Orchestrator
 
 ## Quick Start
-- `npm run dev` - Start dev server with hot reload
-- `npm run build` - Compile TypeScript
+- `npm run dev` - Start API server with hot reload
+- `npm run dev:dashboard` - Start Vite dev server (dashboard)
+- `npm run build` - Build server + dashboard
 - `npm test` - Run vitest tests
 
 ## Architecture
@@ -23,14 +24,24 @@
 - `git-ops.ts` - Git operations
 - `poller.ts` - Periodic polling for updates
 
-### Dashboard (`src/dashboard/`)
-- `index.html` - Single-file dashboard (HTML/CSS/JS)
+### Dashboard (`src/dashboard/`) - Svelte 5
+- `App.svelte` - Root component with global styles
+- `main.ts` - Entry point
+- `vite.config.ts` - Vite build config
+- `components/` - UI components (Header, WorkItems, TaskList, TaskItem, ProcessList, TestingAssignment)
+- `stores/*.svelte.ts` - Reactive state (websocket, tasks, workItems, testing, usage, processes)
+- `lib/` - Types, utilities, API functions
 
 ## Code Style
-- TypeScript with ESM modules (`.js` imports)
+- TypeScript with ESM modules (`.js` imports for server code)
 - Express for HTTP, ws for WebSocket
-- No React - vanilla JS in dashboard
+- Svelte 5 with runes (`$state`, `$derived`, `$props`) for dashboard
 - Prefer async/await over callbacks
+
+## Dashboard Development
+- `npm run dev:dashboard` - Vite dev server on :5173 (proxies API to :3000)
+- `npm run build:dashboard` - Build to `dist/dashboard/`
+- Server auto-serves built dashboard from `dist/dashboard/` in production
 
 ## API Endpoints
 - `GET /api/my/prs` - User's GitHub PRs

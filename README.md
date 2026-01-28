@@ -17,8 +17,22 @@ Event-driven orchestrator that connects GitHub and Azure DevOps to Claude Code.
 npm install
 cp .env.example .env
 # Edit .env with your tokens and repo mapping
-npm run dev
+npm run build      # Build server + dashboard
+npm start          # Production server
 ```
+
+### Development
+
+```bash
+npm run dev           # API server on :3000 (hot reload)
+npm run dev:dashboard # Vite dev server on :5173 (proxies to API)
+```
+
+## Tech Stack
+
+- **Server**: Express + WebSocket, TypeScript
+- **Dashboard**: Svelte 5 + Vite (~21KB gzipped)
+- **State**: Svelte runes (`$state`, `$derived`)
 
 ## Modes
 
