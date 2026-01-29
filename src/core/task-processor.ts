@@ -370,11 +370,14 @@ async function processTask(task: Task): Promise<void> {
   // Determine if this task type should allow code edits
   const allowEdits = ['issue-fix', 'code-gen', 'pipeline-fix'].includes(task.type);
 
+  // Testing tasks always run in terminal mode for interactive plan creation
+  const forceTerminal = task.type === 'testing';
+
   try {
     const prompt = buildPromptForTask(task);
 
     // Terminal mode: open in separate window, task stays "running" until manually completed
-    if (config.claude.terminalMode) {
+    if (config.claude.terminalMode || forceTerminal) {
       const termResult = await runClaudeInTerminal(task.id, task, prompt, { allowEdits });
       if (!termResult.success) {
         failTask(task.id, termResult.error || 'Failed to open terminal');

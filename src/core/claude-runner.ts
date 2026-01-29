@@ -426,6 +426,79 @@ Respond in JSON format ONLY (no markdown fences, no explanation):
 Use the 0-based index matching the comment order above. If a comment wasn't addressed, set resolution to "Not addressed in this change".`;
 }
 
+export function buildTestingPrompt(context: Task['context']): string {
+  let prInfo = '';
+  if (context.prUrl) {
+    const match = context.prUrl.match(/\/pull\/(\d+)/);
+    if (match) {
+      prInfo = `
+## PR Analysis
+Use these commands to review the changes:
+\`\`\`
+gh pr view ${match[1]}
+gh pr diff ${match[1]}
+\`\`\`
+`;
+    }
+  }
+
+  return `You are creating a testing plan for a work item that has been reviewed and is ready for testing.
+
+## Work Item Details
+- **Title:** ${context.title}
+- **ID:** #${context.workItemId || 'N/A'}
+- **PR:** ${context.prUrl || 'Not provided'}
+${prInfo}
+## Test Notes / Acceptance Criteria
+${context.testNotes || 'No test notes provided'}
+
+## Original Description
+${context.body || 'No description provided'}
+
+## Instructions
+Create a comprehensive testing plan. You MUST:
+
+1. **Understand the Change** - Review the PR diff to understand exactly what was modified
+2. **Analyze Test Notes** - Parse the acceptance criteria and test notes
+3. **Create Test Cases** - Generate specific, actionable test cases including:
+   - Happy path scenarios
+   - Edge cases and boundary conditions
+   - Error handling verification
+   - Integration points with other features
+   - Regression checks for related functionality
+
+## Output Format
+
+### Testing Plan: ${context.title}
+
+#### Summary
+[Brief description of what's being tested and why]
+
+#### Prerequisites
+- [ ] [Environment setup, data requirements, etc.]
+
+#### Test Cases
+
+**TC1: [Test Case Name]**
+- Steps:
+  1. [Step 1]
+  2. [Step 2]
+- Expected: [Expected result]
+- Priority: [High/Medium/Low]
+
+[Continue with more test cases...]
+
+#### Edge Cases
+- [ ] [Edge case 1]
+- [ ] [Edge case 2]
+
+#### Integration Points
+- [ ] [Related feature/system to verify]
+
+#### Notes
+[Any additional testing considerations]`;
+}
+
 // Wrap prompt with retry context for failed tasks
 export function wrapRetryPrompt(basePrompt: string, error: string, retryCount: number): string {
   return `## RETRY ATTEMPT ${retryCount}
@@ -454,6 +527,7 @@ const promptBuilders: Record<string, (ctx: Task['context']) => string> = {
   'pipeline-fix': buildPipelineFixPrompt,
   'resolution-review': buildResolutionReviewPrompt,
   'pr-comment-fix': buildPrCommentFixPrompt,
+  'testing': buildTestingPrompt,
   'docs': () => 'Update documentation based on recent changes. Format as markdown.',
 };
 

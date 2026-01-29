@@ -10,6 +10,7 @@
   import { fetchTasks } from './stores/tasks.svelte';
   import { fetchClaudeUsage } from './stores/usage.svelte';
   import { fetchReviewedItems, fetchTeamMembers } from './stores/testing.svelte';
+  import { fetchCurrentUser } from './stores/currentUser.svelte';
 
   function refreshAll() {
     fetchPRs();
@@ -19,6 +20,7 @@
     fetchClaudeUsage();
     fetchReviewedItems();
     fetchTeamMembers();
+    fetchCurrentUser();
   }
 
   onMount(() => {

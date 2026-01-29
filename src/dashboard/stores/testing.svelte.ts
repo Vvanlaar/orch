@@ -1,4 +1,5 @@
 import type { WorkItem, TeamMember } from '../lib/types';
+import { getCurrentUser } from './currentUser.svelte';
 
 // State
 let reviewedItems = $state<WorkItem[]>([]);
@@ -14,6 +15,25 @@ export function getReviewedItems() {
     if (!aAssigned && bAssigned) return -1;
     if (aAssigned && !bAssigned) return 1;
     return aAssigned.localeCompare(bAssigned);
+  });
+}
+
+export function getMyTestingItems() {
+  const user = getCurrentUser();
+  if (!user) return [];
+  return reviewedItems.filter(wi => wi.assignedTo === user.displayName);
+}
+
+export function getUnassignedItems() {
+  return reviewedItems.filter(wi => !wi.assignedTo);
+}
+
+export function getOtherAssignedItems() {
+  const user = getCurrentUser();
+  return reviewedItems.filter(wi => {
+    if (!wi.assignedTo) return false;
+    if (!user) return true;
+    return wi.assignedTo !== user.displayName;
   });
 }
 

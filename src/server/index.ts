@@ -14,7 +14,7 @@ import { startPoller } from '../core/poller.js';
 import { getEffectiveRepoMapping, getScannedRepos } from '../core/repo-scanner.js';
 import { completeTask, createTask, deleteTask, failTask, getAllTasks, getAllTasksWithOutput, getTask, getTasksWithPids, retryTask } from '../core/task-queue.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
-import { getMyAdoWorkItems, getMyGitHubPRs, getMyResolvedWorkItems, getReviewedItemsInSprint, getTeamMembers } from '../core/user-items.js';
+import { getCurrentAdoUser, getMyAdoWorkItems, getMyGitHubPRs, getMyResolvedWorkItems, getReviewedItemsInSprint, getTeamMembers } from '../core/user-items.js';
 import { adoRouter } from './webhooks/ado.js';
 import { githubRouter } from './webhooks/github.js';
 
@@ -403,6 +403,15 @@ app.get('/api/team/members', async (_req, res) => {
   res.json(members);
 });
 
+app.get('/api/ado/me', async (_req, res) => {
+  const user = await getCurrentAdoUser();
+  if (!user) {
+    res.status(404).json({ error: 'Could not get current ADO user' });
+    return;
+  }
+  res.json(user);
+});
+
 app.get('/api/claude/usage', async (_req, res) => {
   try {
     const credsPath = join(homedir(), '.claude', '.credentials.json');
@@ -574,6 +583,62 @@ app.post('/api/actions/fix-pr-comments', async (req, res) => {
     console.error('[fix-pr-comments] Error:', err);
     res.status(500).json({ error: 'Failed to fetch review comments' });
   }
+});
+
+app.post('/api/actions/test-workitem', (req, res) => {
+  const { id, title, project, url, githubPrUrl, testNotes, body } = req.body;
+  const repoMapping = getEffectiveRepoMapping();
+
+  console.log(`[test-workitem] Project: ${project}, PR URL: ${githubPrUrl}`);
+
+  let repoPath: string | null = null;
+  let repoName = '';
+
+  // Try to find repo from GitHub PR URL
+  if (githubPrUrl) {
+    const prMatch = githubPrUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull/);
+    if (prMatch) {
+      const ghRepo = prMatch[1];
+      const resolved = resolveRepoPath(ghRepo);
+      if (resolved) {
+        repoPath = resolved.repoPath;
+        repoName = ghRepo;
+        console.log(`[test-workitem] Found mapping for ${ghRepo}`);
+      }
+    }
+  }
+
+  // Fallback to project-based lookup
+  if (!repoPath && project) {
+    for (const [remote, local] of Object.entries(repoMapping)) {
+      if (remote.toLowerCase().includes(project.toLowerCase())) {
+        repoPath = path.resolve(config.repos.baseDir, local);
+        repoName = remote;
+        console.log(`[test-workitem] Found by project: ${remote} -> ${local}`);
+        break;
+      }
+    }
+  }
+
+  if (!repoPath) {
+    const hint = githubPrUrl ? 'for GitHub repo from PR URL' : `for project "${project}"`;
+    res.status(400).json({ error: `No local repo mapping found ${hint}. Clone the repo or add manual mapping.` });
+    return;
+  }
+
+  const task = createTask('testing', repoName, repoPath, {
+    source: 'ado',
+    event: 'manual.testing',
+    workItemId: id,
+    title,
+    url,
+    body,
+    prUrl: githubPrUrl,
+    testNotes,
+  });
+  triggerUpdate();
+  broadcastTasks();
+  res.json({ taskId: task.id, message: 'Testing task created - terminal will open shortly' });
 });
 
 app.post('/api/actions/review-resolution', (req, res) => {

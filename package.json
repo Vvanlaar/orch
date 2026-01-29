@@ -10,7 +10,8 @@
     "build": "tsc && npm run build:dashboard",
     "build:dashboard": "vite build src/dashboard",
     "start": "node dist/server/index.js",
-    "test": "vitest"
+    "test": "vitest",
+    "dev:all": "concurrently \"npm:dev\" \"npm:dev:dashboard\""
   },
   "dependencies": {
     "dotenv": "^16.4.0",
@@ -23,6 +24,7 @@
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.0",
     "@types/ws": "^8.5.13",
+    "concurrently": "^9.2.1",
     "svelte": "^5.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",

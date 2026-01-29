@@ -21,7 +21,9 @@ export function setTasksHandler(handler: TasksHandler) {
 
 export function connect() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${protocol}//${location.host}/ws`);
+  // In dev, connect directly to backend; vite WS proxy doesn't work reliably
+  const host = import.meta.env.DEV ? 'localhost:3004' : location.host;
+  ws = new WebSocket(`${protocol}//${host}/ws`);
 
   ws.onopen = () => {
     connected = true;

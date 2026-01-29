@@ -41,6 +41,12 @@ export interface TeamMember {
   id: string;
 }
 
+export interface AdoUser {
+  displayName: string;
+  email: string;
+  id: string;
+}
+
 function extractRepoFromUrl(repositoryUrl: string): string {
   const parts = repositoryUrl.split('/');
   return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
@@ -302,6 +308,41 @@ export async function getReviewedItemsInSprint(): Promise<{ sprintName: string; 
   }
 
   return { sprintName: sprint.name, items };
+}
+
+export async function getCurrentAdoUser(): Promise<AdoUser | null> {
+  if (!checkAdoConfig()) return null;
+
+  const auth = getAdoAuth();
+  const url = `https://dev.azure.com/${config.ado.organization}/_apis/connectionData?api-version=7.1`;
+
+  try {
+    const res = await fetch(url, {
+      headers: { Authorization: `Basic ${auth}` },
+    });
+
+    if (!res.ok) {
+      console.error(`[UserItems] Failed to get current user (${res.status}):`, await res.text());
+      return null;
+    }
+
+    const data = await res.json();
+    const user = data.authenticatedUser;
+    if (!user) {
+      console.log('[UserItems] No authenticated user in response');
+      return null;
+    }
+
+    console.log(`[UserItems] Current ADO user: ${user.providerDisplayName}`);
+    return {
+      displayName: user.providerDisplayName || user.customDisplayName || '',
+      email: user.properties?.Account?.$value || '',
+      id: user.id || '',
+    };
+  } catch (err) {
+    console.error('[UserItems] Error fetching current ADO user:', err);
+    return null;
+  }
 }
 
 export async function getTeamMembers(): Promise<TeamMember[]> {

@@ -1,7 +1,11 @@
 <script lang="ts">
+  import type { WorkItem } from '../lib/types';
   import { typeClass } from '../lib/utils';
   import {
     getReviewedItems,
+    getMyTestingItems,
+    getUnassignedItems,
+    getOtherAssignedItems,
     getTeamMembers,
     getSelectedTeamMembers,
     getSprintName,
@@ -11,12 +15,20 @@
     deselectAllTeam,
     generateAssignCommand,
   } from '../stores/testing.svelte';
+  import { getCurrentUser } from '../stores/currentUser.svelte';
 
   let reviewedItems = $derived(getReviewedItems());
+  let myItems = $derived(getMyTestingItems());
+  let unassignedItems = $derived(getUnassignedItems());
+  let otherItems = $derived(getOtherAssignedItems());
   let teamMembers = $derived(getTeamMembers());
   let selectedTeamMembers = $derived(getSelectedTeamMembers());
   let sprintName = $derived(getSprintName());
   let reviewedCount = $derived(getReviewedCount());
+  let currentUser = $derived(getCurrentUser());
+
+  let showOthers = $state(false);
+  let testingItem = $state<number | null>(null);
 
   function handleCopyCommand() {
     const cmd = generateAssignCommand();
@@ -33,41 +45,140 @@
       () => prompt('Copy this command:', cmd)
     );
   }
+
+  async function handleTest(wi: WorkItem) {
+    testingItem = wi.id;
+    try {
+      const res = await fetch('/api/actions/test-workitem', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: wi.id,
+          title: wi.title,
+          project: wi.project,
+          url: wi.url,
+          githubPrUrl: wi.githubPrUrl,
+          testNotes: wi.testNotes,
+          body: wi.body,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        console.log('Testing task created:', data);
+      } else {
+        alert(`Failed to create testing task: ${data.error}`);
+      }
+    } catch (err) {
+      alert(`Error: ${err}`);
+    } finally {
+      testingItem = null;
+    }
+  }
 </script>
 
 <div class="card" style="margin-bottom: 24px;">
   <h2>Testing Assignment</h2>
   <div class="sprint-header">
     <span>{sprintName}</span>
-    <span>{reviewedCount} items</span>
+    <span>
+      {#if currentUser}
+        <span class="current-user">{currentUser.displayName}</span> •
+      {/if}
+      {reviewedCount} items
+    </span>
   </div>
-  <div class="card-list" style="max-height: 300px;">
+  <div class="card-list" style="max-height: 400px;">
     {#if reviewedItems.length === 0}
       <div class="empty">No reviewed items in current sprint</div>
     {:else}
-      {#each reviewedItems as wi (wi.id)}
-        <div class="item">
-          <div class="item-info">
-            <div class="item-title">{wi.title}</div>
-            <div class="item-meta">
-              <span>#{wi.id}</span>
-              <span class="badge type {typeClass(wi.type)}">{wi.type}</span>
-              {#if wi.assignedTo}
-                <span class="badge-person assigned">Assigned: {wi.assignedTo}</span>
-              {:else}
+      <!-- My Testing Section -->
+      {#if myItems.length > 0}
+        <div class="section-header">My Testing ({myItems.length})</div>
+        {#each myItems as wi (wi.id)}
+          <div class="item">
+            <div class="item-info">
+              <div class="item-title">{wi.title}</div>
+              <div class="item-meta">
+                <span>#{wi.id}</span>
+                <span class="badge type {typeClass(wi.type)}">{wi.type}</span>
+              </div>
+              <div class="reviewed-meta">
+                <span class="badge-person">Resolved: {wi.resolvedBy || 'N/A'}</span>
+                <span class="badge-person">Reviewed: {wi.reviewedBy || 'N/A'}</span>
+              </div>
+            </div>
+            <div class="item-actions">
+              <button
+                class="action-btn"
+                onclick={() => handleTest(wi)}
+                disabled={testingItem === wi.id}
+              >
+                {testingItem === wi.id ? 'Starting...' : 'Test'}
+              </button>
+              <a href={wi.url} target="_blank" class="action-btn secondary">View →</a>
+            </div>
+          </div>
+        {/each}
+      {/if}
+
+      <!-- Unassigned Section -->
+      {#if unassignedItems.length > 0}
+        <div class="section-header">Unassigned ({unassignedItems.length})</div>
+        {#each unassignedItems as wi (wi.id)}
+          <div class="item">
+            <div class="item-info">
+              <div class="item-title">{wi.title}</div>
+              <div class="item-meta">
+                <span>#{wi.id}</span>
+                <span class="badge type {typeClass(wi.type)}">{wi.type}</span>
                 <span class="badge-person unassigned">Unassigned</span>
-              {/if}
+              </div>
+              <div class="reviewed-meta">
+                <span class="badge-person">Resolved: {wi.resolvedBy || 'N/A'}</span>
+                <span class="badge-person">Reviewed: {wi.reviewedBy || 'N/A'}</span>
+              </div>
             </div>
-            <div class="reviewed-meta">
-              <span class="badge-person">Resolved: {wi.resolvedBy || 'N/A'}</span>
-              <span class="badge-person">Reviewed: {wi.reviewedBy || 'N/A'}</span>
+            <div class="item-actions">
+              <a href={wi.url} target="_blank" class="action-btn secondary">View →</a>
             </div>
           </div>
-          <div class="item-actions">
-            <a href={wi.url} target="_blank" class="action-btn secondary">View →</a>
-          </div>
+        {/each}
+      {/if}
+
+      <!-- Others Section (Collapsible) -->
+      {#if otherItems.length > 0}
+        <div
+          class="section-header clickable"
+          onclick={() => (showOthers = !showOthers)}
+          role="button"
+          tabindex="0"
+          onkeydown={(e) => e.key === 'Enter' && (showOthers = !showOthers)}
+        >
+          <span>Assigned to Others ({otherItems.length})</span>
+          <span class="toggle-icon">{showOthers ? '▼' : '▶'}</span>
         </div>
-      {/each}
+        {#if showOthers}
+          {#each otherItems as wi (wi.id)}
+            <div class="item">
+              <div class="item-info">
+                <div class="item-title">{wi.title}</div>
+                <div class="item-meta">
+                  <span>#{wi.id}</span>
+                  <span class="badge type {typeClass(wi.type)}">{wi.type}</span>
+                  <span class="badge-person assigned">Assigned: {wi.assignedTo}</span>
+                </div>
+                <div class="reviewed-meta">
+                  <span class="badge-person">Resolved: {wi.resolvedBy || 'N/A'}</span>
+                  <span class="badge-person">Reviewed: {wi.reviewedBy || 'N/A'}</span>
+                </div>
+              </div>
+              <div class="item-actions">
+                <a href={wi.url} target="_blank" class="action-btn secondary">View →</a>
+              </div>
+            </div>
+          {/each}
+        {/if}
+      {/if}
     {/if}
   </div>
   <div class="assign-row">
@@ -110,6 +221,35 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+  }
+
+  .current-user {
+    color: #58a6ff;
+    font-weight: 500;
+  }
+
+  .section-header {
+    padding: 8px 16px;
+    background: #1c2128;
+    font-size: 12px;
+    font-weight: 600;
+    color: #8b949e;
+    border-bottom: 1px solid #21262d;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .section-header.clickable {
+    cursor: pointer;
+  }
+
+  .section-header.clickable:hover {
+    background: #21262d;
+  }
+
+  .toggle-icon {
+    font-size: 10px;
   }
 
   .assign-row {

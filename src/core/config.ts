@@ -7,8 +7,8 @@ function envOr(key: string, fallback: string): string {
 
 export const config: Config = {
   server: {
-    port: parseInt(envOr('PORT', '3003')),
-    dashboardPort: parseInt(envOr('DASHBOARD_PORT', '3004')),
+    port: parseInt(envOr('PORT', '3004')),
+    dashboardPort: parseInt(envOr('DASHBOARD_PORT', '3003')),
   },
   github: {
     webhookSecret: envOr('GITHUB_WEBHOOK_SECRET', ''),

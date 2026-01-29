@@ -9,7 +9,7 @@ export interface Terminal {
   available?: boolean;
 }
 
-export type TaskType = 'pr-review' | 'issue-fix' | 'code-gen' | 'docs' | 'pipeline-fix' | 'resolution-review' | 'pr-comment-fix';
+export type TaskType = 'pr-review' | 'issue-fix' | 'code-gen' | 'docs' | 'pipeline-fix' | 'resolution-review' | 'pr-comment-fix' | 'testing';
 
 export interface Task {
   id: number;

@@ -9,11 +9,17 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    port: 3003,
     proxy: {
-      '/api': 'http://localhost:3000',
+      '/api': {
+        target: 'http://localhost:3004',
+        changeOrigin: true,
+      },
       '/ws': {
-        target: 'ws://localhost:3000',
+        target: 'http://localhost:3004',
         ws: true,
+        changeOrigin: true,
+        rewriteWsOrigin: true,
       },
     },
   },
