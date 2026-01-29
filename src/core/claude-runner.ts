@@ -3,9 +3,10 @@ import { EventEmitter } from 'events';
 import { writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import type { Task } from './types.js';
+import type { Task, TerminalId } from './types.js';
 import { config } from './config.js';
 import { loadLearnings } from './learnings.js';
+import { getTerminalPreference } from './settings.js';
 
 // Process registry for steering running tasks
 const runningProcesses = new Map<number, ChildProcess>();
@@ -168,7 +169,7 @@ export function getRunningTaskPids(): { taskId: number; pid: number }[] {
   return result;
 }
 
-// Run Claude in a separate terminal window (Windows Terminal or cmd)
+// Run Claude in a separate terminal window (configurable)
 export async function runClaudeInTerminal(
   taskId: number,
   task: Task,
@@ -185,35 +186,56 @@ export async function runClaudeInTerminal(
     ? `--dangerously-skip-permissions -p "$(cat '${promptFile.replace(/\\/g, '/')}')"`
     : `--print --dangerously-skip-permissions "$(cat '${promptFile.replace(/\\/g, '/')}')"`;
 
-  // Build command for Windows Terminal (wt) or fallback to cmd
   const repoPath = task.repoPath.replace(/\\/g, '/');
   const title = `Task #${taskId}: ${task.type}`;
+  const preferred = getTerminalPreference();
 
-  // Try Windows Terminal first, fall back to cmd
-  const wtCmd = `wt -w 0 nt --title "${title}" -d "${repoPath}" cmd /k "claude ${claudeArgs}"`;
-  const cmdCmd = `start "${title}" cmd /k "cd /d ${task.repoPath} && claude ${claudeArgs}"`;
+  const buildTerminalCmd = (terminal: TerminalId): string => {
+    switch (terminal) {
+      case 'wt':
+        return `wt -w 0 nt --title "${title}" -d "${repoPath}" cmd /k "claude ${claudeArgs}"`;
+      case 'powershell':
+        return `start powershell -NoExit -Command "Set-Location '${task.repoPath}'; claude ${claudeArgs}"`;
+      case 'pwsh':
+        return `start pwsh -NoExit -Command "Set-Location '${task.repoPath}'; claude ${claudeArgs}"`;
+      case 'git-bash':
+        return `start "" "C:\\Program Files\\Git\\git-bash.exe" --cd="${task.repoPath}" -c "claude ${claudeArgs}; exec bash"`;
+      case 'cmd':
+      default:
+        return `start "${title}" cmd /k "cd /d ${task.repoPath} && claude ${claudeArgs}"`;
+    }
+  };
 
-  return new Promise((resolve) => {
-    // Try wt first
-    exec(wtCmd, (err) => {
-      if (err) {
-        // Fallback to cmd
-        exec(cmdCmd, (cmdErr) => {
-          if (cmdErr) {
-            console.error('[terminal] Failed to open terminal:', cmdErr);
-            resolve({ success: false, output: '', error: 'Failed to open terminal window' });
-          } else {
-            console.log(`[terminal] Opened cmd window for task #${taskId}`);
-            claudeEmitter.emit('output', taskId, `[Terminal opened - running in external window]\nPrompt file: ${promptFile}\n`);
-            resolve({ success: true, output: 'Running in external terminal' });
-          }
-        });
-      } else {
-        console.log(`[terminal] Opened Windows Terminal for task #${taskId}`);
-        claudeEmitter.emit('output', taskId, `[Windows Terminal opened - running in external window]\nPrompt file: ${promptFile}\n`);
-        resolve({ success: true, output: 'Running in external terminal' });
-      }
+  const tryTerminal = (terminal: TerminalId): Promise<{ success: boolean; terminal: TerminalId }> => {
+    return new Promise(resolve => {
+      exec(buildTerminalCmd(terminal), err => {
+        resolve({ success: !err, terminal });
+      });
     });
+  };
+
+  return new Promise(async (resolve) => {
+    let result: { success: boolean; terminal: TerminalId };
+
+    if (preferred === 'auto') {
+      // Try wt first, then cmd
+      result = await tryTerminal('wt');
+      if (!result.success) {
+        result = await tryTerminal('cmd');
+      }
+    } else {
+      result = await tryTerminal(preferred);
+    }
+
+    if (result.success) {
+      const terminalName = result.terminal === 'wt' ? 'Windows Terminal' : result.terminal;
+      console.log(`[terminal] Opened ${terminalName} for task #${taskId}`);
+      claudeEmitter.emit('output', taskId, `[${terminalName} opened - running in external window]\nPrompt file: ${promptFile}\n`);
+      resolve({ success: true, output: `Running in ${terminalName}` });
+    } else {
+      console.error(`[terminal] Failed to open terminal for task #${taskId}`);
+      resolve({ success: false, output: '', error: 'Failed to open terminal window' });
+    }
   });
 }
 

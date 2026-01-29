@@ -1,4 +1,4 @@
-import type { PR, WorkItem } from './types';
+import type { PR, WorkItem, Terminal, TerminalConfig, TerminalId } from './types';
 
 export async function reviewPR(pr: PR): Promise<{ taskId: number; message: string }> {
   const res = await fetch('/api/actions/review-pr', {
@@ -71,4 +71,26 @@ export async function reviewResolution(wi: WorkItem): Promise<{ taskId: number; 
   const result = await res.json();
   if (!res.ok) throw new Error(result.error);
   return result;
+}
+
+// Terminal configuration
+export async function analyzeTerminals(): Promise<Terminal[]> {
+  const res = await fetch('/api/system/terminals');
+  if (!res.ok) throw new Error('Failed to analyze terminals');
+  return res.json();
+}
+
+export async function getTerminalConfig(): Promise<TerminalConfig> {
+  const res = await fetch('/api/config/terminal');
+  if (!res.ok) throw new Error('Failed to get terminal config');
+  return res.json();
+}
+
+export async function setTerminalConfig(terminal: TerminalId): Promise<void> {
+  const res = await fetch('/api/config/terminal', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ terminal }),
+  });
+  if (!res.ok) throw new Error('Failed to set terminal config');
 }

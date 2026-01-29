@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import type { Config } from './types.js';
+import type { Config, TerminalId } from './types.js';
 
 function envOr(key: string, fallback: string): string {
   return process.env[key] ?? fallback;
@@ -25,6 +25,7 @@ export const config: Config = {
     maxConcurrentTasks: parseInt(envOr('MAX_CONCURRENT_TASKS', '2')),
     timeout: parseInt(envOr('CLAUDE_TIMEOUT', '300000')),
     terminalMode: envOr('CLAUDE_TERMINAL_MODE', 'false') === 'true',
+    preferredTerminal: envOr('PREFERRED_TERMINAL', 'auto') as TerminalId,
   },
   repos: {
     baseDir: envOr('REPOS_BASE_DIR', '../'),

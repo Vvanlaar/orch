@@ -63,3 +63,17 @@ export interface Process {
 }
 
 export type FilterType = 'all' | 'new' | 'active' | 'resolved' | 'reviewed' | 'resolved-by-me';
+
+export type TerminalId = 'auto' | 'wt' | 'cmd' | 'powershell' | 'pwsh' | 'git-bash';
+
+export interface Terminal {
+  id: TerminalId;
+  name: string;
+  cmd: string | null;
+  available?: boolean;
+}
+
+export interface TerminalConfig {
+  preferred: TerminalId;
+  terminals: Terminal[];
+}

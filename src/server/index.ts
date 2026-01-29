@@ -9,6 +9,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 
 import { killTask } from '../core/claude-runner.js';
 import { config } from '../core/config.js';
+import { detectAvailableTerminals, getTerminalPreference, setTerminalPreference } from '../core/settings.js';
 import { startPoller } from '../core/poller.js';
 import { getEffectiveRepoMapping, getScannedRepos } from '../core/repo-scanner.js';
 import { completeTask, createTask, deleteTask, failTask, getAllTasks, getAllTasksWithOutput, getTask, getTasksWithPids, retryTask } from '../core/task-queue.js';
@@ -198,21 +199,49 @@ app.post('/api/tasks/:id/terminal', async (req, res) => {
   const { exec } = await import('child_process');
   const repoPath = task.repoPath.replace(/\\/g, '/');
   const title = `Task #${id}: ${task.repo}`;
-  // Open Windows Terminal in the repo directory
-  exec(`wt -w 0 nt --title "${title}" -d "${repoPath}"`, (err) => {
-    if (err) {
-      // Fallback to cmd
-      exec(`start "${title}" cmd /k "cd /d ${task.repoPath}"`, (cmdErr) => {
-        if (cmdErr) {
-          res.status(500).json({ error: 'Failed to open terminal' });
-        } else {
-          res.json({ success: true });
-        }
-      });
+  const preferred = getTerminalPreference();
+
+  const openTerminal = (terminal: string): Promise<boolean> => {
+    return new Promise(resolve => {
+      let cmd: string;
+      switch (terminal) {
+        case 'wt':
+          cmd = `wt -w 0 nt --title "${title}" -d "${repoPath}"`;
+          break;
+        case 'powershell':
+          cmd = `start powershell -NoExit -Command "Set-Location '${task.repoPath}'; $Host.UI.RawUI.WindowTitle='${title}'"`;
+          break;
+        case 'pwsh':
+          cmd = `start pwsh -NoExit -Command "Set-Location '${task.repoPath}'; $Host.UI.RawUI.WindowTitle='${title}'"`;
+          break;
+        case 'git-bash':
+          cmd = `start "" "C:\\Program Files\\Git\\git-bash.exe" --cd="${task.repoPath}"`;
+          break;
+        case 'cmd':
+        default:
+          cmd = `start "${title}" cmd /k "cd /d ${task.repoPath}"`;
+          break;
+      }
+      exec(cmd, err => resolve(!err));
+    });
+  };
+
+  // Try preferred terminal, fall back to auto behavior (wt -> cmd)
+  if (preferred === 'auto') {
+    if (await openTerminal('wt')) {
+      res.json({ success: true, terminal: 'wt' });
+    } else if (await openTerminal('cmd')) {
+      res.json({ success: true, terminal: 'cmd' });
     } else {
-      res.json({ success: true });
+      res.status(500).json({ error: 'Failed to open terminal' });
     }
-  });
+  } else {
+    if (await openTerminal(preferred)) {
+      res.json({ success: true, terminal: preferred });
+    } else {
+      res.status(500).json({ error: `Failed to open ${preferred} terminal` });
+    }
+  }
 });
 
 function resolveRepoPath(repo: string): { repoPath: string; localFolder: string } | null {
@@ -325,6 +354,28 @@ app.get('/api/repos', (_req, res) => {
   const repos = getScannedRepos();
   const mapping = getEffectiveRepoMapping();
   res.json({ repos, mapping });
+});
+
+// Terminal configuration
+app.get('/api/system/terminals', (_req, res) => {
+  const terminals = detectAvailableTerminals();
+  res.json(terminals);
+});
+
+app.get('/api/config/terminal', (_req, res) => {
+  const preferred = getTerminalPreference();
+  const terminals = detectAvailableTerminals();
+  res.json({ preferred, terminals });
+});
+
+app.post('/api/config/terminal', (req, res) => {
+  const { terminal } = req.body;
+  if (!terminal) {
+    res.status(400).json({ error: 'terminal is required' });
+    return;
+  }
+  setTerminalPreference(terminal);
+  res.json({ success: true, preferred: terminal });
 });
 
 app.get('/api/my/prs', async (_req, res) => {

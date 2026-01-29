@@ -1,5 +1,14 @@
 export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed';
 
+export type TerminalId = 'auto' | 'wt' | 'cmd' | 'powershell' | 'pwsh' | 'git-bash';
+
+export interface Terminal {
+  id: TerminalId;
+  name: string;
+  cmd: string | null;
+  available?: boolean;
+}
+
 export type TaskType = 'pr-review' | 'issue-fix' | 'code-gen' | 'docs' | 'pipeline-fix' | 'resolution-review' | 'pr-comment-fix';
 
 export interface Task {
@@ -66,6 +75,7 @@ export interface Config {
     maxConcurrentTasks: number;
     timeout: number;
     terminalMode: boolean; // open tasks in separate terminal windows
+    preferredTerminal: TerminalId;
   };
   repos: {
     baseDir: string;

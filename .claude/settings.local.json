@@ -5,7 +5,8 @@
       "Bash(npm install:*)",
       "Bash(npm ls:*)",
       "Bash(npm:*)",
-      "Bash(npm config:*)"
+      "Bash(npm config:*)",
+      "mcp__svelte__svelte-autofixer"
     ]
   }
 }
