@@ -1,3 +1,4 @@
+import cors from 'cors';
 import { execSync } from 'child_process';
 import express from 'express';
 import { existsSync, readFileSync } from 'fs';
@@ -70,6 +71,7 @@ function broadcastOutput(taskId: number, chunk: string): void {
   });
 }
 
+app.use(cors({ origin: true }));
 app.use(express.json());
 
 // Dashboard - serve built Svelte app or fallback to old HTML

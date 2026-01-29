@@ -314,7 +314,7 @@ export async function getCurrentAdoUser(): Promise<AdoUser | null> {
   if (!checkAdoConfig()) return null;
 
   const auth = getAdoAuth();
-  const url = `https://dev.azure.com/${config.ado.organization}/_apis/connectionData?api-version=7.1`;
+  const url = `https://dev.azure.com/${config.ado.organization}/_apis/connectionData?api-version=7.1-preview`;
 
   try {
     const res = await fetch(url, {

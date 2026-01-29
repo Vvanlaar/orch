@@ -29,6 +29,10 @@ export function connect() {
     connected = true;
   };
 
+  ws.onerror = (e) => {
+    console.error('WebSocket error:', e);
+  };
+
   ws.onclose = () => {
     connected = false;
     ws = null;
