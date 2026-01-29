@@ -126,6 +126,24 @@ function checkAdoConfig(): boolean {
 }
 
 function extractGitHubPrUrl(fields: Record<string, any>): string {
+  // Check dedicated GitHub PR fields first
+  const prFields = [
+    'Custom.GitHubPullRequest',
+    'Custom.GitHubPRUrl',
+    'Custom.GithubPullRequest',
+    'Custom.PRLink',
+    'Custom.PullRequestUrl',
+  ];
+  for (const field of prFields) {
+    const val = fields[field];
+    if (val && typeof val === 'string' && val.includes('github.com')) {
+      // Extract URL from potential HTML anchor or plain text
+      const urlMatch = val.match(/https:\/\/github\.com\/[^"'\s<>]+\/pull\/\d+/);
+      if (urlMatch) return urlMatch[0];
+    }
+  }
+
+  // Fallback: search all text for GitHub PR URL
   const allText = JSON.stringify(fields);
   const match = allText.match(/https:\/\/github\.com\/[^"'\s]+\/pull\/\d+/);
   return match ? match[0] : '';
@@ -301,6 +319,7 @@ export async function getReviewedItemsInSprint(): Promise<{ sprintName: string; 
         project: fields['System.TeamProject'] || '',
         createdAt: fields['System.CreatedDate'] || '',
         updatedAt: fields['System.ChangedDate'] || '',
+        githubPrUrl: extractGitHubPrUrl(fields),
       });
     }
   } catch (err) {
