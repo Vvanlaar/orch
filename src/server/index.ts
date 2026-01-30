@@ -696,22 +696,17 @@ app.post('/api/actions/test-workitem', (req, res) => {
     }
   }
 
-  // Remote-only fallback: no local repo but we have a GitHub PR URL
-  if (!repoPath && ghRepoRef) {
+  // Remote-only fallback: no local repo - use base dir and work from PR URL or ADO info only
+  if (!repoPath) {
     if (!existsSync(config.repos.baseDir)) {
-      res.status(400).json({ error: `Cannot use remote-only mode: base directory does not exist` });
+      res.status(400).json({ error: 'Cannot proceed: base directory does not exist' });
       return;
     }
     remoteOnly = true;
     repoPath = config.repos.baseDir;
-    repoName = ghRepoRef;
-    console.log(`[test-workitem] Remote-only mode for ${ghRepoRef}`);
-  }
-
-  if (!repoPath) {
-    const hint = githubPrUrl ? 'for GitHub repo from PR URL' : `for project "${project}"`;
-    res.status(400).json({ error: `No local repo mapping found ${hint}. Clone the repo or add manual mapping.` });
-    return;
+    repoName = ghRepoRef || project || 'unknown';
+    const mode = ghRepoRef ? `remote-only for ${ghRepoRef}` : 'ADO-only (no PR URL)';
+    console.log(`[test-workitem] ${mode}`);
   }
 
   const task = createTask('testing', repoName, repoPath, {

@@ -426,37 +426,42 @@ Respond in JSON format ONLY (no markdown fences, no explanation):
 Use the 0-based index matching the comment order above. If a comment wasn't addressed, set resolution to "Not addressed in this change".`;
 }
 
-export function buildTestingPrompt(context: Task['context']): string {
-  let prInfo = '';
-  if (context.prUrl) {
-    const match = context.prUrl.match(/\/pull\/(\d+)/);
-    if (match) {
-      const prNumber = match[1];
-      if (context.remoteOnly && context.ghRepoRef) {
-        // Remote-only mode: use full owner/repo#prNumber format
-        prInfo = `
-## PR Analysis (Remote Mode)
-No local repository available. Use these commands to review remotely:
-\`\`\`
-gh pr view ${context.ghRepoRef}#${prNumber}
-gh pr diff ${context.ghRepoRef}#${prNumber}
-\`\`\`
+function buildPrInfoSection(context: Task['context']): string {
+  const prMatch = context.prUrl?.match(/\/pull\/(\d+)/);
 
-**Note:** You cannot run local tests or check the codebase directly.
-Focus on reviewing the PR diff and creating a test plan from the changes.
+  if (!prMatch) {
+    if (context.remoteOnly) {
+      return `
+## Note: No PR Available
+No GitHub PR URL found for this work item. No local repository available.
+Create a test plan based solely on the work item description and test notes below.
 `;
-      } else {
-        prInfo = `
-## PR Analysis
-Use these commands to review the changes:
-\`\`\`
-gh pr view ${prNumber}
-gh pr diff ${prNumber}
-\`\`\`
-`;
-      }
     }
+    return '';
   }
+
+  const prNumber = prMatch[1];
+  const isRemote = context.remoteOnly && context.ghRepoRef;
+  const prRef = isRemote ? `${context.ghRepoRef}#${prNumber}` : prNumber;
+  const header = isRemote ? '## PR Analysis (Remote Mode)' : '## PR Analysis';
+  const note = isRemote
+    ? `\n**Note:** You cannot run local tests or check the codebase directly.
+Focus on reviewing the PR diff and creating a test plan from the changes.
+`
+    : '';
+
+  return `
+${header}
+${isRemote ? 'No local repository available. Use these commands to review remotely:' : 'Use these commands to review the changes:'}
+\`\`\`
+gh pr view ${prRef}
+gh pr diff ${prRef}
+\`\`\`
+${note}`;
+}
+
+export function buildTestingPrompt(context: Task['context']): string {
+  const prInfo = buildPrInfoSection(context);
 
   return `You are creating a testing plan for a work item that has been reviewed and is ready for testing.
 
@@ -474,7 +479,7 @@ ${context.body || 'No description provided'}
 ## Instructions
 Create a comprehensive testing plan. You MUST:
 
-1. **Understand the Change** - Review the PR diff to understand exactly what was modified
+1. **Understand the Change** - ${context.prUrl ? 'Review the PR diff to understand exactly what was modified' : 'Review the work item description to understand what was implemented'}
 2. **Analyze Test Notes** - Parse the acceptance criteria and test notes
 3. **Create Test Cases** - Generate specific, actionable test cases including:
    - Happy path scenarios
