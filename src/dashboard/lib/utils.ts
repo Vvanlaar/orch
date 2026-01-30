@@ -29,3 +29,9 @@ export function extractAdoTicket(title: string): string | null {
   const match = title.match(/(?:AB|ADO)?#(\d{4,6})/i);
   return match ? match[1] : null;
 }
+
+export function extractRepoFromGitHubUrl(url?: string): string | null {
+  if (!url?.includes('github.com')) return null;
+  const match = url.match(/github\.com\/([^/]+\/[^/]+)/);
+  return match ? match[1] : null;
+}

@@ -11,7 +11,7 @@
     "build:dashboard": "vite build src/dashboard",
     "start": "node dist/server/index.js",
     "test": "vitest",
-    "dev:all": "concurrently \"npm:dev\" \"npm:dev:dashboard\""
+    "dev:all": "concurrently --kill-others \"npm:dev\" \"npm:dev:dashboard\""
   },
   "dependencies": {
     "@types/cors": "^2.8.19",

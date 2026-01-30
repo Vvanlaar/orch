@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Task } from '../lib/types';
-  import { formatTime } from '../lib/utils';
+  import { formatTime, extractRepoFromGitHubUrl } from '../lib/utils';
   import { send } from '../stores/websocket.svelte';
   import {
     isExpanded,
@@ -30,6 +30,9 @@
   let canDelete = $derived(task.status !== 'running');
   let hasOutput = $derived(!!output);
   let retryInfo = $derived(task.context?.retryCount ? ` (retry #${task.context.retryCount})` : '');
+
+  // Extract repo from GitHub PR URL only
+  let repos = $derived(extractRepoFromGitHubUrl(task.context?.url) || '');
 
   function handleToggle() {
     toggleExpanded(task.id);
@@ -106,7 +109,7 @@
     <div class="task-id">#{task.id}</div>
     <div class="task-status {task.status}">{task.status}</div>
     <div class="task-info">
-      <div class="task-type">{task.type}{retryInfo}</div>
+      <div class="task-type">{task.type}{retryInfo}{#if repos} · {repos}{/if}</div>
       <div class="task-title">{task.context?.title || task.repo}</div>
     </div>
     <div class="task-time">{formatTime(task.createdAt)}</div>

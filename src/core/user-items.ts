@@ -125,8 +125,34 @@ function checkAdoConfig(): boolean {
   return true;
 }
 
-function extractGitHubPrUrl(fields: Record<string, any>): string {
-  // Check dedicated GitHub PR fields first
+function extractGitHubPrUrl(fields: Record<string, any>, relations?: any[]): string {
+  // Check relations first (ADO Development links)
+  if (relations) {
+    for (const rel of relations) {
+      const url = rel.url || '';
+      const relType = rel.rel || '';
+      const name = rel.attributes?.name || '';
+
+      // Debug: log relations that might be GitHub-related
+      if (relType.includes('GitHub') || relType.includes('ArtifactLink') || url.includes('github') || name.includes('github')) {
+        console.log('[extractGitHubPrUrl] Found potential GitHub relation:', { rel: relType, url, name, attributes: rel.attributes });
+      }
+
+      // GitHub PR artifact links have vstfs:///GitHub/PullRequest/ format, but the url field has the API URL
+      // The actual PR URL is in the attributes.name or we can construct from the relation
+      if (url.includes('github.com') && url.includes('/pull/')) {
+        const match = url.match(/https:\/\/github\.com\/[^"'\s<>]+\/pull\/\d+/);
+        if (match) return match[0];
+      }
+      // Check attributes for GitHub links
+      if (name.includes('github.com') && name.includes('/pull/')) {
+        const match = name.match(/https:\/\/github\.com\/[^"'\s<>]+\/pull\/\d+/);
+        if (match) return match[0];
+      }
+    }
+  }
+
+  // Check dedicated GitHub PR fields
   const prFields = [
     'Custom.GitHubPullRequest',
     'Custom.GitHubPRUrl',
@@ -137,7 +163,6 @@ function extractGitHubPrUrl(fields: Record<string, any>): string {
   for (const field of prFields) {
     const val = fields[field];
     if (val && typeof val === 'string' && val.includes('github.com')) {
-      // Extract URL from potential HTML anchor or plain text
       const urlMatch = val.match(/https:\/\/github\.com\/[^"'\s<>]+\/pull\/\d+/);
       if (urlMatch) return urlMatch[0];
     }
@@ -163,7 +188,7 @@ function mapWorkItemToAdoItem(wi: any): AdoWorkItem {
     createdAt: fields['System.CreatedDate'] || '',
     updatedAt: fields['System.ChangedDate'] || '',
     resolution: fields['Microsoft.VSTS.Common.Resolution'] || fields['System.Description'] || '',
-    githubPrUrl: extractGitHubPrUrl(fields),
+    githubPrUrl: extractGitHubPrUrl(fields, wi.relations),
     testNotes: fields['Microsoft.VSTS.TCM.TestNotes'] || fields['Microsoft.VSTS.Common.AcceptanceCriteria'] || fields['Custom.TestNotes'] || '',
     body: fields['System.Description'] || '',
   };
@@ -194,7 +219,7 @@ async function fetchAdoWorkItemsByQuery(wiqlQuery: string, logPrefix: string): P
 
     if (workItemIds.length === 0) return [];
 
-    const detailsUrl = `https://dev.azure.com/${config.ado.organization}/_apis/wit/workitems?ids=${workItemIds.join(',')}&api-version=7.1`;
+    const detailsUrl = `https://dev.azure.com/${config.ado.organization}/_apis/wit/workitems?ids=${workItemIds.join(',')}&$expand=relations&api-version=7.1`;
     const detailsRes = await fetch(detailsUrl, { headers: { Authorization: `Basic ${auth}` } });
 
     if (!detailsRes.ok) {
@@ -290,7 +315,7 @@ export async function getReviewedItemsInSprint(): Promise<{ sprintName: string; 
     if (workItemIds.length === 0) return { sprintName: sprint.name, items: [] };
 
     const idsParam = workItemIds.join(',');
-    const detailsUrl = `https://dev.azure.com/${config.ado.organization}/_apis/wit/workitems?ids=${idsParam}&api-version=7.1`;
+    const detailsUrl = `https://dev.azure.com/${config.ado.organization}/_apis/wit/workitems?ids=${idsParam}&$expand=relations&api-version=7.1`;
     const detailsRes = await fetch(detailsUrl, {
       headers: { Authorization: `Basic ${auth}` },
     });
@@ -319,7 +344,7 @@ export async function getReviewedItemsInSprint(): Promise<{ sprintName: string; 
         project: fields['System.TeamProject'] || '',
         createdAt: fields['System.CreatedDate'] || '',
         updatedAt: fields['System.ChangedDate'] || '',
-        githubPrUrl: extractGitHubPrUrl(fields),
+        githubPrUrl: extractGitHubPrUrl(fields, wi.relations),
       });
     }
   } catch (err) {

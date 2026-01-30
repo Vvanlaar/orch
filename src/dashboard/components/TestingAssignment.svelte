@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { WorkItem } from '../lib/types';
-  import { typeClass } from '../lib/utils';
+  import { typeClass, extractRepoFromGitHubUrl } from '../lib/utils';
   import {
     getReviewedItems,
     getMyTestingItems,
@@ -101,6 +101,9 @@
               <div class="item-meta">
                 <span>#{wi.id}</span>
                 <span class="badge type {typeClass(wi.type)}">{wi.type}</span>
+                {#if extractRepoFromGitHubUrl(wi.githubPrUrl)}
+                  <span class="badge repo">{extractRepoFromGitHubUrl(wi.githubPrUrl)}</span>
+                {/if}
               </div>
               <div class="reviewed-meta">
                 <span class="badge-person">Resolved: {wi.resolvedBy || 'N/A'}</span>
@@ -131,6 +134,9 @@
               <div class="item-meta">
                 <span>#{wi.id}</span>
                 <span class="badge type {typeClass(wi.type)}">{wi.type}</span>
+                {#if extractRepoFromGitHubUrl(wi.githubPrUrl)}
+                  <span class="badge repo">{extractRepoFromGitHubUrl(wi.githubPrUrl)}</span>
+                {/if}
                 <span class="badge-person unassigned">Unassigned</span>
               </div>
               <div class="reviewed-meta">
@@ -165,6 +171,9 @@
                 <div class="item-meta">
                   <span>#{wi.id}</span>
                   <span class="badge type {typeClass(wi.type)}">{wi.type}</span>
+                  {#if extractRepoFromGitHubUrl(wi.githubPrUrl)}
+                    <span class="badge repo">{extractRepoFromGitHubUrl(wi.githubPrUrl)}</span>
+                  {/if}
                   <span class="badge-person assigned">Assigned: {wi.assignedTo}</span>
                 </div>
                 <div class="reviewed-meta">
@@ -326,5 +335,14 @@
   .badge-person.unassigned {
     background: #501616;
     color: #ee9090;
+  }
+
+  .badge.repo {
+    background: #1f3b5c;
+    color: #58a6ff;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-family: monospace;
   }
 </style>
