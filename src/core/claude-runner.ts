@@ -184,7 +184,7 @@ export async function runClaudeInTerminal(
 
   const claudeArgs = options.allowEdits
     ? `--dangerously-skip-permissions -p "$(cat '${promptFile.replace(/\\/g, '/')}')"`
-    : `--print --dangerously-skip-permissions "$(cat '${promptFile.replace(/\\/g, '/')}')"`;
+    : `--print --dangerously-skip-permissions -p "$(cat '${promptFile.replace(/\\/g, '/')}')"`;
 
   const repoPath = task.repoPath.replace(/\\/g, '/');
   const title = `Task #${taskId}: ${task.type}`;
