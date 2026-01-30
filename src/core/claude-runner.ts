@@ -431,14 +431,30 @@ export function buildTestingPrompt(context: Task['context']): string {
   if (context.prUrl) {
     const match = context.prUrl.match(/\/pull\/(\d+)/);
     if (match) {
-      prInfo = `
+      const prNumber = match[1];
+      if (context.remoteOnly && context.ghRepoRef) {
+        // Remote-only mode: use full owner/repo#prNumber format
+        prInfo = `
+## PR Analysis (Remote Mode)
+No local repository available. Use these commands to review remotely:
+\`\`\`
+gh pr view ${context.ghRepoRef}#${prNumber}
+gh pr diff ${context.ghRepoRef}#${prNumber}
+\`\`\`
+
+**Note:** You cannot run local tests or check the codebase directly.
+Focus on reviewing the PR diff and creating a test plan from the changes.
+`;
+      } else {
+        prInfo = `
 ## PR Analysis
 Use these commands to review the changes:
 \`\`\`
-gh pr view ${match[1]}
-gh pr diff ${match[1]}
+gh pr view ${prNumber}
+gh pr diff ${prNumber}
 \`\`\`
 `;
+      }
     }
   }
 

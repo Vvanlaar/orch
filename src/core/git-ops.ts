@@ -1,4 +1,5 @@
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
+import path from 'path';
 import { Octokit } from 'octokit';
 import { config } from './config.js';
 
@@ -166,6 +167,21 @@ export async function createGitHubPR(
   } catch (err) {
     console.error('[GitOps] Failed to create GitHub PR:', err);
     return null;
+  }
+}
+
+export function cloneRepo(cloneUrl: string, targetName: string): boolean {
+  const targetPath = path.resolve(config.repos.baseDir, targetName);
+  try {
+    // Use execFileSync to avoid command injection
+    execFileSync('git', ['clone', cloneUrl, targetPath], {
+      timeout: 120000,
+      stdio: 'pipe',
+    });
+    return true;
+  } catch (err) {
+    console.error('[GitOps] Failed to clone repo:', err);
+    return false;
   }
 }
 

@@ -10,9 +10,11 @@ import { WebSocket, WebSocketServer } from 'ws';
 
 import { killTask } from '../core/claude-runner.js';
 import { config } from '../core/config.js';
+import { cloneRepo } from '../core/git-ops.js';
 import { detectAvailableTerminals, getTerminalPreference, setTerminalPreference } from '../core/settings.js';
 import { startPoller } from '../core/poller.js';
 import { getEffectiveRepoMapping, getScannedRepos } from '../core/repo-scanner.js';
+import { Octokit } from 'octokit';
 import { completeTask, createTask, deleteTask, failTask, getAllTasks, getAllTasksWithOutput, getTask, getTasksWithPids, retryTask } from '../core/task-queue.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
 import { getCurrentAdoUser, getMyAdoWorkItems, getMyGitHubPRs, getMyResolvedWorkItems, getReviewedItemsInSprint, getTeamMembers } from '../core/user-items.js';
@@ -358,6 +360,65 @@ app.get('/api/repos', (_req, res) => {
   res.json({ repos, mapping });
 });
 
+// GitHub org repos - hardcoded to bluebillywig org
+app.get('/api/github/org-repos', async (_req, res) => {
+  if (!config.github.token) {
+    res.status(400).json({ error: 'GITHUB_TOKEN not configured' });
+    return;
+  }
+  try {
+    const octokit = new Octokit({ auth: config.github.token });
+    const { data } = await octokit.rest.repos.listForOrg({
+      org: config.github.org || 'bluebillywig',
+      per_page: 100,
+      sort: 'updated',
+    });
+    const localRepos = getScannedRepos();
+    const localNames = new Set(localRepos.map(r => r.localName));
+    const repos = data.map(r => ({
+      name: r.name,
+      full_name: r.full_name,
+      clone_url: r.clone_url,
+      description: r.description || undefined,
+      isLocal: localNames.has(r.name),
+    }));
+    res.json(repos);
+  } catch (err) {
+    console.error('[org-repos] Error:', err);
+    res.status(500).json({ error: 'Failed to fetch org repos' });
+  }
+});
+
+app.post('/api/repos/clone', (req, res) => {
+  const { cloneUrl, targetName } = req.body;
+  if (!cloneUrl || !targetName) {
+    res.status(400).json({ success: false, error: 'cloneUrl and targetName required' });
+    return;
+  }
+  // Validate URL format
+  try {
+    const url = new URL(cloneUrl);
+    if (!['http:', 'https:', 'git:'].includes(url.protocol)) {
+      res.status(400).json({ success: false, error: 'Invalid clone URL protocol' });
+      return;
+    }
+  } catch {
+    res.status(400).json({ success: false, error: 'Invalid clone URL' });
+    return;
+  }
+  // Sanitize targetName - no path separators or traversal
+  if (targetName.includes('/') || targetName.includes('\\') || targetName.includes('..')) {
+    res.status(400).json({ success: false, error: 'Invalid target name' });
+    return;
+  }
+  const success = cloneRepo(cloneUrl, targetName);
+  if (success) {
+    res.json({ success: true });
+  } else {
+    res.status(500).json({ success: false, error: 'Clone failed' });
+  }
+});
+
 // Terminal configuration
 app.get('/api/system/terminals', (_req, res) => {
   const terminals = detectAvailableTerminals();
@@ -588,19 +649,32 @@ app.post('/api/actions/fix-pr-comments', async (req, res) => {
 });
 
 app.post('/api/actions/test-workitem', (req, res) => {
-  const { id, title, project, url, githubPrUrl, testNotes, body } = req.body;
+  const { id, title, project, url, githubPrUrl, testNotes, body, selectedRepo } = req.body;
   const repoMapping = getEffectiveRepoMapping();
 
-  console.log(`[test-workitem] Project: ${project}, PR URL: ${githubPrUrl}`);
+  console.log(`[test-workitem] Project: ${project}, PR URL: ${githubPrUrl}, Selected: ${selectedRepo}`);
 
   let repoPath: string | null = null;
   let repoName = '';
+  let remoteOnly = false;
+  let ghRepoRef = '';
+
+  // Use selectedRepo if provided
+  if (selectedRepo) {
+    const resolved = resolveRepoPath(selectedRepo);
+    if (resolved) {
+      repoPath = resolved.repoPath;
+      repoName = selectedRepo;
+      console.log(`[test-workitem] Using selected repo: ${selectedRepo}`);
+    }
+  }
 
   // Try to find repo from GitHub PR URL
-  if (githubPrUrl) {
+  if (!repoPath && githubPrUrl) {
     const prMatch = githubPrUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull/);
     if (prMatch) {
       const ghRepo = prMatch[1];
+      ghRepoRef = ghRepo; // Store for remote-only mode
       const resolved = resolveRepoPath(ghRepo);
       if (resolved) {
         repoPath = resolved.repoPath;
@@ -622,6 +696,18 @@ app.post('/api/actions/test-workitem', (req, res) => {
     }
   }
 
+  // Remote-only fallback: no local repo but we have a GitHub PR URL
+  if (!repoPath && ghRepoRef) {
+    if (!existsSync(config.repos.baseDir)) {
+      res.status(400).json({ error: `Cannot use remote-only mode: base directory does not exist` });
+      return;
+    }
+    remoteOnly = true;
+    repoPath = config.repos.baseDir;
+    repoName = ghRepoRef;
+    console.log(`[test-workitem] Remote-only mode for ${ghRepoRef}`);
+  }
+
   if (!repoPath) {
     const hint = githubPrUrl ? 'for GitHub repo from PR URL' : `for project "${project}"`;
     res.status(400).json({ error: `No local repo mapping found ${hint}. Clone the repo or add manual mapping.` });
@@ -637,10 +723,13 @@ app.post('/api/actions/test-workitem', (req, res) => {
     body,
     prUrl: githubPrUrl,
     testNotes,
+    remoteOnly,
+    ghRepoRef: remoteOnly ? ghRepoRef : undefined,
   });
   triggerUpdate();
   broadcastTasks();
-  res.json({ taskId: task.id, message: 'Testing task created - terminal will open shortly' });
+  const mode = remoteOnly ? ' (remote-only mode)' : '';
+  res.json({ taskId: task.id, message: `Testing task created${mode} - terminal will open shortly` });
 });
 
 app.post('/api/actions/review-resolution', (req, res) => {

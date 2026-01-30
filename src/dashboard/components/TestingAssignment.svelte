@@ -1,6 +1,7 @@
 <script lang="ts">
-  import type { WorkItem } from '../lib/types';
+  import type { WorkItem, GitHubRepo } from '../lib/types';
   import { typeClass, extractRepoFromGitHubUrl } from '../lib/utils';
+  import { testWorkitem } from '../lib/api';
   import {
     getReviewedItems,
     getMyTestingItems,
@@ -16,6 +17,7 @@
     generateAssignCommand,
   } from '../stores/testing.svelte';
   import { getCurrentUser } from '../stores/currentUser.svelte';
+  import { getOrgRepos, isLoading, getCloningRepo, loadOrgRepos, cloneRepo } from '../stores/repos.svelte';
 
   let reviewedItems = $derived(getReviewedItems());
   let myItems = $derived(getMyTestingItems());
@@ -26,9 +28,13 @@
   let sprintName = $derived(getSprintName());
   let reviewedCount = $derived(getReviewedCount());
   let currentUser = $derived(getCurrentUser());
+  let orgRepos = $derived(getOrgRepos());
+  let reposLoading = $derived(isLoading());
+  let cloningRepo = $derived(getCloningRepo());
 
   let showOthers = $state(false);
   let testingItem = $state<number | null>(null);
+  let selectedRepos = $state<Map<number, string>>(new Map());
 
   function handleCopyCommand() {
     const cmd = generateAssignCommand();
@@ -49,31 +55,38 @@
   async function handleTest(wi: WorkItem) {
     testingItem = wi.id;
     try {
-      const res = await fetch('/api/actions/test-workitem', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: wi.id,
-          title: wi.title,
-          project: wi.project,
-          url: wi.url,
-          githubPrUrl: wi.githubPrUrl,
-          testNotes: wi.testNotes,
-          body: wi.body,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        console.log('Testing task created:', data);
-      } else {
-        alert(`Failed to create testing task: ${data.error}`);
-      }
+      const selectedRepo = selectedRepos.get(wi.id);
+      await testWorkitem(wi, selectedRepo);
     } catch (err) {
-      alert(`Error: ${err}`);
+      alert(`Failed: ${err}`);
     } finally {
       testingItem = null;
     }
   }
+
+  function handleRepoSelect(wiId: number, repoName: string) {
+    if (repoName) {
+      selectedRepos.set(wiId, repoName);
+    } else {
+      selectedRepos.delete(wiId);
+    }
+    selectedRepos = new Map(selectedRepos);
+  }
+
+  async function handleClone(repo: GitHubRepo) {
+    await cloneRepo(repo);
+  }
+
+  function getSelectedRepo(wiId: number): GitHubRepo | undefined {
+    const name = selectedRepos.get(wiId);
+    return name ? orgRepos.find(r => r.name === name) : undefined;
+  }
+
+  $effect(() => {
+    if (orgRepos.length === 0 && !reposLoading) {
+      loadOrgRepos();
+    }
+  });
 </script>
 
 <div class="card" style="margin-bottom: 24px;">
@@ -95,26 +108,52 @@
       {#if myItems.length > 0}
         <div class="section-header">My Testing ({myItems.length})</div>
         {#each myItems as wi (wi.id)}
+          {@const detectedRepo = extractRepoFromGitHubUrl(wi.githubPrUrl)}
+          {@const selected = getSelectedRepo(wi.id)}
           <div class="item">
             <div class="item-info">
               <div class="item-title">{wi.title}</div>
               <div class="item-meta">
                 <span>#{wi.id}</span>
                 <span class="badge type {typeClass(wi.type)}">{wi.type}</span>
-                {#if extractRepoFromGitHubUrl(wi.githubPrUrl)}
-                  <span class="badge repo">{extractRepoFromGitHubUrl(wi.githubPrUrl)}</span>
+                {#if detectedRepo}
+                  <span class="badge repo">{detectedRepo}</span>
                 {/if}
               </div>
               <div class="reviewed-meta">
                 <span class="badge-person">Resolved: {wi.resolvedBy || 'N/A'}</span>
                 <span class="badge-person">Reviewed: {wi.reviewedBy || 'N/A'}</span>
               </div>
+              {#if !detectedRepo || orgRepos.length > 0}
+                <div class="repo-selector">
+                  <select
+                    onchange={(e) => handleRepoSelect(wi.id, (e.target as HTMLSelectElement).value)}
+                    value={selectedRepos.get(wi.id) || ''}
+                  >
+                    <option value="">{detectedRepo ? `Auto: ${detectedRepo}` : 'Select repo...'}</option>
+                    {#each orgRepos as repo (repo.name)}
+                      <option value={repo.name} disabled={!repo.isLocal}>
+                        {repo.name} {repo.isLocal ? '✓' : '(not cloned)'}
+                      </option>
+                    {/each}
+                  </select>
+                  {#if selected && !selected.isLocal}
+                    <button
+                      class="action-btn clone-btn"
+                      onclick={() => handleClone(selected)}
+                      disabled={cloningRepo === selected.name}
+                    >
+                      {cloningRepo === selected.name ? 'Cloning...' : 'Clone'}
+                    </button>
+                  {/if}
+                </div>
+              {/if}
             </div>
             <div class="item-actions">
               <button
                 class="action-btn"
                 onclick={() => handleTest(wi)}
-                disabled={testingItem === wi.id}
+                disabled={testingItem === wi.id || (selected && !selected.isLocal)}
               >
                 {testingItem === wi.id ? 'Starting...' : 'Test'}
               </button>
@@ -128,14 +167,15 @@
       {#if unassignedItems.length > 0}
         <div class="section-header">Unassigned ({unassignedItems.length})</div>
         {#each unassignedItems as wi (wi.id)}
+          {@const detectedRepo = extractRepoFromGitHubUrl(wi.githubPrUrl)}
           <div class="item">
             <div class="item-info">
               <div class="item-title">{wi.title}</div>
               <div class="item-meta">
                 <span>#{wi.id}</span>
                 <span class="badge type {typeClass(wi.type)}">{wi.type}</span>
-                {#if extractRepoFromGitHubUrl(wi.githubPrUrl)}
-                  <span class="badge repo">{extractRepoFromGitHubUrl(wi.githubPrUrl)}</span>
+                {#if detectedRepo}
+                  <span class="badge repo">{detectedRepo}</span>
                 {/if}
                 <span class="badge-person unassigned">Unassigned</span>
               </div>
@@ -165,14 +205,15 @@
         </div>
         {#if showOthers}
           {#each otherItems as wi (wi.id)}
+            {@const detectedRepo = extractRepoFromGitHubUrl(wi.githubPrUrl)}
             <div class="item">
               <div class="item-info">
                 <div class="item-title">{wi.title}</div>
                 <div class="item-meta">
                   <span>#{wi.id}</span>
                   <span class="badge type {typeClass(wi.type)}">{wi.type}</span>
-                  {#if extractRepoFromGitHubUrl(wi.githubPrUrl)}
-                    <span class="badge repo">{extractRepoFromGitHubUrl(wi.githubPrUrl)}</span>
+                  {#if detectedRepo}
+                    <span class="badge repo">{detectedRepo}</span>
                   {/if}
                   <span class="badge-person assigned">Assigned: {wi.assignedTo}</span>
                 </div>
@@ -344,5 +385,32 @@
     border-radius: 4px;
     font-size: 11px;
     font-family: monospace;
+  }
+
+  .repo-selector {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+    align-items: center;
+  }
+
+  .repo-selector select {
+    padding: 4px 8px;
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    color: #c9d1d9;
+    font-size: 11px;
+    min-width: 180px;
+  }
+
+  .repo-selector select:focus {
+    outline: none;
+    border-color: #58a6ff;
+  }
+
+  .clone-btn {
+    padding: 4px 8px !important;
+    font-size: 11px !important;
   }
 </style>

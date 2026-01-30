@@ -13,6 +13,7 @@ export const config: Config = {
   github: {
     webhookSecret: envOr('GITHUB_WEBHOOK_SECRET', ''),
     token: envOr('GITHUB_TOKEN', ''),
+    org: envOr('GITHUB_ORG', 'bluebillywig'),
   },
   ado: {
     organization: envOr('ADO_ORG', ''),

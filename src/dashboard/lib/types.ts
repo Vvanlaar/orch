@@ -64,6 +64,14 @@ export interface Process {
 
 export type FilterType = 'all' | 'new' | 'active' | 'resolved' | 'reviewed' | 'resolved-by-me';
 
+export interface GitHubRepo {
+  name: string;
+  full_name: string;
+  clone_url: string;
+  description?: string;
+  isLocal: boolean;
+}
+
 export type TerminalId = 'auto' | 'wt' | 'cmd' | 'powershell' | 'pwsh' | 'git-bash';
 
 export interface Terminal {

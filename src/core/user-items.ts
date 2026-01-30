@@ -133,11 +133,6 @@ function extractGitHubPrUrl(fields: Record<string, any>, relations?: any[]): str
       const relType = rel.rel || '';
       const name = rel.attributes?.name || '';
 
-      // Debug: log relations that might be GitHub-related
-      if (relType.includes('GitHub') || relType.includes('ArtifactLink') || url.includes('github') || name.includes('github')) {
-        console.log('[extractGitHubPrUrl] Found potential GitHub relation:', { rel: relType, url, name, attributes: rel.attributes });
-      }
-
       // GitHub PR artifact links have vstfs:///GitHub/PullRequest/ format, but the url field has the API URL
       // The actual PR URL is in the attributes.name or we can construct from the relation
       if (url.includes('github.com') && url.includes('/pull/')) {

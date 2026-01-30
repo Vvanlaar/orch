@@ -53,6 +53,9 @@ export interface TaskContext {
   retryOfTaskId?: number;
   retryError?: string;
   retryCount?: number;
+  // Remote-only mode (no local repo, use gh CLI remotely)
+  remoteOnly?: boolean;
+  ghRepoRef?: string; // "owner/repo" for gh commands
 }
 
 export interface Config {
@@ -63,6 +66,7 @@ export interface Config {
   github: {
     webhookSecret: string;
     token: string;
+    org?: string;
   };
   ado: {
     organization: string;
