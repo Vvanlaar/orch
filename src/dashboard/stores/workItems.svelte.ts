@@ -1,10 +1,11 @@
-import type { PR, WorkItem, FilterType } from '../lib/types';
+import type { PR, WorkItem, FilterType, OwnerFilter } from '../lib/types';
 
 // State
 let prs = $state<PR[]>([]);
 let workItems = $state<WorkItem[]>([]);
 let resolvedByMe = $state<WorkItem[]>([]);
 let filter = $state<FilterType>('all');
+let ownerFilter = $state<OwnerFilter>('my');
 
 // Caches for action handlers
 const prCache = new Map<string, PR>();
@@ -70,9 +71,18 @@ export async function fetchPRs() {
   }
 }
 
+export function getOwnerFilter() {
+  return ownerFilter;
+}
+
+export async function setOwnerFilter(f: OwnerFilter) {
+  ownerFilter = f;
+  await fetchWorkItems();
+}
+
 export async function fetchWorkItems() {
   try {
-    const res = await fetch('/api/my/workitems');
+    const res = await fetch(`/api/workitems?owner=${ownerFilter}`);
     workItems = await res.json();
     // Update cache
     workItems.forEach((wi) => workItemCache.set(wi.id, wi));

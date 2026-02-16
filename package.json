@@ -5,13 +5,13 @@
   "type": "module",
   "main": "dist/server/index.js",
   "scripts": {
-    "dev": "tsx watch src/server/index.ts",
+    "dev:server": "tsx watch src/server/index.ts",
     "dev:dashboard": "vite src/dashboard",
     "build": "tsc && npm run build:dashboard",
     "build:dashboard": "vite build src/dashboard",
     "start": "node dist/server/index.js",
     "test": "vitest",
-    "dev:all": "concurrently --kill-others \"npm:dev\" \"npm:dev:dashboard\""
+    "dev": "concurrently --kill-others \"npm:dev:server\" \"npm:dev:dashboard\""
   },
   "dependencies": {
     "@types/cors": "^2.8.19",

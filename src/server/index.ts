@@ -11,13 +11,13 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { killTask } from '../core/claude-runner.js';
 import { config } from '../core/config.js';
 import { cloneRepo } from '../core/git-ops.js';
-import { detectAvailableTerminals, getTerminalPreference, setTerminalPreference } from '../core/settings.js';
+import { detectAvailableTerminals, findTerminalPath, getTerminalPreference, setTerminalPreference } from '../core/settings.js';
 import { startPoller } from '../core/poller.js';
 import { getEffectiveRepoMapping, getScannedRepos } from '../core/repo-scanner.js';
 import { Octokit } from 'octokit';
 import { completeTask, createTask, deleteTask, failTask, getAllTasks, getAllTasksWithOutput, getTask, getTasksWithPids, retryTask } from '../core/task-queue.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
-import { getCurrentAdoUser, getMyAdoWorkItems, getMyGitHubPRs, getMyResolvedWorkItems, getReviewedItemsInSprint, getTeamMembers } from '../core/user-items.js';
+import { getCurrentAdoUser, getMyAdoWorkItems, getMyGitHubPRs, getMyResolvedWorkItems, getReviewedItemsInSprint, getTeamMembers, getWorkItemsBySprints, type OwnerFilter } from '../core/user-items.js';
 import { adoRouter } from './webhooks/ado.js';
 import { githubRouter } from './webhooks/github.js';
 
@@ -209,15 +209,21 @@ app.post('/api/tasks/:id/terminal', async (req, res) => {
     return new Promise(resolve => {
       let cmd: string;
       switch (terminal) {
-        case 'wt':
-          cmd = `wt -w 0 nt --title "${title}" -d "${repoPath}"`;
+        case 'wt': {
+          const wtExe = findTerminalPath('wt');
+          const wtCmd = wtExe ? `"${wtExe}"` : 'wt';
+          cmd = `${wtCmd} -w 0 nt --title "${title}" -d "${repoPath}"`;
           break;
+        }
         case 'powershell':
           cmd = `start powershell -NoExit -Command "Set-Location '${task.repoPath}'; $Host.UI.RawUI.WindowTitle='${title}'"`;
           break;
-        case 'pwsh':
-          cmd = `start pwsh -NoExit -Command "Set-Location '${task.repoPath}'; $Host.UI.RawUI.WindowTitle='${title}'"`;
+        case 'pwsh': {
+          const pwshExe = findTerminalPath('pwsh');
+          const pwshCmd = pwshExe ? `"${pwshExe}"` : 'pwsh';
+          cmd = `start "" ${pwshCmd} -NoExit -Command "Set-Location '${task.repoPath}'; $Host.UI.RawUI.WindowTitle='${title}'"`;
           break;
+        }
         case 'git-bash':
           cmd = `start "" "C:\\Program Files\\Git\\git-bash.exe" --cd="${task.repoPath}"`;
           break;
@@ -259,6 +265,21 @@ function resolveRepoPath(repo: string): { repoPath: string; localFolder: string 
 
   if (!localFolder) return null;
   return { repoPath: path.resolve(config.repos.baseDir, localFolder), localFolder };
+}
+
+function resolveFromRepositoryField(repositories: string[] | undefined): { repoPath: string; repoName: string } | null {
+  if (!repositories?.length) return null;
+  const repoMapping = getEffectiveRepoMapping();
+  for (const repo of repositories) {
+    const resolved = resolveRepoPath(repo);
+    if (resolved) return { repoPath: resolved.repoPath, repoName: repo };
+    for (const [remote, local] of Object.entries(repoMapping)) {
+      if (remote.endsWith('/' + repo) || local === repo) {
+        return { repoPath: path.resolve(config.repos.baseDir, local), repoName: remote };
+      }
+    }
+  }
+  return null;
 }
 
 function killProcessByPid(pid: number, silent = false): boolean {
@@ -441,6 +462,18 @@ app.post('/api/config/terminal', (req, res) => {
   res.json({ success: true, preferred: terminal });
 });
 
+const validOwnerFilters: OwnerFilter[] = ['my', 'unassigned', 'all'];
+
+app.get('/api/workitems', async (req, res) => {
+  const owner = (req.query.owner as string) || 'my';
+  if (!validOwnerFilters.includes(owner as OwnerFilter)) {
+    res.status(400).json({ error: 'owner must be my|unassigned|all' });
+    return;
+  }
+  const items = await getWorkItemsBySprints(owner as OwnerFilter);
+  res.json(items);
+});
+
 app.get('/api/my/prs', async (_req, res) => {
   const prs = await getMyGitHubPRs();
   res.json(prs);
@@ -533,17 +566,27 @@ app.post('/api/actions/review-pr', (req, res) => {
 });
 
 app.post('/api/actions/analyze-workitem', (req, res) => {
-  const { id, title, project, url, type } = req.body;
+  const { id, title, project, url, type, repositories } = req.body;
   const repoMapping = getEffectiveRepoMapping();
 
-  // Find a repo for this project
+  // Try Repository field first
   let repoPath: string | null = null;
   let repoName = '';
-  for (const [remote, local] of Object.entries(repoMapping)) {
-    if (remote.includes(project)) {
-      repoPath = path.resolve(config.repos.baseDir, local);
-      repoName = remote;
-      break;
+  const fromField = resolveFromRepositoryField(repositories);
+  if (fromField) {
+    repoPath = fromField.repoPath;
+    repoName = fromField.repoName;
+    console.log(`[analyze-workitem] Resolved from Repository field: ${repoName}`);
+  }
+
+  // Fallback: find a repo for this project
+  if (!repoPath) {
+    for (const [remote, local] of Object.entries(repoMapping)) {
+      if (remote.includes(project)) {
+        repoPath = path.resolve(config.repos.baseDir, local);
+        repoName = remote;
+        break;
+      }
     }
   }
 
@@ -649,7 +692,7 @@ app.post('/api/actions/fix-pr-comments', async (req, res) => {
 });
 
 app.post('/api/actions/test-workitem', (req, res) => {
-  const { id, title, project, url, githubPrUrl, testNotes, body, selectedRepo } = req.body;
+  const { id, title, project, url, githubPrUrl, testNotes, body, repositories, selectedRepo } = req.body;
   const repoMapping = getEffectiveRepoMapping();
 
   console.log(`[test-workitem] Project: ${project}, PR URL: ${githubPrUrl}, Selected: ${selectedRepo}`);
@@ -666,6 +709,16 @@ app.post('/api/actions/test-workitem', (req, res) => {
       repoPath = resolved.repoPath;
       repoName = selectedRepo;
       console.log(`[test-workitem] Using selected repo: ${selectedRepo}`);
+    }
+  }
+
+  // Try Repository field
+  if (!repoPath) {
+    const fromField = resolveFromRepositoryField(repositories);
+    if (fromField) {
+      repoPath = fromField.repoPath;
+      repoName = fromField.repoName;
+      console.log(`[test-workitem] Resolved from Repository field: ${repoName}`);
     }
   }
 
@@ -728,7 +781,7 @@ app.post('/api/actions/test-workitem', (req, res) => {
 });
 
 app.post('/api/actions/review-resolution', (req, res) => {
-  const { id, title, project, url, resolution, githubPrUrl, testNotes, body } = req.body;
+  const { id, title, project, url, resolution, githubPrUrl, testNotes, body, repositories } = req.body;
   const repoMapping = getEffectiveRepoMapping();
 
   console.log(`[review-resolution] Project: ${project}, PR URL: ${githubPrUrl}`);
@@ -736,8 +789,16 @@ app.post('/api/actions/review-resolution', (req, res) => {
   let repoPath: string | null = null;
   let repoName = '';
 
+  // Try Repository field first
+  const fromField = resolveFromRepositoryField(repositories);
+  if (fromField) {
+    repoPath = fromField.repoPath;
+    repoName = fromField.repoName;
+    console.log(`[review-resolution] Resolved from Repository field: ${repoName}`);
+  }
+
   // Try to find repo from GitHub PR URL
-  if (githubPrUrl) {
+  if (!repoPath && githubPrUrl) {
     const prMatch = githubPrUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull/);
     if (prMatch) {
       const ghRepo = prMatch[1];

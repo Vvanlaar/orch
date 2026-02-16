@@ -52,13 +52,29 @@ export function detectAvailableTerminals(): Terminal[] {
   }));
 }
 
+const KNOWN_TERMINAL_PATHS: Record<string, string[]> = {
+  pwsh: [
+    'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+    'C:\\Program Files (x86)\\PowerShell\\7\\pwsh.exe',
+  ],
+  wt: [
+    `${process.env.LOCALAPPDATA}\\Microsoft\\WindowsApps\\wt.exe`,
+  ],
+};
+
 function isTerminalAvailable(cmd: string): boolean {
   try {
     execSync(`where ${cmd}`, { stdio: 'ignore' });
     return true;
   } catch {
-    return false;
+    const paths = KNOWN_TERMINAL_PATHS[cmd];
+    return paths?.some(p => existsSync(p)) ?? false;
   }
+}
+
+export function findTerminalPath(cmd: string): string | null {
+  const paths = KNOWN_TERMINAL_PATHS[cmd];
+  return paths?.find(p => existsSync(p)) ?? null;
 }
 
 export function getKnownTerminals(): Terminal[] {

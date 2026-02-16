@@ -46,6 +46,7 @@ export async function analyzeWorkItem(wi: WorkItem): Promise<{ taskId: number; m
       project: wi.project,
       url: wi.url,
       type: wi.type,
+      repositories: wi.repositories,
     }),
   });
   const result = await res.json();
@@ -66,6 +67,7 @@ export async function reviewResolution(wi: WorkItem): Promise<{ taskId: number; 
       githubPrUrl: wi.githubPrUrl,
       testNotes: wi.testNotes,
       body: wi.body,
+      repositories: wi.repositories,
     }),
   });
   const result = await res.json();
@@ -123,6 +125,7 @@ export async function testWorkitem(wi: WorkItem, selectedRepo?: string): Promise
       githubPrUrl: wi.githubPrUrl,
       testNotes: wi.testNotes,
       body: wi.body,
+      repositories: wi.repositories,
       selectedRepo,
     }),
   });

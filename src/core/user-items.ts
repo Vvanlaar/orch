@@ -33,6 +33,7 @@ export interface AdoWorkItem {
   githubPrUrl?: string;
   testNotes?: string;
   body?: string;
+  repositories?: string[];
 }
 
 export interface TeamMember {
@@ -109,11 +110,15 @@ export async function getMyGitHubPRs(): Promise<GitHubPR[]> {
   }
 }
 
+function escapeWiql(value: string): string {
+  return value.replace(/'/g, "''");
+}
+
 function getAdoAuth(): string {
   return Buffer.from(`:${config.ado.pat}`).toString('base64');
 }
 
-function checkAdoConfig(): boolean {
+function checkAdoConfig(...extraFields: (keyof typeof config.ado)[]): boolean {
   if (!config.ado.pat) {
     console.log('[UserItems] No ADO_PAT configured');
     return false;
@@ -121,6 +126,12 @@ function checkAdoConfig(): boolean {
   if (!config.ado.organization) {
     console.log('[UserItems] No ADO_ORG configured');
     return false;
+  }
+  for (const field of extraFields) {
+    if (!config.ado[field]) {
+      console.log(`[UserItems] No ADO config for ${field}`);
+      return false;
+    }
   }
   return true;
 }
@@ -130,7 +141,6 @@ function extractGitHubPrUrl(fields: Record<string, any>, relations?: any[]): str
   if (relations) {
     for (const rel of relations) {
       const url = rel.url || '';
-      const relType = rel.rel || '';
       const name = rel.attributes?.name || '';
 
       // GitHub PR artifact links have vstfs:///GitHub/PullRequest/ format, but the url field has the API URL
@@ -186,10 +196,13 @@ function mapWorkItemToAdoItem(wi: any): AdoWorkItem {
     githubPrUrl: extractGitHubPrUrl(fields, wi.relations),
     testNotes: fields['Microsoft.VSTS.TCM.TestNotes'] || fields['Microsoft.VSTS.Common.AcceptanceCriteria'] || fields['Custom.TestNotes'] || '',
     body: fields['System.Description'] || '',
+    repositories: fields['Custom.Repository']
+      ? fields['Custom.Repository'].split(';').map((s: string) => s.trim()).filter(Boolean)
+      : [],
   };
 }
 
-async function fetchAdoWorkItemsByQuery(wiqlQuery: string, logPrefix: string): Promise<AdoWorkItem[]> {
+async function fetchAdoWorkItemsByQuery(wiqlQuery: string, logPrefix: string, limit = 30): Promise<AdoWorkItem[]> {
   if (!checkAdoConfig()) return [];
 
   console.log(`[UserItems] ${logPrefix} from ADO org: ${config.ado.organization}`);
@@ -209,7 +222,7 @@ async function fetchAdoWorkItemsByQuery(wiqlQuery: string, logPrefix: string): P
     }
 
     const wiqlData = await wiqlRes.json();
-    const workItemIds = (wiqlData.workItems || []).slice(0, 30).map((w: { id: number }) => w.id);
+    const workItemIds = (wiqlData.workItems || []).slice(0, limit).map((w: { id: number }) => w.id);
     console.log(`[UserItems] ADO WIQL returned ${workItemIds.length} work item IDs`);
 
     if (workItemIds.length === 0) return [];
@@ -243,12 +256,9 @@ export async function getMyResolvedWorkItems(): Promise<AdoWorkItem[]> {
 }
 
 export async function getCurrentSprint(): Promise<{ path: string; name: string } | null> {
-  if (!config.ado.pat || !config.ado.organization || !config.ado.project || !config.ado.team) {
-    console.log('[UserItems] ADO config incomplete for sprint lookup (need ADO_PROJECT and ADO_TEAM)');
-    return null;
-  }
+  if (!checkAdoConfig('project', 'team')) return null;
 
-  const auth = Buffer.from(`:${config.ado.pat}`).toString('base64');
+  const auth = getAdoAuth();
   const url = `https://dev.azure.com/${config.ado.organization}/${config.ado.project}/${config.ado.team}/_apis/work/teamsettings/iterations?$timeframe=current&api-version=7.1`;
 
   try {
@@ -282,71 +292,115 @@ export async function getReviewedItemsInSprint(): Promise<{ sprintName: string; 
     return { sprintName: '', items: [] };
   }
 
-  const auth = Buffer.from(`:${config.ado.pat}`).toString('base64');
-  const items: AdoWorkItem[] = [];
+  const query = `SELECT [System.Id] FROM WorkItems WHERE [System.IterationPath] UNDER '${escapeWiql(sprint.path)}' AND [System.State] = 'Reviewed' ORDER BY [System.ChangedDate] DESC`;
+  const items = await fetchAdoWorkItemsByQuery(query, `Fetching reviewed items in sprint ${sprint.name}`, 100);
 
-  try {
-    const wiqlUrl = `https://dev.azure.com/${config.ado.organization}/_apis/wit/wiql?api-version=7.1`;
-    const wiqlRes = await fetch(wiqlUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Basic ${auth}`,
-      },
-      body: JSON.stringify({
-        query: `SELECT [System.Id] FROM WorkItems WHERE [System.IterationPath] UNDER '${sprint.path}' AND [System.State] = 'Reviewed' ORDER BY [System.ChangedDate] DESC`,
-      }),
-    });
+  // Enrich with reviewedBy field (not included in standard mapping)
+  const auth = getAdoAuth();
+  const reviewedByField = config.ado.reviewedByField || 'Custom.ReviewedBy';
 
-    if (!wiqlRes.ok) {
-      console.error(`[UserItems] ADO WIQL failed (${wiqlRes.status}):`, await wiqlRes.text());
-      return { sprintName: sprint.name, items: [] };
+  if (items.length > 0) {
+    try {
+      const detailsUrl = `https://dev.azure.com/${config.ado.organization}/_apis/wit/workitems?ids=${items.map(i => i.id).join(',')}&$expand=relations&api-version=7.1`;
+      const detailsRes = await fetch(detailsUrl, { headers: { Authorization: `Basic ${auth}` } });
+      if (detailsRes.ok) {
+        const detailsData = await detailsRes.json();
+        const reviewedByMap = new Map<number, string>();
+        for (const wi of detailsData.value || []) {
+          const fields = wi.fields || {};
+          const reviewedBy = fields[reviewedByField]?.displayName || fields[reviewedByField] || '';
+          if (reviewedBy) reviewedByMap.set(wi.id, reviewedBy);
+        }
+        for (const item of items) {
+          item.reviewedBy = reviewedByMap.get(item.id) || '';
+          item.iterationPath = sprint.path;
+        }
+      }
+    } catch (err) {
+      console.error('[UserItems] Error enriching reviewed items:', err);
     }
-
-    const wiqlData = await wiqlRes.json();
-    const workItemIds = (wiqlData.workItems || []).slice(0, 100).map((w: { id: number }) => w.id);
-    console.log(`[UserItems] Found ${workItemIds.length} reviewed items in sprint ${sprint.name}`);
-
-    if (workItemIds.length === 0) return { sprintName: sprint.name, items: [] };
-
-    const idsParam = workItemIds.join(',');
-    const detailsUrl = `https://dev.azure.com/${config.ado.organization}/_apis/wit/workitems?ids=${idsParam}&$expand=relations&api-version=7.1`;
-    const detailsRes = await fetch(detailsUrl, {
-      headers: { Authorization: `Basic ${auth}` },
-    });
-
-    if (!detailsRes.ok) {
-      console.error(`[UserItems] ADO details fetch failed (${detailsRes.status}):`, await detailsRes.text());
-      return { sprintName: sprint.name, items: [] };
-    }
-
-    const detailsData = await detailsRes.json();
-    const reviewedByField = config.ado.reviewedByField || 'Custom.ReviewedBy';
-
-    for (const wi of detailsData.value || []) {
-      const fields = wi.fields || {};
-
-      items.push({
-        id: wi.id,
-        title: fields['System.Title'] || 'Untitled',
-        state: fields['System.State'] || 'Unknown',
-        type: fields['System.WorkItemType'] || 'Item',
-        url: `https://dev.azure.com/${config.ado.organization}/${fields['System.TeamProject'] || '_'}/_workitems/edit/${wi.id}`,
-        assignedTo: fields['System.AssignedTo']?.displayName || '',
-        resolvedBy: fields['Microsoft.VSTS.Common.ResolvedBy']?.displayName || '',
-        reviewedBy: fields[reviewedByField]?.displayName || fields[reviewedByField] || '',
-        iterationPath: fields['System.IterationPath'] || '',
-        project: fields['System.TeamProject'] || '',
-        createdAt: fields['System.CreatedDate'] || '',
-        updatedAt: fields['System.ChangedDate'] || '',
-        githubPrUrl: extractGitHubPrUrl(fields, wi.relations),
-      });
-    }
-  } catch (err) {
-    console.error('[UserItems] Error fetching reviewed items in sprint:', err);
   }
 
   return { sprintName: sprint.name, items };
+}
+
+export type OwnerFilter = 'my' | 'unassigned' | 'all';
+
+export async function getCurrentAndPreviousSprints(): Promise<{ current: string; previous: string } | null> {
+  if (!checkAdoConfig('project', 'team')) return null;
+
+  const auth = getAdoAuth();
+  const url = `https://dev.azure.com/${config.ado.organization}/${config.ado.project}/${config.ado.team}/_apis/work/teamsettings/iterations?api-version=7.1`;
+
+  try {
+    const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
+    if (!res.ok) {
+      console.error(`[UserItems] Failed to get iterations (${res.status}):`, await res.text());
+      return null;
+    }
+
+    const data = await res.json();
+    const iterations = (data.value || [])
+      .filter((it: any) => it.attributes?.startDate)
+      .sort((a: any, b: any) =>
+        new Date(a.attributes.startDate).getTime() - new Date(b.attributes.startDate).getTime()
+      );
+
+    if (iterations.length === 0) {
+      console.log('[UserItems] No iterations found');
+      return null;
+    }
+
+    // Find current sprint (now falls within start/finish dates)
+    const now = Date.now();
+    const currentIdx = iterations.findIndex((it: any) => {
+      const start = new Date(it.attributes.startDate).getTime();
+      const finish = new Date(it.attributes.finishDate).getTime();
+      return now >= start && now <= finish;
+    });
+
+    if (currentIdx === -1) {
+      // Fallback: use the last iteration
+      const last = iterations[iterations.length - 1];
+      const prev = iterations.length > 1 ? iterations[iterations.length - 2] : last;
+      console.log(`[UserItems] No current sprint found, using last: ${last.path}`);
+      return { current: last.path, previous: prev.path };
+    }
+
+    const current = iterations[currentIdx];
+    const previous = currentIdx > 0 ? iterations[currentIdx - 1] : current;
+    console.log(`[UserItems] Sprints: current=${current.path}, previous=${previous.path}`);
+    return { current: current.path, previous: previous.path };
+  } catch (err) {
+    console.error('[UserItems] Error fetching iterations:', err);
+    return null;
+  }
+}
+
+export async function getWorkItemsBySprints(ownerFilter: OwnerFilter): Promise<AdoWorkItem[]> {
+  const sprints = await getCurrentAndPreviousSprints();
+  if (!sprints) {
+    // Fallback: no sprint scoping, use existing behavior
+    if (ownerFilter === 'my') return getMyAdoWorkItems();
+    return [];
+  }
+
+  const cur = escapeWiql(sprints.current);
+  const prev = escapeWiql(sprints.previous);
+  const sprintClause = cur === prev
+    ? `[System.IterationPath] UNDER '${cur}'`
+    : `([System.IterationPath] UNDER '${cur}' OR [System.IterationPath] UNDER '${prev}')`;
+
+  const ownerClauses: Record<OwnerFilter, string> = {
+    my: "AND [System.AssignedTo] = @Me",
+    unassigned: "AND [System.AssignedTo] = ''",
+    all: '',
+  };
+  const ownerClause = ownerClauses[ownerFilter];
+
+  const query = `SELECT [System.Id] FROM WorkItems WHERE ${sprintClause} ${ownerClause} AND [System.State] <> 'Closed' AND [System.State] <> 'Done' AND [System.State] <> 'Completed' AND [System.State] <> 'Removed' ORDER BY [System.ChangedDate] DESC`;
+
+  return fetchAdoWorkItemsByQuery(query, `Fetching ${ownerFilter} work items (sprint-scoped)`);
 }
 
 export async function getCurrentAdoUser(): Promise<AdoUser | null> {
@@ -385,12 +439,9 @@ export async function getCurrentAdoUser(): Promise<AdoUser | null> {
 }
 
 export async function getTeamMembers(): Promise<TeamMember[]> {
-  if (!config.ado.pat || !config.ado.organization || !config.ado.project || !config.ado.team) {
-    console.log('[UserItems] ADO config incomplete for team members (need ADO_PROJECT and ADO_TEAM)');
-    return [];
-  }
+  if (!checkAdoConfig('project', 'team')) return [];
 
-  const auth = Buffer.from(`:${config.ado.pat}`).toString('base64');
+  const auth = getAdoAuth();
   const url = `https://dev.azure.com/${config.ado.organization}/_apis/projects/${config.ado.project}/teams/${config.ado.team}/members?api-version=7.1`;
 
   try {

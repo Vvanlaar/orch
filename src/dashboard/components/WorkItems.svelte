@@ -1,14 +1,22 @@
 <script lang="ts">
-  import type { PR, WorkItem, FilterType } from '../lib/types';
+  import type { PR, WorkItem, FilterType, OwnerFilter } from '../lib/types';
   import { formatTime, stateClass, typeClass, extractAdoTicket } from '../lib/utils';
   import { reviewPR, fixPRComments, analyzeWorkItem, reviewResolution } from '../lib/api';
   import {
     getFilteredItems,
     setFilter,
     getFilter,
+    getOwnerFilter,
+    setOwnerFilter,
     getPRFromCache,
     getWorkItemFromCache,
   } from '../stores/workItems.svelte';
+
+  const ownerFilters: { key: OwnerFilter; label: string }[] = [
+    { key: 'my', label: 'My Tickets' },
+    { key: 'unassigned', label: 'Unassigned' },
+    { key: 'all', label: 'All' },
+  ];
 
   const filters: { key: FilterType; label: string }[] = [
     { key: 'all', label: 'All' },
@@ -21,6 +29,7 @@
 
   let items = $derived(getFilteredItems());
   let currentFilter = $derived(getFilter());
+  let currentOwner = $derived(getOwnerFilter());
 
   async function handleReviewPR(key: string) {
     const pr = getPRFromCache(key);
@@ -78,7 +87,18 @@
 </script>
 
 <div class="card" style="margin-bottom: 24px;">
-  <h2>My Work Items</h2>
+  <h2>Work Items</h2>
+  <div class="filters" style="margin-bottom: 4px;">
+    {#each ownerFilters as opt}
+      <button
+        class="filter-btn"
+        class:active={currentOwner === opt.key}
+        onclick={() => setOwnerFilter(opt.key)}
+      >
+        {opt.label}
+      </button>
+    {/each}
+  </div>
   <div class="filters">
     {#each filters as f}
       <button
@@ -136,6 +156,14 @@
               <span>{wi.project} #{wi.id}</span>
               <span class="badge type {typeClass(wi.type)}">{wi.type}</span>
               <span class="badge state {stateClass(wi.state)}">{wi.state}</span>
+              {#if currentOwner !== 'my' && wi.assignedTo}
+                <span class="badge" style="background:#8b949e20;color:#8b949e;">{wi.assignedTo}</span>
+              {/if}
+              {#if wi.repositories?.length}
+                {#each wi.repositories as repo}
+                  <span class="badge" style="background:#da3b0120;color:#da3b01;">{repo}</span>
+                {/each}
+              {/if}
               {#if hasPr}
                 <span class="badge" style="background:#3fb95020;color:#3fb950;">PR</span>
               {/if}

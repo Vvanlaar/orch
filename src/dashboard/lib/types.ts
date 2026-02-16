@@ -26,6 +26,7 @@ export interface WorkItem {
   assignedTo?: string;
   resolvedBy?: string;
   reviewedBy?: string;
+  repositories?: string[];
 }
 
 export interface Task {
@@ -63,6 +64,7 @@ export interface Process {
 }
 
 export type FilterType = 'all' | 'new' | 'active' | 'resolved' | 'reviewed' | 'resolved-by-me';
+export type OwnerFilter = 'my' | 'unassigned' | 'all';
 
 export interface GitHubRepo {
   name: string;
