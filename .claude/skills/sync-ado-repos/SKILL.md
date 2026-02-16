@@ -107,10 +107,25 @@ GET .../processes/{processId}/workItemTypes/{witRefName}/layout?api-version=7.1
 
 4. If the first group fails with 500 (HTML control conflict), find another group without HTML controls.
 
-5. Add the control:
+5. If an existing plain control exists, remove it first:
+```
+DELETE .../processes/{processId}/workItemTypes/{witRefName}/layout/groups/{groupId}/controls/Custom.Repository?api-version=7.1
+```
+
+6. Add the control as a **multivalue contribution** (same pattern as `Custom.BusinessUnit` / "Business Unit(s)"). This uses the already-installed `ms-devlabs.vsts-extensions-multivalue-control` extension:
 ```
 POST .../processes/{processId}/workItemTypes/{witRefName}/layout/groups/{groupId}/controls?api-version=7.1
-Body: { "id": "Custom.Repository", "label": "Repository", "visible": true, "readOnly": false }
+Body: {
+  "id": "Custom.Repository",
+  "label": "Repository",
+  "visible": true,
+  "readOnly": false,
+  "isContribution": true,
+  "contribution": {
+    "contributionId": "ms-devlabs.vsts-extensions-multivalue-control.multivalue-form-control",
+    "inputs": { "FieldName": "Custom.Repository" }
+  }
+}
 ```
 
 ### 8. Report
@@ -124,6 +139,7 @@ Output markdown summary: repos synced, picklist created vs updated, processes an
 - **Field type**: must use `"string"` (not `"picklistString"`) in the `processdefinitions` API.
 - **HTML control conflict**: each layout group allows only one HTML control. If a group already has one, pick a different group.
 - **Picklist creation**: must include `name` field in POST body or API returns 400.
+- **Multivalue extension**: `ms-devlabs.vsts-extensions-multivalue-control` is already installed in the org. The field type is identical to a regular picklist string — multi-select is purely a layout control concern (use `isContribution: true` with the extension's `contributionId`).
 
 ## Important Notes
 
