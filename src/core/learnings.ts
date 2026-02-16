@@ -106,8 +106,8 @@ export function storeLearning(learning: Learning, repoPath: string): void {
 
 // Map task types to skill files
 const skillMap: Record<string, string> = {
-  'pr-comment-fix': 'fix-review-comments.md',
-  'resolution-review': 'review-resolution.md',
+  'pr-comment-fix': 'ado-fix-review-comments.md',
+  'resolution-review': 'ado-review-resolution.md',
   'pr-review': 'review-pr.md',
   'issue-fix': 'fix-issue.md',
   'code-gen': 'code-gen.md',

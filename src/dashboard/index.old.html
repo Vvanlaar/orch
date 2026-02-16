@@ -653,7 +653,7 @@
         return;
       }
       const users = Array.from(selectedTeamMembers).join(',');
-      const cmd = `/assign-testing --users "${users}"`;
+      const cmd = `/ado-assign-testing --users "${users}"`;
       navigator.clipboard.writeText(cmd).then(() => {
         alert(`Copied to clipboard:\n${cmd}\n\nPaste in Claude Code to run the skill.`);
       }).catch(() => {

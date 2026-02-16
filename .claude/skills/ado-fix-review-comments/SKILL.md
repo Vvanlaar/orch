@@ -1,5 +1,5 @@
 ---
-name: fix-review-comments
+name: ado-fix-review-comments
 description: Fix PR review comments, simplify code, and self-review
 ---
 

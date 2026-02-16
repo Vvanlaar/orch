@@ -1,5 +1,5 @@
 ---
-name: assign-testing
+name: ado-assign-testing
 description: Distribute reviewed work items to team members for testing
 ---
 
@@ -145,5 +145,5 @@ Output markdown table:
 ## Example
 
 ```
-/assign-testing --users "g.hultink@bluebillywig.com,m.bots@bluebillywig.com,j.koppen@bluebillywig.com"
+/ado-assign-testing --users "g.hultink@bluebillywig.com,m.bots@bluebillywig.com,j.koppen@bluebillywig.com"
 ```

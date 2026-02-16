@@ -134,7 +134,7 @@ ADO_REVIEWED_BY_FIELD=Custom.ReviewedBy
 2. Find "Testing Assignment" section - shows all reviewed items in current sprint
 3. Select team members who are available for testing
 4. Click "Copy Assign Command"
-5. Paste `/assign-testing --users "..."` in Claude Code
+5. Paste `/ado-assign-testing --users "..."` in Claude Code
 
 ### Rules
 
