@@ -44,13 +44,13 @@ GET https://dev.azure.com/{org}/_apis/work/processes/lists?api-version=7.1
 **Create** (if not found -- include `name`!):
 ```
 POST .../lists?api-version=7.1
-Body: { "name": "Repository", "type": "String", "items": [...repos], "isSuggested": false }
+Body: { "name": "Repository", "type": "String", "items": [...repos], "isSuggested": true }
 ```
 
 **Update** (if found):
 ```
 PUT .../lists/{listId}?api-version=7.1
-Body: { "id": "{listId}", "items": [...repos], "isSuggested": false }
+Body: { "id": "{listId}", "items": [...repos], "isSuggested": true }
 ```
 
 ### 4. Get all inherited processes and their WITs
@@ -140,6 +140,7 @@ Output markdown summary: repos synced, picklist created vs updated, processes an
 - **HTML control conflict**: each layout group allows only one HTML control. If a group already has one, pick a different group.
 - **Picklist creation**: must include `name` field in POST body or API returns 400.
 - **Multivalue extension**: `ms-devlabs.vsts-extensions-multivalue-control` is already installed in the org. The field type is identical to a regular picklist string — multi-select is purely a layout control concern (use `isContribution: true` with the extension's `contributionId`).
+- **isSuggested must be true**: The multivalue control stores values as semicolons-separated (e.g., `foo;bar`). If `isSuggested: false`, ADO validates the combined string against individual picklist items and rejects it. Use `isSuggested: true` so values are suggestions, not enforced.
 
 ## Important Notes
 
