@@ -5,11 +5,11 @@ description: Sync GitHub repos from bluebillywig org to an ADO "Repository" pick
 
 # Sync GitHub Repos to ADO Picklist
 
-Fetches all repos from `github.com/bluebillywig` and creates/updates a `Custom.Repository` picklist field on all work item types in Azure DevOps.
+Fetches all repos from `github.com/bluebillywig` and creates/updates a `Custom.Repository` picklist field on all work item types across all inherited processes in Azure DevOps.
 
 ## Process
 
-Write and execute a Node.js script (temp file or `node -e`). Use built-in `fetch` (Node 18+).
+Write and execute a Node.js script (temp file, delete after). Use built-in `fetch` (Node 18+).
 
 **Auth headers:**
 - GitHub: `Authorization: Bearer {GITHUB_TOKEN}`
@@ -19,7 +19,7 @@ Write and execute a Node.js script (temp file or `node -e`). Use built-in `fetch
 
 ### 1. Read credentials from `.env`
 
-Parse `C:\dev\ai\orch\.env` for `ADO_ORG`, `ADO_PAT`, `ADO_PROJECT`, `GITHUB_TOKEN`. Use `fs.readFileSync` with line parsing (split on `=`, trim, strip quotes).
+Parse `C:\dev\ai\orch\.env` for `ADO_ORG`, `ADO_PAT`, `GITHUB_TOKEN`. Use `fs.readFileSync` with line parsing (split on `=`, trim, strip quotes). Last value wins for duplicate keys.
 
 ### 2. Fetch all repos from `github.com/bluebillywig`
 
@@ -29,18 +29,22 @@ GET https://api.github.com/orgs/bluebillywig/repos?per_page=100&page=N
 
 Paginate until empty page. Extract `.name`, sort alphabetically, log count.
 
-### 3. Find or create picklist
+### 3. Find or create/update picklist
 
-Check if field `Custom.Repository` already exists (see step 5) and read its `pickList.id`. Alternatively, search:
+First check if `Custom.Repository` field exists and read its `picklistId`:
+```
+GET https://dev.azure.com/{org}/_apis/wit/fields/Custom.Repository?api-version=7.1
+```
 
+If no picklist ID from field, search all picklists for one named "Repository":
 ```
 GET https://dev.azure.com/{org}/_apis/work/processes/lists?api-version=7.1
 ```
 
-**Create** (if not found):
+**Create** (if not found -- include `name`!):
 ```
 POST .../lists?api-version=7.1
-Body: { "type": "String", "items": [...repos], "isSuggested": false }
+Body: { "name": "Repository", "type": "String", "items": [...repos], "isSuggested": false }
 ```
 
 **Update** (if found):
@@ -49,13 +53,13 @@ PUT .../lists/{listId}?api-version=7.1
 Body: { "id": "{listId}", "items": [...repos], "isSuggested": false }
 ```
 
-### 4. Get process ID and work item types
+### 4. Get all inherited processes and their WITs
 
 ```
 GET https://dev.azure.com/{org}/_apis/work/processes?api-version=7.1
 ```
 
-Use first inherited (non-system) process. Then fetch WITs:
+Filter to `customizationType === 'inherited'`. For EACH inherited process, fetch WITs:
 
 ```
 GET https://dev.azure.com/{org}/_apis/work/processes/{processId}/workitemtypes?api-version=7.1
@@ -63,36 +67,44 @@ GET https://dev.azure.com/{org}/_apis/work/processes/{processId}/workitemtypes?a
 
 ### 5. Create field if it doesn't exist
 
-Check if field exists at org level (404 = doesn't exist):
-```
-GET https://dev.azure.com/{org}/_apis/wit/fields/Custom.Repository?api-version=7.1
-```
-
-If not found, create it. Field creation with picklist binding requires the older `processdefinitions` API:
+If step 3's field check returned 404, create the field. Use the older `processdefinitions` API with `type: "string"` (NOT `"picklistString"`):
 ```
 POST https://dev.azure.com/{org}/_apis/work/processdefinitions/{processId}/fields?api-version=4.1-preview.1
-Body: { "name": "Repository", "type": "picklistString", "pickList": { "id": "{picklistId}" } }
+Body: { "name": "Repository", "type": "string", "pickList": { "id": "{picklistId}" } }
 ```
+
+The `type` must be `"string"` — the picklist binding is what makes it a picklist field. Using `"picklistString"` causes `FieldTypeInvalid`.
 
 ### 6. Add field to all work item types
 
-For each WIT ref name:
+For each WIT, check `wit.customization`:
+
+**If `customization !== 'system'`** (already derived/custom): add field directly:
 ```
-POST .../workItemTypes/{witRefName}/fields?api-version=7.1
+POST .../processes/{processId}/workItemTypes/{witRefName}/fields?api-version=7.1
 Body: { "referenceName": "Custom.Repository" }
 ```
 
+**If `customization === 'system'`** (not yet derived): the `processes` API returns 404 for these. Skip them — they require manual derivation via the ADO UI first (the REST API cannot derive a WIT with the same name as the system parent).
+
 - Ignore **409** (field already added)
-- Skip WITs that reject customization (log and continue)
+- Skip Test Case/Test Plan/Test Suite — system-only types that don't accept custom fields
 
 ### 7. Report
 
-Output markdown summary: repos synced, picklist created vs updated, WITs updated vs skipped. Include reminder to install [Multivalue control extension](https://marketplace.visualstudio.com/items?itemName=ms-devlabs.vsts-extensions-multivalue-control) for multi-select.
+Output markdown summary: repos synced, picklist created vs updated, processes and WITs updated vs skipped. Include reminder to install [Multivalue control extension](https://marketplace.visualstudio.com/items?itemName=ms-devlabs.vsts-extensions-multivalue-control) for multi-select.
+
+## Known Limitations
+
+- **System WITs** (`customization: system`): cannot add fields via API. Open each process in ADO UI > Process > click the WIT to auto-derive, then re-run.
+- **Test Case/Plan/Suite**: locked system types across all processes, skip these.
+- **Field type**: must use `"string"` (not `"picklistString"`) in the `processdefinitions` API.
 
 ## Important Notes
 
 - Handle errors gracefully -- if one WIT rejects the field, log and continue
 - Run with `node.exe` directly to avoid Git Bash shell issues
+- Delete temp script after execution
 
 ## Verification
 
