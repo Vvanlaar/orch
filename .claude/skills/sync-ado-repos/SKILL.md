@@ -15,7 +15,7 @@ Write and execute a Node.js script (temp file, delete after). Use built-in `fetc
 - GitHub: `Authorization: Bearer {GITHUB_TOKEN}`
 - ADO: `Authorization: Basic {base64(':' + ADO_PAT)}`
 
-**ADO API version:** `7.1` for all calls except field creation (`4.1-preview.1`).
+**ADO API version:** `7.1` for all calls except field creation (`4.1-preview.1`) and project properties (`7.1-preview.1`).
 
 ### 1. Read credentials from `.env`
 
@@ -56,10 +56,10 @@ Body: { "id": "{listId}", "items": [...repos], "isSuggested": false }
 ### 4. Get all inherited processes and their WITs
 
 ```
-GET https://dev.azure.com/{org}/_apis/work/processes?api-version=7.1
+GET https://dev.azure.com/{org}/_apis/work/processes?$expand=projects&api-version=7.1
 ```
 
-Filter to `customizationType === 'inherited'`. For EACH inherited process, fetch WITs:
+Filter to `customizationType === 'inherited'`. The `$expand=projects` parameter includes which projects use each process. For EACH inherited process, fetch WITs:
 
 ```
 GET https://dev.azure.com/{org}/_apis/work/processes/{processId}/workitemtypes?api-version=7.1
@@ -85,20 +85,45 @@ POST .../processes/{processId}/workItemTypes/{witRefName}/fields?api-version=7.1
 Body: { "referenceName": "Custom.Repository" }
 ```
 
-**If `customization === 'system'`** (not yet derived): the `processes` API returns 404 for these. Skip them — they require manual derivation via the ADO UI first (the REST API cannot derive a WIT with the same name as the system parent).
+**If `customization === 'system'`** (not yet derived): skip — the REST API cannot derive a WIT with the same name as the system parent. These require manual derivation via the ADO UI.
 
 - Ignore **409** (field already added)
 - Skip Test Case/Test Plan/Test Suite — system-only types that don't accept custom fields
 
-### 7. Report
+### 7. Add control to form layout (CRITICAL)
 
-Output markdown summary: repos synced, picklist created vs updated, processes and WITs updated vs skipped. Include reminder to install [Multivalue control extension](https://marketplace.visualstudio.com/items?itemName=ms-devlabs.vsts-extensions-multivalue-control) for multi-select.
+**Adding a field to a WIT does NOT make it visible on the form.** You must also add a control to the WIT's layout.
+
+For each WIT where the field was added:
+
+1. Get the layout:
+```
+GET .../processes/{processId}/workItemTypes/{witRefName}/layout?api-version=7.1
+```
+
+2. Check if `Custom.Repository` control already exists (scan all pages/sections/groups/controls for `ctrl.id === 'Custom.Repository'`).
+
+3. Find a suitable group on the "Details" page. Prefer groups labeled "Details" or "Classification". **Avoid groups that already contain an `HtmlFieldControl`** — ADO allows only one HTML control per group (error VS403105).
+
+4. If the first group fails with 500 (HTML control conflict), find another group without HTML controls.
+
+5. Add the control:
+```
+POST .../processes/{processId}/workItemTypes/{witRefName}/layout/groups/{groupId}/controls?api-version=7.1
+Body: { "id": "Custom.Repository", "label": "Repository", "visible": true, "readOnly": false }
+```
+
+### 8. Report
+
+Output markdown summary: repos synced, picklist created vs updated, processes and WITs updated vs skipped, controls added to layout. Include reminder to install [Multivalue control extension](https://marketplace.visualstudio.com/items?itemName=ms-devlabs.vsts-extensions-multivalue-control) for multi-select.
 
 ## Known Limitations
 
-- **System WITs** (`customization: system`): cannot add fields via API. Open each process in ADO UI > Process > click the WIT to auto-derive, then re-run.
+- **System WITs** (`customization: system`): cannot add fields or layout controls via API. Open ADO UI > Process > click the WIT to auto-derive, then re-run.
 - **Test Case/Plan/Suite**: locked system types across all processes, skip these.
 - **Field type**: must use `"string"` (not `"picklistString"`) in the `processdefinitions` API.
+- **HTML control conflict**: each layout group allows only one HTML control. If a group already has one, pick a different group.
+- **Picklist creation**: must include `name` field in POST body or API returns 400.
 
 ## Important Notes
 
