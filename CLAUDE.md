@@ -7,8 +7,9 @@ Orchestrates Claude Code processes for automated PR reviews, comment fixes, and 
 After each code change, use the code-simplifier and review skills. Fix any errors and then commit.
 
 ## Commands
-- `npm run dev` - API server (hot reload)
-- `npm run dev:dashboard` - Vite dev server (:5173, proxies to :3000)
+- `npm run dev` - Server + dashboard (hot reload)
+- `npm run dev:server` - Server only (hot reload)
+- `npm run dev:dashboard` - Vite dev server (:5173, proxies to :3004)
 - `npm run build` - Build all
 - `npm test` - Run tests
 
@@ -18,7 +19,7 @@ After each code change, use the code-simplifier and review skills. Fix any error
 - `src/dashboard/` - Svelte 5 (runes: `$state`, `$derived`, `$props`)
 
 ## Code Style
-- TypeScript ESM (`.js` imports for server)
+- TypeScript ESM (use `.js` extensions in server imports for runtime)
 - Svelte 5 runes for dashboard state
 - async/await preferred
 

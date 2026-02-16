@@ -4,11 +4,14 @@ Event-driven orchestrator that connects GitHub and Azure DevOps to Claude Code.
 
 ## Features
 
+- **Real-time Dashboard**: Monitor tasks at http://localhost:3004 (GitHub PRs + ADO items)
 - **PR Reviews**: Auto-review PRs when opened/updated
+- **PR Comment Fixes**: Auto-fix review comments on PRs
 - **Issue Analysis**: Analyze and propose fixes for issues/work items
+- **Resolution Review**: Verify resolved work items are complete and correct
+- **Testing Assignment**: Bulk-assign reviewed items to testers
 - **Code Generation**: Generate code from feature requests
 - **Pipeline Fixes**: Analyze build failures and suggest fixes
-- **Real-time Dashboard**: Monitor tasks at http://localhost:3003
 - **Polling Mode**: No ngrok needed - polls APIs directly
 
 ## Setup
@@ -24,8 +27,9 @@ npm start          # Production server
 ### Development
 
 ```bash
-npm run dev           # API server on :3000 (hot reload)
-npm run dev:dashboard # Vite dev server on :5173 (proxies to API)
+npm run dev           # Server + dashboard (hot reload)
+npm run dev:server    # Server only on :3004 (hot reload)
+npm run dev:dashboard # Vite dev server on :5173 (proxies to :3004)
 ```
 
 ## Tech Stack
@@ -33,6 +37,13 @@ npm run dev:dashboard # Vite dev server on :5173 (proxies to API)
 - **Server**: Express + WebSocket, TypeScript
 - **Dashboard**: Svelte 5 + Vite (~21KB gzipped)
 - **State**: Svelte runes (`$state`, `$derived`)
+
+## Dashboard Features
+
+- Work items view with filters (GitHub PRs + ADO items)
+- Testing assignment for reviewed sprint items
+- Process management and task monitoring
+- Repo cloning from GitHub org
 
 ## Modes
 
@@ -57,7 +68,10 @@ POLLING_ENABLED=false
 
 | Variable | Description |
 |----------|-------------|
-| `PORT` | Server port (default: 3003) |
+| `PORT` | Server port (default: 3004) |
+| `MAX_CONCURRENT_TASKS` | Concurrent Claude tasks (default: 2) |
+| `CLAUDE_TIMEOUT` | Claude task timeout in ms (default: 300000) |
+| `PREFERRED_TERMINAL` | Terminal for Claude (default: auto) |
 | `GITHUB_WEBHOOK_SECRET` | Secret for GitHub webhook verification |
 | `GITHUB_TOKEN` | GitHub PAT for posting comments |
 | `ADO_ORG` | Azure DevOps organization name |
@@ -83,9 +97,9 @@ REPOS_AUTO_SCAN=true
 On startup, it logs discovered repos:
 ```
 Discovered 3 repos:
-  🐙 owner/frontend -> frontend
-  🐙 owner/backend -> backend
-  🔷 MyOrg/Project/api -> api
+  owner/frontend -> frontend
+  owner/backend -> backend
+  MyOrg/Project/api -> api
 ```
 
 ### Manual Mapping (optional)
@@ -130,7 +144,7 @@ ADO_REVIEWED_BY_FIELD=Custom.ReviewedBy
 
 ### Usage
 
-1. Open dashboard at http://localhost:3003
+1. Open dashboard at http://localhost:3004
 2. Find "Testing Assignment" section - shows all reviewed items in current sprint
 3. Select team members who are available for testing
 4. Click "Copy Assign Command"
