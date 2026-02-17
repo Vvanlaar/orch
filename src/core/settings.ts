@@ -10,13 +10,20 @@ interface Settings {
   preferredTerminal?: TerminalId;
 }
 
+const isWindows = process.platform === 'win32';
+
 const KNOWN_TERMINALS: Terminal[] = [
   { id: 'auto', name: 'Auto (System Default)', cmd: null },
+  // Windows
   { id: 'wt', name: 'Windows Terminal', cmd: 'wt' },
   { id: 'cmd', name: 'Command Prompt', cmd: 'cmd' },
   { id: 'powershell', name: 'PowerShell', cmd: 'powershell' },
   { id: 'pwsh', name: 'PowerShell Core', cmd: 'pwsh' },
   { id: 'git-bash', name: 'Git Bash', cmd: 'bash' },
+  // Linux
+  { id: 'gnome-terminal', name: 'GNOME Terminal', cmd: 'gnome-terminal' },
+  { id: 'xterm', name: 'XTerm', cmd: 'xterm' },
+  { id: 'tmux', name: 'tmux', cmd: 'tmux' },
 ];
 
 function loadSettings(): Settings {
@@ -64,7 +71,8 @@ const KNOWN_TERMINAL_PATHS: Record<string, string[]> = {
 
 function isTerminalAvailable(cmd: string): boolean {
   try {
-    execSync(`where ${cmd}`, { stdio: 'ignore' });
+    const whichCmd = isWindows ? `where ${cmd}` : `which ${cmd}`;
+    execSync(whichCmd, { stdio: 'ignore' });
     return true;
   } catch {
     const paths = KNOWN_TERMINAL_PATHS[cmd];
@@ -79,4 +87,8 @@ export function findTerminalPath(cmd: string): string | null {
 
 export function getKnownTerminals(): Terminal[] {
   return KNOWN_TERMINALS;
+}
+
+export function isWindowsPlatform(): boolean {
+  return isWindows;
 }

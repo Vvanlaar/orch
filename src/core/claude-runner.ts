@@ -6,7 +6,7 @@ import { tmpdir } from 'os';
 import type { Task, TerminalId } from './types.js';
 import { config } from './config.js';
 import { loadLearnings } from './learnings.js';
-import { getTerminalPreference } from './settings.js';
+import { getTerminalPreference, isWindowsPlatform } from './settings.js';
 
 // Process registry for steering running tasks
 const runningProcesses = new Map<number, ChildProcess>();
@@ -182,27 +182,47 @@ export async function runClaudeInTerminal(
   const promptFile = join(promptDir, `task-${taskId}.txt`);
   writeFileSync(promptFile, prompt, 'utf-8');
 
-  const claudeArgs = options.allowEdits
-    ? `--dangerously-skip-permissions -p "$(cat '${promptFile.replace(/\\/g, '/')}')"`
-    : `--print --dangerously-skip-permissions -p "$(cat '${promptFile.replace(/\\/g, '/')}')"`;
-
+  const promptFilePosix = promptFile.replace(/\\/g, '/');
   const repoPath = task.repoPath.replace(/\\/g, '/');
   const title = `Task #${taskId}: ${task.type}`;
   const preferred = getTerminalPreference();
 
+  // Build the claude command for bash-based terminals (Linux, git-bash)
+  const bashClaudeCmd = options.allowEdits
+    ? `claude --dangerously-skip-permissions -p "$(cat '${promptFilePosix}')"`
+    : `claude --print --dangerously-skip-permissions -p "$(cat '${promptFilePosix}')"`;
+
+  // Build the claude command for PowerShell terminals
+  const psClaudeCmd = options.allowEdits
+    ? `claude --dangerously-skip-permissions -p (Get-Content '${promptFile}' -Raw)`
+    : `claude --print --dangerously-skip-permissions -p (Get-Content '${promptFile}' -Raw)`;
+
   const buildTerminalCmd = (terminal: TerminalId): string => {
     switch (terminal) {
+      // Windows terminals
       case 'wt':
-        return `wt -w 0 nt --title "${title}" -d "${repoPath}" cmd /k "claude ${claudeArgs}"`;
+        return `wt -w 0 nt --title "${title}" -d "${repoPath}" cmd /k "claude ${options.allowEdits ? '--dangerously-skip-permissions' : '--print --dangerously-skip-permissions'} -p "${promptFile}""`;
       case 'powershell':
-        return `start powershell -NoExit -Command "Set-Location '${task.repoPath}'; claude ${claudeArgs}"`;
+        return `start powershell -NoExit -Command "Set-Location '${task.repoPath}'; ${psClaudeCmd}"`;
       case 'pwsh':
-        return `start pwsh -NoExit -Command "Set-Location '${task.repoPath}'; claude ${claudeArgs}"`;
+        return `start pwsh -NoExit -Command "Set-Location '${task.repoPath}'; ${psClaudeCmd}"`;
       case 'git-bash':
-        return `start "" "C:\\Program Files\\Git\\git-bash.exe" --cd="${task.repoPath}" -c "claude ${claudeArgs}; exec bash"`;
+        return `start "" "C:\\Program Files\\Git\\git-bash.exe" --cd="${task.repoPath}" -c "${bashClaudeCmd}; exec bash"`;
       case 'cmd':
+        return `start "${title}" cmd /k "cd /d ${task.repoPath} && ${bashClaudeCmd}"`;
+      // Linux terminals
+      case 'gnome-terminal':
+        return `gnome-terminal --title="${title}" --working-directory="${repoPath}" -- bash -c '${bashClaudeCmd}; exec bash'`;
+      case 'xterm':
+        return `xterm -T "${title}" -e "cd ${repoPath} && ${bashClaudeCmd}; exec bash"`;
+      case 'tmux':
+        return `tmux new-session -d -s "orch-task-${taskId}" -c "${repoPath}" "${bashClaudeCmd}; exec bash"`;
       default:
-        return `start "${title}" cmd /k "cd /d ${task.repoPath} && claude ${claudeArgs}"`;
+        if (isWindowsPlatform()) {
+          return `start "${title}" cmd /k "cd /d ${task.repoPath} && ${bashClaudeCmd}"`;
+        }
+        // Linux fallback: try tmux
+        return `tmux new-session -d -s "orch-task-${taskId}" -c "${repoPath}" "${bashClaudeCmd}; exec bash"`;
     }
   };
 
@@ -214,27 +234,50 @@ export async function runClaudeInTerminal(
     });
   };
 
+  const terminalNames: Record<string, string> = {
+    wt: 'Windows Terminal',
+    cmd: 'Command Prompt',
+    powershell: 'PowerShell',
+    pwsh: 'PowerShell Core',
+    'git-bash': 'Git Bash',
+    'gnome-terminal': 'GNOME Terminal',
+    xterm: 'XTerm',
+    tmux: 'tmux',
+  };
+
   return new Promise(async (resolve) => {
     let result: { success: boolean; terminal: TerminalId };
 
     if (preferred === 'auto') {
-      // Try wt first, then cmd
-      result = await tryTerminal('wt');
-      if (!result.success) {
-        result = await tryTerminal('cmd');
+      if (isWindowsPlatform()) {
+        // Windows: try wt first, then cmd
+        result = await tryTerminal('wt');
+        if (!result.success) {
+          result = await tryTerminal('cmd');
+        }
+      } else {
+        // Linux: try gnome-terminal, xterm, then tmux
+        result = await tryTerminal('gnome-terminal');
+        if (!result.success) {
+          result = await tryTerminal('xterm');
+        }
+        if (!result.success) {
+          result = await tryTerminal('tmux');
+        }
       }
     } else {
       result = await tryTerminal(preferred);
     }
 
     if (result.success) {
-      const terminalName = result.terminal === 'wt' ? 'Windows Terminal' : result.terminal;
+      const terminalName = terminalNames[result.terminal] || result.terminal;
       console.log(`[terminal] Opened ${terminalName} for task #${taskId}`);
-      claudeEmitter.emit('output', taskId, `[${terminalName} opened - running in external window]\nPrompt file: ${promptFile}\n`);
+      const tmuxHint = result.terminal === 'tmux' ? `\nAttach with: tmux attach -t orch-task-${taskId}\n` : '';
+      claudeEmitter.emit('output', taskId, `[${terminalName} opened - running in external terminal]\nPrompt file: ${promptFile}\n${tmuxHint}`);
       resolve({ success: true, output: `Running in ${terminalName}` });
     } else {
       console.error(`[terminal] Failed to open terminal for task #${taskId}`);
-      resolve({ success: false, output: '', error: 'Failed to open terminal window' });
+      resolve({ success: false, output: '', error: 'Failed to open terminal window. Install gnome-terminal, xterm, or tmux.' });
     }
   });
 }

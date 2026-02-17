@@ -11,7 +11,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { killTask } from '../core/claude-runner.js';
 import { config } from '../core/config.js';
 import { cloneRepo } from '../core/git-ops.js';
-import { detectAvailableTerminals, findTerminalPath, getTerminalPreference, setTerminalPreference } from '../core/settings.js';
+import { detectAvailableTerminals, findTerminalPath, getTerminalPreference, isWindowsPlatform, setTerminalPreference } from '../core/settings.js';
 import { startPoller } from '../core/poller.js';
 import { getEffectiveRepoMapping, getScannedRepos } from '../core/repo-scanner.js';
 import { Octokit } from 'octokit';
@@ -209,6 +209,7 @@ app.post('/api/tasks/:id/terminal', async (req, res) => {
     return new Promise(resolve => {
       let cmd: string;
       switch (terminal) {
+        // Windows terminals
         case 'wt': {
           const wtExe = findTerminalPath('wt');
           const wtCmd = wtExe ? `"${wtExe}"` : 'wt';
@@ -227,27 +228,57 @@ app.post('/api/tasks/:id/terminal', async (req, res) => {
         case 'git-bash':
           cmd = `start "" "C:\\Program Files\\Git\\git-bash.exe" --cd="${task.repoPath}"`;
           break;
+        // Linux terminals
+        case 'gnome-terminal':
+          cmd = `gnome-terminal --title="${title}" --working-directory="${repoPath}"`;
+          break;
+        case 'xterm':
+          cmd = `xterm -T "${title}" -e "cd '${repoPath}' && exec bash"`;
+          break;
+        case 'tmux':
+          cmd = `tmux new-session -d -s "orch-term-${id}" -c "${repoPath}"`;
+          break;
         case 'cmd':
         default:
-          cmd = `start "${title}" cmd /k "cd /d ${task.repoPath}"`;
+          if (isWindowsPlatform()) {
+            cmd = `start "${title}" cmd /k "cd /d ${task.repoPath}"`;
+          } else {
+            // Linux fallback: tmux
+            cmd = `tmux new-session -d -s "orch-term-${id}" -c "${repoPath}"`;
+          }
           break;
       }
       exec(cmd, err => resolve(!err));
     });
   };
 
-  // Try preferred terminal, fall back to auto behavior (wt -> cmd)
+  // Try preferred terminal, fall back to auto behavior
   if (preferred === 'auto') {
-    if (await openTerminal('wt')) {
-      res.json({ success: true, terminal: 'wt' });
-    } else if (await openTerminal('cmd')) {
-      res.json({ success: true, terminal: 'cmd' });
+    if (isWindowsPlatform()) {
+      // Windows: wt -> cmd
+      if (await openTerminal('wt')) {
+        res.json({ success: true, terminal: 'wt' });
+      } else if (await openTerminal('cmd')) {
+        res.json({ success: true, terminal: 'cmd' });
+      } else {
+        res.status(500).json({ error: 'Failed to open terminal' });
+      }
     } else {
-      res.status(500).json({ error: 'Failed to open terminal' });
+      // Linux: gnome-terminal -> xterm -> tmux
+      if (await openTerminal('gnome-terminal')) {
+        res.json({ success: true, terminal: 'gnome-terminal' });
+      } else if (await openTerminal('xterm')) {
+        res.json({ success: true, terminal: 'xterm' });
+      } else if (await openTerminal('tmux')) {
+        res.json({ success: true, terminal: 'tmux', hint: `Attach with: tmux attach -t orch-term-${id}` });
+      } else {
+        res.status(500).json({ error: 'Failed to open terminal. Install gnome-terminal, xterm, or tmux.' });
+      }
     }
   } else {
     if (await openTerminal(preferred)) {
-      res.json({ success: true, terminal: preferred });
+      const hint = preferred === 'tmux' ? `Attach with: tmux attach -t orch-term-${id}` : undefined;
+      res.json({ success: true, terminal: preferred, hint });
     } else {
       res.status(500).json({ error: `Failed to open ${preferred} terminal` });
     }
