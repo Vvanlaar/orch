@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
+import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
@@ -7,7 +8,7 @@ export default defineConfig(({ mode }) => {
   const dashboardPort = Number(env.DASHBOARD_PORT) || 3010;
 
   return {
-    plugins: [svelte()],
+    plugins: [tailwindcss(), svelte()],
     root: '.',
     build: {
       outDir: '../../dist/dashboard',

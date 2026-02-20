@@ -1,11 +1,22 @@
 import type { WorkItem, TeamMember } from '../lib/types';
 import { getCurrentUser } from './currentUser.svelte';
+import { readPreference, writePreference } from '../lib/preferences';
 
 // State
 let reviewedItems = $state<WorkItem[]>([]);
 let teamMembers = $state<TeamMember[]>([]);
-let selectedTeamMembers = $state(new Set<string>());
+const SELECTED_TEAM_STORAGE_KEY = 'orch.dashboard.testing.selected-team-members';
+const savedTeamMembers = readPreference(
+  SELECTED_TEAM_STORAGE_KEY,
+  [] as string[],
+  (value): value is string[] => Array.isArray(value) && value.every((item) => typeof item === 'string')
+);
+let selectedTeamMembers = $state(new Set<string>(savedTeamMembers));
 let sprintName = $state('Loading sprint...');
+
+function persistSelectedTeamMembers() {
+  writePreference(SELECTED_TEAM_STORAGE_KEY, Array.from(selectedTeamMembers));
+}
 
 export function getReviewedItems() {
   // Sort by assignedTo (unassigned first, then alphabetically)
@@ -60,16 +71,19 @@ export function toggleTeamMember(email: string) {
     selectedTeamMembers.add(email);
   }
   selectedTeamMembers = new Set(selectedTeamMembers);
+  persistSelectedTeamMembers();
 }
 
 export function selectAllTeam() {
   teamMembers.forEach((m) => selectedTeamMembers.add(m.email));
   selectedTeamMembers = new Set(selectedTeamMembers);
+  persistSelectedTeamMembers();
 }
 
 export function deselectAllTeam() {
   selectedTeamMembers.clear();
   selectedTeamMembers = new Set(selectedTeamMembers);
+  persistSelectedTeamMembers();
 }
 
 export function generateAssignCommand(): string | null {
@@ -95,6 +109,14 @@ export async function fetchTeamMembers() {
   try {
     const res = await fetch('/api/team/members');
     teamMembers = await res.json();
+    const validEmails = new Set(teamMembers.map((member) => member.email));
+    const prunedSelection = new Set(
+      Array.from(selectedTeamMembers).filter((email) => validEmails.has(email))
+    );
+    if (prunedSelection.size !== selectedTeamMembers.size) {
+      selectedTeamMembers = prunedSelection;
+      persistSelectedTeamMembers();
+    }
   } catch (err) {
     console.error('Failed to fetch team members:', err);
     teamMembers = [];

@@ -1,14 +1,33 @@
 import type { Task } from '../lib/types';
 import { setTasksHandler, setOutputHandler } from './websocket.svelte';
+import { readPreference, writePreference } from '../lib/preferences';
 
 // State
 let tasks = $state<Task[]>([]);
-let expandedTasks = $state(new Set<number>());
+const EXPANDED_TASKS_STORAGE_KEY = 'orch.dashboard.tasks.expanded';
+const savedExpandedTasks = readPreference(
+  EXPANDED_TASKS_STORAGE_KEY,
+  [] as number[],
+  (value): value is number[] =>
+    Array.isArray(value) && value.every((item) => typeof item === 'number' && Number.isInteger(item))
+);
+let expandedTasks = $state(new Set<number>(savedExpandedTasks));
 let taskOutputs = $state(new Map<number, string>());
+
+function persistExpandedTasks() {
+  writePreference(EXPANDED_TASKS_STORAGE_KEY, Array.from(expandedTasks));
+}
 
 // Initialize WebSocket handlers
 setTasksHandler((newTasks) => {
   tasks = newTasks;
+  const validIds = new Set(newTasks.map((task) => task.id));
+  const nextExpanded = new Set(Array.from(expandedTasks).filter((taskId) => validIds.has(taskId)));
+  if (nextExpanded.size !== expandedTasks.size) {
+    expandedTasks = nextExpanded;
+    persistExpandedTasks();
+  }
+
   // Preserve output for tasks that have streaming output
   newTasks.forEach((t) => {
     if (t.streamingOutput && !taskOutputs.has(t.id)) {
@@ -43,6 +62,7 @@ export function toggleExpanded(taskId: number) {
     expandedTasks.add(taskId);
   }
   expandedTasks = new Set(expandedTasks);
+  persistExpandedTasks();
 }
 
 export function appendSteerInput(taskId: number, input: string) {

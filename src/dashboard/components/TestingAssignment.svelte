@@ -16,6 +16,7 @@
     deselectAllTeam,
     generateAssignCommand,
   } from '../stores/testing.svelte';
+  import { readPreference, writePreference } from '../lib/preferences';
   import { getCurrentUser } from '../stores/currentUser.svelte';
   import { getOrgRepos, isLoading, getCloningRepo, loadOrgRepos, cloneRepo } from '../stores/repos.svelte';
 
@@ -32,9 +33,17 @@
   let reposLoading = $derived(isLoading());
   let cloningRepo = $derived(getCloningRepo());
 
-  let showOthers = $state(false);
+  const SHOW_OTHERS_STORAGE_KEY = 'orch.dashboard.testing.show-others';
+  let showOthers = $state(
+    readPreference(SHOW_OTHERS_STORAGE_KEY, false, (value): value is boolean => typeof value === 'boolean')
+  );
   let testingItem = $state<number | null>(null);
   let selectedRepos = $state<Map<number, string>>(new Map());
+
+  function toggleShowOthers() {
+    showOthers = !showOthers;
+    writePreference(SHOW_OTHERS_STORAGE_KEY, showOthers);
+  }
 
   function handleCopyCommand() {
     const cmd = generateAssignCommand();
@@ -195,10 +204,10 @@
       {#if otherItems.length > 0}
         <div
           class="section-header clickable"
-          onclick={() => (showOthers = !showOthers)}
+          onclick={toggleShowOthers}
           role="button"
           tabindex="0"
-          onkeydown={(e) => e.key === 'Enter' && (showOthers = !showOthers)}
+          onkeydown={(e) => e.key === 'Enter' && toggleShowOthers()}
         >
           <span>Assigned to Others ({otherItems.length})</span>
           <span class="toggle-icon">{showOthers ? '▼' : '▶'}</span>

@@ -1,11 +1,26 @@
 import type { PR, WorkItem, FilterType, OwnerFilter } from '../lib/types';
+import { readPreference, writePreference } from '../lib/preferences';
 
 // State
 let prs = $state<PR[]>([]);
 let workItems = $state<WorkItem[]>([]);
 let resolvedByMe = $state<WorkItem[]>([]);
-let filter = $state<FilterType>('all');
-let ownerFilter = $state<OwnerFilter>('my');
+
+const FILTER_STORAGE_KEY = 'orch.dashboard.workitems.filter';
+const OWNER_FILTER_STORAGE_KEY = 'orch.dashboard.workitems.owner-filter';
+const FILTERS: readonly FilterType[] = ['all', 'new', 'active', 'resolved', 'reviewed', 'resolved-by-me'];
+const OWNER_FILTERS: readonly OwnerFilter[] = ['my', 'unassigned', 'all'];
+
+function isFilterType(value: unknown): value is FilterType {
+  return typeof value === 'string' && FILTERS.includes(value as FilterType);
+}
+
+function isOwnerFilter(value: unknown): value is OwnerFilter {
+  return typeof value === 'string' && OWNER_FILTERS.includes(value as OwnerFilter);
+}
+
+let filter = $state<FilterType>(readPreference(FILTER_STORAGE_KEY, 'all', isFilterType));
+let ownerFilter = $state<OwnerFilter>(readPreference(OWNER_FILTER_STORAGE_KEY, 'my', isOwnerFilter));
 
 // Caches for action handlers
 const prCache = new Map<string, PR>();
@@ -45,6 +60,7 @@ export function getFilteredItems() {
 
 export function setFilter(newFilter: FilterType) {
   filter = newFilter;
+  writePreference(FILTER_STORAGE_KEY, filter);
 }
 
 export function getFilter() {
@@ -77,6 +93,7 @@ export function getOwnerFilter() {
 
 export async function setOwnerFilter(f: OwnerFilter) {
   ownerFilter = f;
+  writePreference(OWNER_FILTER_STORAGE_KEY, ownerFilter);
   await fetchWorkItems();
 }
 
