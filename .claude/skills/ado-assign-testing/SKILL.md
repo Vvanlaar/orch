@@ -1,6 +1,7 @@
 ---
 name: ado-assign-testing
 description: Distribute reviewed work items to team members for testing
+model: sonnet
 ---
 
 # Testing Assignment Skill

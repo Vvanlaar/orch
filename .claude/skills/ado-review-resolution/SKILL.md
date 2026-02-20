@@ -1,6 +1,7 @@
 ---
 name: ado-review-resolution
 description: Review a resolved ADO work item to verify the fix is complete and correct
+model: sonnet
 ---
 
 # Resolution Review Skill

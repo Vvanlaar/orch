@@ -1,6 +1,7 @@
 ---
 name: sync-ado-repos
 description: Sync GitHub repos from bluebillywig org to an ADO "Repository" picklist field on all work item types
+model: sonnet
 ---
 
 # Sync GitHub Repos to ADO Picklist

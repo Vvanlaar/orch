@@ -1,6 +1,7 @@
 ---
 name: ado-repo-analysis
 description: Analyze sibling repos to find best match for a work item
+model: sonnet
 ---
 
 # Repo Analysis Skill
