@@ -106,6 +106,10 @@ export function updateTaskStatus(id: number, status: TaskStatus): void {
   updateTask(id, updates);
 }
 
+export function updateTaskRepoPath(id: number, newPath: string): void {
+  updateTask(id, { repoPath: newPath, status: 'pending' });
+}
+
 export function deleteTask(id: number): boolean {
   const db = loadDb();
   const idx = db.tasks.findIndex(t => t.id === id);

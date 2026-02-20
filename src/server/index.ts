@@ -15,7 +15,7 @@ import { detectAvailableTerminals, findTerminalPath, getTerminalPreference, isWi
 import { startPoller } from '../core/poller.js';
 import { getEffectiveRepoMapping, getScannedRepos } from '../core/repo-scanner.js';
 import { Octokit } from 'octokit';
-import { completeTask, createTask, deleteTask, failTask, getAllTasks, getAllTasksWithOutput, getTask, getTasksWithPids, retryTask } from '../core/task-queue.js';
+import { completeTask, createTask, deleteTask, failTask, getAllTasks, getAllTasksWithOutput, getTask, getTasksWithPids, retryTask, updateTaskRepoPath } from '../core/task-queue.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
 import { getCurrentAdoUser, getMyAdoWorkItems, getMyGitHubPRs, getMyResolvedWorkItems, getReviewedItemsInSprint, getTeamMembers, getWorkItemsBySprints, type OwnerFilter } from '../core/user-items.js';
 import { adoRouter } from './webhooks/ado.js';
@@ -173,6 +173,29 @@ app.post('/api/tasks/:id/retry', (req, res) => {
   triggerUpdate();
   broadcastTasks();
   res.json({ taskId: newTask.id, message: `Retry task #${newTask.id} created (attempt ${newTask.context.retryCount})` });
+});
+
+// Set repo path for needs-repo tasks
+app.put('/api/tasks/:id/repo-path', (req, res) => {
+  const id = parseInt(req.params.id);
+  const task = getTask(id);
+  if (!task) {
+    res.status(404).json({ error: 'Task not found' });
+    return;
+  }
+  if (task.status !== 'needs-repo') {
+    res.status(400).json({ error: 'Task not in needs-repo state' });
+    return;
+  }
+  const { repoPath } = req.body;
+  if (!repoPath || typeof repoPath !== 'string') {
+    res.status(400).json({ error: 'repoPath required' });
+    return;
+  }
+  updateTaskRepoPath(id, repoPath);
+  triggerUpdate();
+  broadcastTasks();
+  res.json({ success: true });
 });
 
 // Complete task manually (for terminal mode)

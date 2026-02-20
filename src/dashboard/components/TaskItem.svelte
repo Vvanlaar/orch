@@ -12,6 +12,7 @@
     retryTask,
     completeTask,
     openTerminal,
+    setRepoPath,
   } from '../stores/tasks.svelte';
 
   interface Props {
@@ -24,15 +25,28 @@
   let output = $derived(getTaskOutput(task.id) || task.streamingOutput || task.result || task.error || '');
 
   let steerInput = $state('');
+  let repoPathInput = $state('');
 
   let isRunning = $derived(task.status === 'running');
   let isFailed = $derived(task.status === 'failed');
+  let needsRepo = $derived(task.status === 'needs-repo');
   let canDelete = $derived(task.status !== 'running');
   let hasOutput = $derived(!!output);
   let retryInfo = $derived(task.context?.retryCount ? ` (retry #${task.context.retryCount})` : '');
 
   // Extract repo from GitHub PR URL only
   let repos = $derived(extractRepoFromGitHubUrl(task.context?.url) || '');
+
+  async function handleSetRepoPath(e: Event) {
+    e.stopPropagation();
+    if (!repoPathInput.trim()) return;
+    try {
+      await setRepoPath(task.id, repoPathInput.trim());
+      repoPathInput = '';
+    } catch (err: any) {
+      alert('Failed: ' + err.message);
+    }
+  }
 
   function handleToggle() {
     toggleExpanded(task.id);
@@ -138,6 +152,19 @@
     {/if}
   </div>
 
+  {#if needsRepo}
+    <div class="repo-path-input">
+      <span class="repo-label">Repo path not found. Enter local path:</span>
+      <input
+        type="text"
+        placeholder="/path/to/repo"
+        bind:value={repoPathInput}
+        onkeydown={(e) => e.key === 'Enter' && handleSetRepoPath(e)}
+      />
+      <button class="action-btn" onclick={handleSetRepoPath}>Set Path</button>
+    </div>
+  {/if}
+
   {#if isRunning}
     <div class="steer-input" class:visible={expanded}>
       <input
@@ -206,6 +233,11 @@
   .task-status.failed {
     background: #f8514920;
     color: #f85149;
+  }
+
+  .task-status.needs-repo {
+    background: #8b949e20;
+    color: #8b949e;
   }
 
   .task-info {
@@ -302,6 +334,37 @@
   }
 
   .steer-input input:focus {
+    outline: none;
+    border-color: #58a6ff;
+  }
+
+  .repo-path-input {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-top: 1px solid #21262d;
+    background: #161b22;
+  }
+
+  .repo-label {
+    font-size: 12px;
+    color: #8b949e;
+    white-space: nowrap;
+  }
+
+  .repo-path-input input {
+    flex: 1;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    color: #c9d1d9;
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-family: 'Monaco', 'Consolas', monospace;
+    font-size: 12px;
+  }
+
+  .repo-path-input input:focus {
     outline: none;
     border-color: #58a6ff;
   }

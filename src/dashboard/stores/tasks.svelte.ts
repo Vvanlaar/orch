@@ -103,3 +103,15 @@ export async function openTerminal(taskId: number) {
     throw new Error(result.error);
   }
 }
+
+export async function setRepoPath(taskId: number, repoPath: string) {
+  const res = await fetch(`/api/tasks/${taskId}/repo-path`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ repoPath }),
+  });
+  if (!res.ok) {
+    const result = await res.json();
+    throw new Error(result.error);
+  }
+}
