@@ -16,7 +16,7 @@ Assign reviewed ADO work items to team members for testing. Distributes items ev
 ### 1. Fetch Reviewed Items
 
 ```bash
-curl -s http://localhost:3003/api/sprint/reviewed-items
+curl -s http://localhost:3010/api/sprint/reviewed-items
 ```
 
 Returns JSON with `sprintName` and `items[]` containing:
