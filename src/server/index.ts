@@ -1,7 +1,7 @@
 import cors from 'cors';
 import { exec, execSync, spawn } from 'child_process';
 import express from 'express';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 import { createServer } from 'http';
 import { homedir } from 'os';
 import path, { dirname, join } from 'path';
@@ -11,12 +11,22 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { killTask } from '../core/claude-runner.js';
 import { config } from '../core/config.js';
 import { cloneRepo } from '../core/git-ops.js';
-import { detectAvailableTerminals, findTerminalPath, getTerminalPreference, isWindowsPlatform, setTerminalPreference } from '../core/settings.js';
+import {
+  detectAvailableTerminals,
+  findTerminalPath,
+  getKnownTerminals,
+  getTerminalInteractiveSession,
+  getTerminalPreference,
+  isWindowsPlatform,
+  setTerminalInteractiveSession,
+  setTerminalPreference,
+} from '../core/settings.js';
 import { startPoller } from '../core/poller.js';
 import { getEffectiveRepoMapping, getScannedRepos } from '../core/repo-scanner.js';
 import { Octokit } from 'octokit';
 import { completeTask, createTask, deleteTask, failTask, getAllTasks, getAllTasksWithOutput, getTask, getTasksWithPids, retryTask, updateTaskRepoPath } from '../core/task-queue.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
+import type { TerminalId } from '../core/types.js';
 import { getCurrentAdoUser, getMyAdoWorkItems, getMyGitHubPRs, getMyResolvedWorkItems, getReviewedItemsInSprint, getTeamMembers, getWorkItemsBySprints, type OwnerFilter } from '../core/user-items.js';
 import { adoRouter } from './webhooks/ado.js';
 import { githubRouter } from './webhooks/github.js';
@@ -215,54 +225,39 @@ app.post('/api/tasks/:id/complete', (req, res) => {
   res.json({ success: true });
 });
 
-// Open terminal in task's repo directory
-app.post('/api/tasks/:id/terminal', async (req, res) => {
-  const id = parseInt(req.params.id);
-  const task = getTask(id);
-  if (!task) {
-    res.status(404).json({ error: 'Task not found' });
-    return;
-  }
-  const repoPath = task.repoPath.replace(/\\/g, '/');
-  const title = `Task #${id}: ${task.repo}`;
-  const preferred = getTerminalPreference();
+function resolveWorkspacePath(repoPath: string, ticketId?: number): string {
+  if (!ticketId) return repoPath;
+  const repoName = path.basename(repoPath);
+  const worktreeBase = path.join(repoPath, '..', '.orch-worktrees', repoName);
+  if (!existsSync(worktreeBase)) return repoPath;
+  const match = readdirSync(worktreeBase).find(e => e.startsWith(String(ticketId)));
+  return match ? path.join(worktreeBase, match) : repoPath;
+}
+
+async function openShellAtPath(shellPath: string, title: string): Promise<{ success: boolean; terminal?: string; hint?: string; error?: string }> {
+  const sessionId = `orch-term-${Date.now()}`;
   const encode = (cmd: string) => Buffer.from(cmd, 'utf16le').toString('base64');
-  const escapePsSingleQuoted = (value: string) => value.replace(/'/g, "''");
-  const psCommand = `Set-Location -LiteralPath '${escapePsSingleQuoted(task.repoPath)}'; $Host.UI.RawUI.WindowTitle='${escapePsSingleQuoted(title)}'`;
-  const encodedPsCommand = encode(psCommand);
+  const escapePsSingle = (v: string) => v.replace(/'/g, "''");
+  const encodedPsCommand = encode(
+    `Set-Location -LiteralPath '${escapePsSingle(shellPath)}'; $Host.UI.RawUI.WindowTitle='${escapePsSingle(title)}'`
+  );
 
   const launchDetached = (command: string, args: string[]): Promise<boolean> =>
     new Promise(resolve => {
       let settled = false;
       try {
-        const proc = spawn(command, args, {
-          detached: true,
-          stdio: 'ignore',
-          windowsHide: false,
-          shell: false,
-        });
-        proc.once('error', () => {
-          if (settled) return;
-          settled = true;
-          resolve(false);
-        });
-        proc.once('spawn', () => {
-          if (settled) return;
-          settled = true;
-          proc.unref();
-          resolve(true);
-        });
-      } catch {
-        resolve(false);
-      }
+        const proc = spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: false, shell: false });
+        proc.once('error', () => { if (!settled) { settled = true; resolve(false); } });
+        proc.once('spawn', () => { if (!settled) { settled = true; proc.unref(); resolve(true); } });
+      } catch { resolve(false); }
     });
 
-  const openTerminal = (terminal: string): Promise<boolean> => {
+  const tryTerminal = (terminal: string): Promise<boolean> => {
     if (isWindowsPlatform()) {
       switch (terminal) {
         case 'wt': {
           const wtExe = findTerminalPath('wt') || 'wt';
-          return launchDetached(wtExe, ['-w', '0', 'nt', '--title', title, '-d', task.repoPath]);
+          return launchDetached(wtExe, ['-w', '0', 'nt', '--title', title, '-d', shellPath]);
         }
         case 'powershell':
           return launchDetached('cmd.exe', ['/c', 'start', title, 'powershell', '-NoExit', '-EncodedCommand', encodedPsCommand]);
@@ -271,64 +266,77 @@ app.post('/api/tasks/:id/terminal', async (req, res) => {
           return launchDetached('cmd.exe', ['/c', 'start', title, pwshExe, '-NoExit', '-EncodedCommand', encodedPsCommand]);
         }
         case 'git-bash':
-          return launchDetached('cmd.exe', ['/c', 'start', title, 'C:\\Program Files\\Git\\git-bash.exe', `--cd=${task.repoPath}`]);
-        case 'cmd':
+          return launchDetached('cmd.exe', ['/c', 'start', title, 'C:\\Program Files\\Git\\git-bash.exe', `--cd=${shellPath}`]);
         default:
-          return launchDetached('cmd.exe', ['/c', 'start', title, 'cmd', '/k', `cd /d "${task.repoPath}"`]);
+          return launchDetached('cmd.exe', ['/c', 'start', title, 'cmd', '/k', `cd /d "${shellPath}"`]);
       }
     }
-
     return new Promise(resolve => {
-      let cmd: string;
-      switch (terminal) {
-        case 'gnome-terminal':
-          cmd = `gnome-terminal --title="${title}" --working-directory="${repoPath}"`;
-          break;
-        case 'xterm':
-          cmd = `xterm -T "${title}" -e "cd '${repoPath}' && exec bash"`;
-          break;
-        case 'tmux':
-          cmd = `tmux new-session -d -s "orch-term-${id}" -c "${repoPath}"`;
-          break;
-        default:
-          cmd = `tmux new-session -d -s "orch-term-${id}" -c "${repoPath}"`;
-          break;
-      }
+      const cmds: Record<string, string> = {
+        'gnome-terminal': `gnome-terminal --title="${title}" --working-directory="${shellPath}"`,
+        'xterm': `xterm -T "${title}" -e "cd '${shellPath}' && exec bash"`,
+      };
+      const cmd = cmds[terminal] ?? `tmux new-session -d -s "${sessionId}" -c "${shellPath}"`;
       exec(cmd, err => resolve(!err));
     });
   };
 
-  // Try preferred terminal, fall back to auto behavior
+  const preferred = getTerminalPreference();
   if (preferred === 'auto') {
     if (isWindowsPlatform()) {
-      // Windows: wt -> cmd
-      if (await openTerminal('wt')) {
-        res.json({ success: true, terminal: 'wt' });
-      } else if (await openTerminal('cmd')) {
-        res.json({ success: true, terminal: 'cmd' });
-      } else {
-        res.status(500).json({ error: 'Failed to open terminal' });
-      }
-    } else {
-      // Linux: gnome-terminal -> xterm -> tmux
-      if (await openTerminal('gnome-terminal')) {
-        res.json({ success: true, terminal: 'gnome-terminal' });
-      } else if (await openTerminal('xterm')) {
-        res.json({ success: true, terminal: 'xterm' });
-      } else if (await openTerminal('tmux')) {
-        res.json({ success: true, terminal: 'tmux', hint: `Attach with: tmux attach -t orch-term-${id}` });
-      } else {
-        res.status(500).json({ error: 'Failed to open terminal. Install gnome-terminal, xterm, or tmux.' });
-      }
+      if (await tryTerminal('wt')) return { success: true, terminal: 'wt' };
+      if (await tryTerminal('cmd')) return { success: true, terminal: 'cmd' };
+      return { success: false, error: 'Failed to open terminal' };
     }
-  } else {
-    if (await openTerminal(preferred)) {
-      const hint = preferred === 'tmux' ? `Attach with: tmux attach -t orch-term-${id}` : undefined;
-      res.json({ success: true, terminal: preferred, hint });
-    } else {
-      res.status(500).json({ error: `Failed to open ${preferred} terminal` });
-    }
+    if (await tryTerminal('gnome-terminal')) return { success: true, terminal: 'gnome-terminal' };
+    if (await tryTerminal('xterm')) return { success: true, terminal: 'xterm' };
+    if (await tryTerminal('tmux')) return { success: true, terminal: 'tmux', hint: `Attach with: tmux attach -t ${sessionId}` };
+    return { success: false, error: 'Failed to open terminal. Install gnome-terminal, xterm, or tmux.' };
   }
+  if (await tryTerminal(preferred)) {
+    const hint = preferred === 'tmux' ? `Attach with: tmux attach -t ${sessionId}` : undefined;
+    return { success: true, terminal: preferred, hint };
+  }
+  return { success: false, error: `Failed to open ${preferred} terminal` };
+}
+
+function sendShellResult(res: express.Response, result: Awaited<ReturnType<typeof openShellAtPath>>): void {
+  if (result.success) {
+    res.json(result);
+  } else {
+    res.status(500).json({ error: result.error });
+  }
+}
+
+// Open terminal in task's repo directory
+app.post('/api/tasks/:id/terminal', async (req, res) => {
+  const id = parseInt(req.params.id);
+  const task = getTask(id);
+  if (!task) {
+    res.status(404).json({ error: 'Task not found' });
+    return;
+  }
+  sendShellResult(res, await openShellAtPath(task.repoPath, `Task #${id}: ${task.repo}`));
+});
+
+app.post('/api/open-terminal', async (req, res) => {
+  const { repoName, workItemId } = req.body as { repoName: string; workItemId?: number };
+  if (!repoName || typeof repoName !== 'string' || /[/\\]|\.\./.test(repoName)) {
+    res.status(400).json({ error: 'Invalid repoName' });
+    return;
+  }
+  if (workItemId !== undefined && (!Number.isInteger(workItemId) || workItemId <= 0)) {
+    res.status(400).json({ error: 'workItemId must be a positive integer' });
+    return;
+  }
+  const basePath = path.resolve(config.repos.baseDir, repoName);
+  if (!existsSync(basePath)) {
+    res.status(404).json({ error: `Repo not found: ${basePath}` });
+    return;
+  }
+  const workspacePath = resolveWorkspacePath(basePath, workItemId);
+  const title = workItemId ? `#${workItemId} ${repoName}` : repoName;
+  sendShellResult(res, await openShellAtPath(workspacePath, title));
 });
 
 function resolveRepoPath(repo: string): { repoPath: string; localFolder: string } | null {
@@ -525,18 +533,41 @@ app.get('/api/system/terminals', (_req, res) => {
 
 app.get('/api/config/terminal', (_req, res) => {
   const preferred = getTerminalPreference();
+  const interactiveSession = getTerminalInteractiveSession();
   const terminals = detectAvailableTerminals();
-  res.json({ preferred, terminals });
+  res.json({ preferred, interactiveSession, terminals });
 });
 
 app.post('/api/config/terminal', (req, res) => {
-  const { terminal } = req.body;
-  if (!terminal) {
-    res.status(400).json({ error: 'terminal is required' });
+  const { terminal, interactiveSession } = req.body as { terminal?: string; interactiveSession?: boolean };
+
+  if (terminal === undefined && interactiveSession === undefined) {
+    res.status(400).json({ error: 'terminal or interactiveSession is required' });
     return;
   }
-  setTerminalPreference(terminal);
-  res.json({ success: true, preferred: terminal });
+
+  if (terminal !== undefined) {
+    const validTerminals = new Set<TerminalId>(getKnownTerminals().map(t => t.id));
+    if (!validTerminals.has(terminal as TerminalId)) {
+      res.status(400).json({ error: 'Invalid terminal id' });
+      return;
+    }
+    setTerminalPreference(terminal as TerminalId);
+  }
+
+  if (interactiveSession !== undefined) {
+    if (typeof interactiveSession !== 'boolean') {
+      res.status(400).json({ error: 'interactiveSession must be boolean' });
+      return;
+    }
+    setTerminalInteractiveSession(interactiveSession);
+  }
+
+  res.json({
+    success: true,
+    preferred: getTerminalPreference(),
+    interactiveSession: getTerminalInteractiveSession(),
+  });
 });
 
 const validOwnerFilters: OwnerFilter[] = ['my', 'unassigned', 'all'];

@@ -3,7 +3,7 @@
   import { readPreference, writePreference } from '../lib/preferences';
   import type { PR, WorkItem, FilterType, OwnerFilter } from '../lib/types';
   import { formatTime, stateClass, typeClass, extractAdoTicket } from '../lib/utils';
-  import { reviewPR, fixPRComments, analyzeWorkItem, reviewResolution } from '../lib/api';
+  import { reviewPR, fixPRComments, analyzeWorkItem, reviewResolution, openTerminalForRepo } from '../lib/api';
   import {
     getFilteredItems,
     setFilter,
@@ -124,6 +124,14 @@
     return items.workItems.filter((wi) => getKanbanColumn(wi.state) === column);
   }
 
+  async function handleOpenTerminal(repoName: string, workItemId?: number) {
+    try {
+      await openTerminalForRepo(repoName, workItemId);
+    } catch (err: any) {
+      alert('Failed: ' + err.message);
+    }
+  }
+
   function setViewMode(mode: ViewMode) {
     viewMode = mode;
     writePreference(VIEW_MODE_STORAGE_KEY, mode);
@@ -211,6 +219,9 @@
                 </button>
               {/if}
               <button class="action-btn" onclick={() => handleReviewPR(key)}>Review</button>
+              <button class="action-btn secondary" title="Open workspace terminal" onclick={() => handleOpenTerminal(pr.repo.split('/')[1])}>
+                &lt;/&gt;
+              </button>
               <a href={pr.url} target="_blank" class="action-btn secondary">View →</a>
             </div>
           </div>
@@ -245,6 +256,11 @@
               {:else}
                 <button class="action-btn" onclick={() => handleAnalyzeWorkItem(wi.id)}>
                   {wi.type.toLowerCase().includes('bug') ? 'Fix' : 'Implement'}
+                </button>
+              {/if}
+              {#if wi.repositories?.length}
+                <button class="action-btn secondary" title="Open workspace terminal" onclick={() => handleOpenTerminal(wi.repositories![0], wi.id)}>
+                  &lt;/&gt;
                 </button>
               {/if}
               {#if wi.githubPrUrl}
@@ -302,6 +318,11 @@
                         {:else}
                           <button class="action-btn" onclick={() => handleAnalyzeWorkItem(wi.id)}>
                             {wi.type.toLowerCase().includes('bug') ? 'Fix' : 'Implement'}
+                          </button>
+                        {/if}
+                        {#if wi.repositories?.length}
+                          <button class="action-btn secondary" title="Open workspace terminal" onclick={() => handleOpenTerminal(wi.repositories![0], wi.id)}>
+                            &lt;/&gt;
                           </button>
                         {/if}
                         {#if wi.githubPrUrl}

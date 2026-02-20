@@ -128,7 +128,7 @@
     </div>
     <div class="task-time">{formatTime(task.createdAt)}</div>
     <div class="task-actions">
-      <button class="action-btn secondary" onclick={handleTerminal}>Terminal</button>
+      <button class="action-btn secondary" onclick={handleTerminal} title="Open terminal">&lt;/&gt;</button>
       {#if isRunning}
         <button class="action-btn done-btn" onclick={handleComplete}>Done</button>
         <button class="action-btn stop-btn" onclick={handleStop}>Stop</button>

@@ -97,6 +97,15 @@ export async function setTerminalConfig(terminal: TerminalId): Promise<void> {
   if (!res.ok) throw new Error('Failed to set terminal config');
 }
 
+export async function setTerminalInteractiveConfig(interactiveSession: boolean): Promise<void> {
+  const res = await fetch('/api/config/terminal', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ interactiveSession }),
+  });
+  if (!res.ok) throw new Error('Failed to set interactive terminal config');
+}
+
 // GitHub org repos
 export async function fetchOrgRepos(): Promise<GitHubRepo[]> {
   const res = await fetch('/api/github/org-repos');
@@ -111,6 +120,18 @@ export async function cloneRepo(cloneUrl: string, targetName: string): Promise<{
     body: JSON.stringify({ cloneUrl, targetName }),
   });
   return res.json();
+}
+
+export async function openTerminalForRepo(repoName: string, workItemId?: number): Promise<void> {
+  const res = await fetch('/api/open-terminal', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ repoName, workItemId }),
+  });
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error || 'Failed to open terminal');
+  }
 }
 
 export async function testWorkitem(wi: WorkItem, selectedRepo?: string): Promise<{ taskId: number; message: string }> {
