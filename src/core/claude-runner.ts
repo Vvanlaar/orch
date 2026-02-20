@@ -6,7 +6,7 @@ import { tmpdir } from 'os';
 import type { Task, TerminalId } from './types.js';
 import { config } from './config.js';
 import { loadLearnings } from './learnings.js';
-import { findTerminalPath, getTerminalPreference, isWindowsPlatform } from './settings.js';
+import { findTerminalPath, getTerminalInteractiveSession, getTerminalPreference, isWindowsPlatform } from './settings.js';
 
 // Process registry for steering running tasks
 const runningProcesses = new Map<number, ChildProcess>();
@@ -22,6 +22,7 @@ export interface ClaudeResult {
 
 export interface RunOptions {
   allowEdits?: boolean; // If true, Claude can make file changes (no --print)
+  workingDir?: string; // Override cwd (for worktree support)
 }
 
 export async function runClaude(task: Task, prompt: string, options: RunOptions = {}): Promise<ClaudeResult> {
@@ -32,7 +33,7 @@ export async function runClaude(task: Task, prompt: string, options: RunOptions 
       : ['--print', '--dangerously-skip-permissions', '-'];
 
     const proc = spawn('claude', args, {
-      cwd: task.repoPath,
+      cwd: options.workingDir ?? task.repoPath,
       shell: true,
       timeout: config.claude.timeout,
     });
@@ -88,7 +89,7 @@ export async function runClaudeStreaming(
       : ['--print', '--dangerously-skip-permissions', '-'];
 
     const proc = spawn('claude', args, {
-      cwd: task.repoPath,
+      cwd: options.workingDir ?? task.repoPath,
       shell: true,
       timeout: config.claude.timeout,
     });
@@ -186,16 +187,20 @@ export async function runClaudeInTerminal(
   const repoPathPosix = task.repoPath.replace(/\\/g, '/');
   const title = `Task #${taskId}: ${task.type}`;
   const preferred = getTerminalPreference();
+  const interactiveSession = getTerminalInteractiveSession();
   const printFlag = options.allowEdits ? '' : '--print ';
   const encode = (cmd: string) => Buffer.from(cmd, 'utf16le').toString('base64');
   const escapePsSingleQuoted = (value: string) => value.replace(/'/g, "''");
   const escapeBashSingleQuoted = (value: string) => value.replace(/'/g, `'\\''`);
 
-  // Bash-based terminals (Linux, git-bash): use $(cat) substitution
-  const bashClaudeCmd = `claude ${printFlag}--dangerously-skip-permissions -p "$(cat '${escapeBashSingleQuoted(promptFilePosix)}')"`;
+  // Use shell substitution/variables so prompt length is not limited by command-line size.
+  const bashClaudeCmd = interactiveSession
+    ? `claude --dangerously-skip-permissions -- "$(cat '${escapeBashSingleQuoted(promptFilePosix)}')"`
+    : `claude ${printFlag}--dangerously-skip-permissions -p "$(cat '${escapeBashSingleQuoted(promptFilePosix)}')"`;
 
-  // PowerShell terminals: pipe file content to stdin (avoids cmd length limits)
-  const psClaudeCmd = `Get-Content -LiteralPath '${escapePsSingleQuoted(promptFile)}' -Raw | claude ${printFlag}--dangerously-skip-permissions -p -`;
+  const psClaudeCmd = interactiveSession
+    ? `$promptText = Get-Content -LiteralPath '${escapePsSingleQuoted(promptFile)}' -Raw; claude --dangerously-skip-permissions -- "$promptText"`
+    : `Get-Content -LiteralPath '${escapePsSingleQuoted(promptFile)}' -Raw | claude ${printFlag}--dangerously-skip-permissions -p -`;
 
   // PowerShell command with Set-Location prefix (used by powershell, pwsh, cmd, and default)
   const psWithCd = `Set-Location -LiteralPath '${escapePsSingleQuoted(task.repoPath)}'; $Host.UI.RawUI.WindowTitle='${escapePsSingleQuoted(title)}'; ${psClaudeCmd}`;
@@ -351,7 +356,19 @@ Use git diff to see the changes, then focus on:
 Be concise and actionable. Format your response as markdown suitable for a PR comment.`;
 }
 
+function buildAdoWorkItemPrompt(verb: string, context: Task['context']): string {
+  return `${verb} ADO work item #${context.workItemId}: ${context.title}
+
+Use /ado-start ${context.workItemId} to fetch the ticket, set up your workspace, explore the codebase, and write a ${verb.toLowerCase() === 'fix' ? 'fix' : 'implementation'} plan.
+
+When done implementing, use /ado-resolve to commit, push, create the PR, and resolve the ticket.`;
+}
+
 export function buildIssueFixPrompt(context: Task['context']): string {
+  if (context.workItemId) {
+    return buildAdoWorkItemPrompt('Fix', context);
+  }
+
   return `Fix this issue by making the necessary code changes:
 
 Title: ${context.title}
@@ -367,6 +384,10 @@ After making changes, provide a brief markdown summary of what was fixed and whi
 }
 
 export function buildCodeGenPrompt(context: Task['context']): string {
+  if (context.workItemId) {
+    return buildAdoWorkItemPrompt('Implement', context);
+  }
+
   return `Implement the following feature by making the necessary code changes:
 
 Title: ${context.title}

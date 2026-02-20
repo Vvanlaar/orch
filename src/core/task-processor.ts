@@ -411,8 +411,9 @@ async function processTask(task: Task): Promise<void> {
   // Determine if this task type should allow code edits
   const allowEdits = ['issue-fix', 'code-gen', 'pipeline-fix'].includes(task.type);
 
-  // Testing tasks always run in terminal mode for interactive plan creation
-  const forceTerminal = task.type === 'testing';
+  // Testing and ADO-backed tasks need terminal mode for interactive skill use
+  const isAdoTask = (task.type === 'code-gen' || task.type === 'issue-fix') && !!task.context.workItemId;
+  const forceTerminal = task.type === 'testing' || isAdoTask;
 
   // Create worktree before Claude runs (streaming mode only)
   let worktreePath: string | null = null;
