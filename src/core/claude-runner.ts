@@ -183,55 +183,111 @@ export async function runClaudeInTerminal(
   writeFileSync(promptFile, prompt, 'utf-8');
 
   const promptFilePosix = promptFile.replace(/\\/g, '/');
-  const repoPath = task.repoPath.replace(/\\/g, '/');
+  const repoPathPosix = task.repoPath.replace(/\\/g, '/');
   const title = `Task #${taskId}: ${task.type}`;
   const preferred = getTerminalPreference();
   const printFlag = options.allowEdits ? '' : '--print ';
+  const encode = (cmd: string) => Buffer.from(cmd, 'utf16le').toString('base64');
+  const escapePsSingleQuoted = (value: string) => value.replace(/'/g, "''");
+  const escapeBashSingleQuoted = (value: string) => value.replace(/'/g, `'\\''`);
 
   // Bash-based terminals (Linux, git-bash): use $(cat) substitution
-  const bashClaudeCmd = `claude ${printFlag}--dangerously-skip-permissions -p "$(cat '${promptFilePosix}')"`;
+  const bashClaudeCmd = `claude ${printFlag}--dangerously-skip-permissions -p "$(cat '${escapeBashSingleQuoted(promptFilePosix)}')"`;
 
   // PowerShell terminals: pipe file content to stdin (avoids cmd length limits)
-  const psClaudeCmd = `Get-Content '${promptFile}' -Raw | claude ${printFlag}--dangerously-skip-permissions -p -`;
+  const psClaudeCmd = `Get-Content -LiteralPath '${escapePsSingleQuoted(promptFile)}' -Raw | claude ${printFlag}--dangerously-skip-permissions -p -`;
 
   // PowerShell command with Set-Location prefix (used by powershell, pwsh, cmd, and default)
-  const psWithCd = `Set-Location '${task.repoPath}'; ${psClaudeCmd}`;
+  const psWithCd = `Set-Location -LiteralPath '${escapePsSingleQuoted(task.repoPath)}'; $Host.UI.RawUI.WindowTitle='${escapePsSingleQuoted(title)}'; ${psClaudeCmd}`;
 
-  // Encode PowerShell commands as base64 UTF-16LE to avoid cmd.exe interpreting | and ; as metacharacters
-  const encode = (cmd: string) => Buffer.from(cmd, 'utf16le').toString('base64');
-
-  function buildTerminalCmd(terminal: TerminalId): string {
+  function buildWindowsLaunch(terminal: TerminalId): { command: string; args: string[] } | null {
     switch (terminal) {
       case 'wt': {
         const wtPath = findTerminalPath('wt') || 'wt';
-        return `"${wtPath}" -w 0 nt --title "${title}" -d "${repoPath}" powershell -NoExit -EncodedCommand ${encode(psClaudeCmd)}`;
+        return {
+          command: wtPath,
+          args: ['-w', '0', 'nt', '--title', title, '-d', task.repoPath, 'powershell', '-NoExit', '-EncodedCommand', encode(psWithCd)],
+        };
       }
       case 'pwsh': {
         const pwshPath = findTerminalPath('pwsh') || 'pwsh';
-        return `start "" "${pwshPath}" -NoExit -EncodedCommand ${encode(psWithCd)}`;
+        return {
+          command: 'cmd.exe',
+          args: ['/c', 'start', title, pwshPath, '-NoExit', '-EncodedCommand', encode(psWithCd)],
+        };
       }
       case 'git-bash':
-        return `start "" "C:\\Program Files\\Git\\git-bash.exe" --cd="${task.repoPath}" -c "${bashClaudeCmd}; exec bash"`;
-      case 'gnome-terminal':
-        return `gnome-terminal --title="${title}" --working-directory="${repoPath}" -- bash -c '${bashClaudeCmd}; exec bash'`;
-      case 'xterm':
-        return `xterm -T "${title}" -e "cd ${repoPath} && ${bashClaudeCmd}; exec bash"`;
-      case 'tmux':
-        return `tmux new-session -d -s "orch-task-${taskId}" -c "${repoPath}" "${bashClaudeCmd}; exec bash"`;
+        return {
+          command: 'cmd.exe',
+          args: ['/c', 'start', title, 'C:\\Program Files\\Git\\git-bash.exe', `--cd=${task.repoPath}`, '-c', `${bashClaudeCmd}; exec bash`],
+        };
       // powershell, cmd, and default all use the same PowerShell launch
       case 'powershell':
       case 'cmd':
       default:
         if (terminal === 'powershell' || terminal === 'cmd' || isWindowsPlatform()) {
-          return `start "${title}" powershell -NoExit -EncodedCommand ${encode(psWithCd)}`;
+          return {
+            command: 'cmd.exe',
+            args: ['/c', 'start', title, 'powershell', '-NoExit', '-EncodedCommand', encode(psWithCd)],
+          };
         }
-        return `tmux new-session -d -s "orch-task-${taskId}" -c "${repoPath}" "${bashClaudeCmd}; exec bash"`;
+        return null;
+    }
+  }
+
+  function buildNonWindowsTerminalCmd(terminal: TerminalId): string | null {
+    switch (terminal) {
+      case 'gnome-terminal':
+        return `gnome-terminal --title="${title}" --working-directory="${repoPathPosix}" -- bash -c '${bashClaudeCmd}; exec bash'`;
+      case 'xterm':
+        return `xterm -T "${title}" -e "cd '${repoPathPosix}' && ${bashClaudeCmd}; exec bash"`;
+      case 'tmux':
+        return `tmux new-session -d -s "orch-task-${taskId}" -c "${repoPathPosix}" "${bashClaudeCmd}; exec bash"`;
+      default:
+        return null;
     }
   }
 
   function tryTerminal(terminal: TerminalId): Promise<{ success: boolean; terminal: TerminalId }> {
     return new Promise(resolve => {
-      exec(buildTerminalCmd(terminal), err => {
+      if (isWindowsPlatform()) {
+        const launch = buildWindowsLaunch(terminal);
+        if (!launch) {
+          resolve({ success: false, terminal });
+          return;
+        }
+
+        let settled = false;
+        try {
+          const proc = spawn(launch.command, launch.args, {
+            detached: true,
+            stdio: 'ignore',
+            windowsHide: false,
+            shell: false,
+          });
+          proc.once('error', () => {
+            if (settled) return;
+            settled = true;
+            resolve({ success: false, terminal });
+          });
+          proc.once('spawn', () => {
+            if (settled) return;
+            settled = true;
+            proc.unref();
+            resolve({ success: true, terminal });
+          });
+        } catch {
+          resolve({ success: false, terminal });
+        }
+        return;
+      }
+
+      const cmd = buildNonWindowsTerminalCmd(terminal);
+      if (!cmd) {
+        resolve({ success: false, terminal });
+        return;
+      }
+      exec(cmd, err => {
         resolve({ success: !err, terminal });
       });
     });
@@ -276,7 +332,7 @@ export async function runClaudeInTerminal(
   }
 
   console.error(`[terminal] Failed to open terminal for task #${taskId}`);
-  return { success: false, output: '', error: 'Failed to open terminal window. Install gnome-terminal, xterm, or tmux.' };
+  return { success: false, output: '', error: 'Failed to open terminal window. Check terminal selection in Settings.' };
 }
 
 export function buildPrReviewPrompt(context: Task['context']): string {

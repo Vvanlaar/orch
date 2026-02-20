@@ -1,5 +1,5 @@
 import cors from 'cors';
-import { execSync } from 'child_process';
+import { exec, execSync, spawn } from 'child_process';
 import express from 'express';
 import { existsSync, readFileSync } from 'fs';
 import { createServer } from 'http';
@@ -200,35 +200,64 @@ app.post('/api/tasks/:id/terminal', async (req, res) => {
     res.status(404).json({ error: 'Task not found' });
     return;
   }
-  const { exec } = await import('child_process');
   const repoPath = task.repoPath.replace(/\\/g, '/');
   const title = `Task #${id}: ${task.repo}`;
   const preferred = getTerminalPreference();
+  const encode = (cmd: string) => Buffer.from(cmd, 'utf16le').toString('base64');
+  const escapePsSingleQuoted = (value: string) => value.replace(/'/g, "''");
+  const psCommand = `Set-Location -LiteralPath '${escapePsSingleQuoted(task.repoPath)}'; $Host.UI.RawUI.WindowTitle='${escapePsSingleQuoted(title)}'`;
+  const encodedPsCommand = encode(psCommand);
+
+  const launchDetached = (command: string, args: string[]): Promise<boolean> =>
+    new Promise(resolve => {
+      let settled = false;
+      try {
+        const proc = spawn(command, args, {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: false,
+          shell: false,
+        });
+        proc.once('error', () => {
+          if (settled) return;
+          settled = true;
+          resolve(false);
+        });
+        proc.once('spawn', () => {
+          if (settled) return;
+          settled = true;
+          proc.unref();
+          resolve(true);
+        });
+      } catch {
+        resolve(false);
+      }
+    });
 
   const openTerminal = (terminal: string): Promise<boolean> => {
+    if (isWindowsPlatform()) {
+      switch (terminal) {
+        case 'wt': {
+          const wtExe = findTerminalPath('wt') || 'wt';
+          return launchDetached(wtExe, ['-w', '0', 'nt', '--title', title, '-d', task.repoPath]);
+        }
+        case 'powershell':
+          return launchDetached('cmd.exe', ['/c', 'start', title, 'powershell', '-NoExit', '-EncodedCommand', encodedPsCommand]);
+        case 'pwsh': {
+          const pwshExe = findTerminalPath('pwsh') || 'pwsh';
+          return launchDetached('cmd.exe', ['/c', 'start', title, pwshExe, '-NoExit', '-EncodedCommand', encodedPsCommand]);
+        }
+        case 'git-bash':
+          return launchDetached('cmd.exe', ['/c', 'start', title, 'C:\\Program Files\\Git\\git-bash.exe', `--cd=${task.repoPath}`]);
+        case 'cmd':
+        default:
+          return launchDetached('cmd.exe', ['/c', 'start', title, 'cmd', '/k', `cd /d "${task.repoPath}"`]);
+      }
+    }
+
     return new Promise(resolve => {
       let cmd: string;
       switch (terminal) {
-        // Windows terminals
-        case 'wt': {
-          const wtExe = findTerminalPath('wt');
-          const wtCmd = wtExe ? `"${wtExe}"` : 'wt';
-          cmd = `${wtCmd} -w 0 nt --title "${title}" -d "${repoPath}"`;
-          break;
-        }
-        case 'powershell':
-          cmd = `start powershell -NoExit -Command "Set-Location '${task.repoPath}'; $Host.UI.RawUI.WindowTitle='${title}'"`;
-          break;
-        case 'pwsh': {
-          const pwshExe = findTerminalPath('pwsh');
-          const pwshCmd = pwshExe ? `"${pwshExe}"` : 'pwsh';
-          cmd = `start "" ${pwshCmd} -NoExit -Command "Set-Location '${task.repoPath}'; $Host.UI.RawUI.WindowTitle='${title}'"`;
-          break;
-        }
-        case 'git-bash':
-          cmd = `start "" "C:\\Program Files\\Git\\git-bash.exe" --cd="${task.repoPath}"`;
-          break;
-        // Linux terminals
         case 'gnome-terminal':
           cmd = `gnome-terminal --title="${title}" --working-directory="${repoPath}"`;
           break;
@@ -238,14 +267,8 @@ app.post('/api/tasks/:id/terminal', async (req, res) => {
         case 'tmux':
           cmd = `tmux new-session -d -s "orch-term-${id}" -c "${repoPath}"`;
           break;
-        case 'cmd':
         default:
-          if (isWindowsPlatform()) {
-            cmd = `start "${title}" cmd /k "cd /d ${task.repoPath}"`;
-          } else {
-            // Linux fallback: tmux
-            cmd = `tmux new-session -d -s "orch-term-${id}" -c "${repoPath}"`;
-          }
+          cmd = `tmux new-session -d -s "orch-term-${id}" -c "${repoPath}"`;
           break;
       }
       exec(cmd, err => resolve(!err));
