@@ -9,7 +9,7 @@ After each code change, use the code-simplifier and review skills. Fix any error
 ## Commands
 - `npm run dev` - Server + dashboard (hot reload)
 - `npm run dev:server` - Server only (hot reload)
-- `npm run dev:dashboard` - Vite dev server (:5173, proxies to :3004)
+- `npm run dev:dashboard` - Vite dev server (:5173, proxies to :3011)
 - `npm run build` - Build all
 - `npm test` - Run tests
 
