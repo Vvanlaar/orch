@@ -3,7 +3,7 @@
   import { readPreference, writePreference } from '../lib/preferences';
   import type { PR, WorkItem, FilterType, OwnerFilter } from '../lib/types';
   import { formatTime, stateClass, typeClass, extractAdoTicket } from '../lib/utils';
-  import { reviewPR, fixPRComments, analyzeWorkItem, reviewResolution, openTerminalForRepo } from '../lib/api';
+  import { reviewPR, fixPRComments, analyzeWorkItem, reviewResolution, openTerminalForRepo, openTerminalWithCommand } from '../lib/api';
   import {
     getFilteredItems,
     setFilter,
@@ -122,6 +122,14 @@
 
   function getKanbanItems(column: KanbanColumnKey): WorkItem[] {
     return items.workItems.filter((wi) => getKanbanColumn(wi.state) === column);
+  }
+
+  async function handleInvestigate(wi: WorkItem) {
+    try {
+      await openTerminalWithCommand(`claude "investigate ticket #${wi.id}"`, `Investigate #${wi.id}`);
+    } catch (err: any) {
+      alert('Failed: ' + err.message);
+    }
   }
 
   async function handleOpenTerminal(repoName: string, workItemId?: number) {
@@ -251,6 +259,7 @@
               </div>
             </div>
             <div class="item-actions">
+              <button class="action-btn secondary" title="Investigate ticket with Claude" onclick={() => handleInvestigate(wi)}>Inv</button>
               {#if isResolvedWithPR(wi)}
                 <button class="action-btn" onclick={() => handleReviewResolution(wi.id)}>Review</button>
               {:else}
@@ -313,6 +322,7 @@
                         </div>
                       {/if}
                       <div class="kanban-actions">
+                        <button class="action-btn secondary" title="Investigate ticket with Claude" onclick={() => handleInvestigate(wi)}>Inv</button>
                         {#if isResolvedWithPR(wi)}
                           <button class="action-btn" onclick={() => handleReviewResolution(wi.id)}>Review</button>
                         {:else}
