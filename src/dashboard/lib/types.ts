@@ -85,5 +85,6 @@ export interface Terminal {
 
 export interface TerminalConfig {
   preferred: TerminalId;
+  interactiveSession: boolean;
   terminals: Terminal[];
 }

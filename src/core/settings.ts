@@ -8,6 +8,7 @@ const SETTINGS_FILE = join(process.cwd(), '.orch-settings.json');
 
 interface Settings {
   preferredTerminal?: TerminalId;
+  terminalInteractiveSession?: boolean;
 }
 
 const isWindows = process.platform === 'win32';
@@ -49,6 +50,17 @@ export function getTerminalPreference(): TerminalId {
 export function setTerminalPreference(terminal: TerminalId): void {
   const settings = loadSettings();
   settings.preferredTerminal = terminal;
+  saveSettings(settings);
+}
+
+export function getTerminalInteractiveSession(): boolean {
+  const settings = loadSettings();
+  return settings.terminalInteractiveSession ?? true;
+}
+
+export function setTerminalInteractiveSession(interactive: boolean): void {
+  const settings = loadSettings();
+  settings.terminalInteractiveSession = interactive;
   saveSettings(settings);
 }
 

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { getConnectionState } from '../stores/websocket.svelte';
   import { getUsage, formatResetTime } from '../stores/usage.svelte';
-  import { getSettings, fetchTerminalConfig, detectTerminals, selectTerminal } from '../stores/settings.svelte';
+  import { getSettings, fetchTerminalConfig, detectTerminals, selectInteractiveSession, selectTerminal } from '../stores/settings.svelte';
   import type { TerminalId } from '../lib/types';
   import { onMount } from 'svelte';
 
@@ -33,6 +33,11 @@
     selectTerminal(terminal);
   }
 
+  function handleInteractiveToggle(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    selectInteractiveSession(input.checked);
+  }
+
   function handleClickOutside(e: MouseEvent) {
     const target = e.target as HTMLElement;
     if (!target.closest('.settings-container')) {
@@ -41,6 +46,7 @@
   }
 
   onMount(() => {
+    fetchTerminalConfig();
     document.addEventListener('click', handleClickOutside);
     return () => document.removeEventListener('click', handleClickOutside);
   });
@@ -57,6 +63,14 @@
       <progress class="dim" value={usage7d} max="100" title={reset7d}></progress>
       <span class="pct">{usage7d}%</span>
     </div>
+    <label class="toggle-wrap" title="When enabled, Fix/Implement tasks open Claude in interactive terminal mode.">
+      <input
+        type="checkbox"
+        checked={settings.interactiveSession}
+        onchange={handleInteractiveToggle}
+      />
+      <span>Interactive Claude</span>
+    </label>
     <div class="settings-container">
       <button class="settings-btn" onclick={toggleSettings} title="Settings">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
@@ -142,6 +156,20 @@
 
   .pct {
     min-width: 32px;
+  }
+
+  .toggle-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #8b949e;
+    user-select: none;
+  }
+
+  .toggle-wrap input {
+    accent-color: #238636;
+    cursor: pointer;
   }
 
   .status {

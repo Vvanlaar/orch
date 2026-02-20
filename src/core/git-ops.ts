@@ -170,6 +170,34 @@ export async function createGitHubPR(
   }
 }
 
+export function getWorktreePath(repoPath: string, branchName: string): string {
+  const repoName = path.basename(repoPath);
+  const branchSlug = branchName.replace(/\//g, '-');
+  return path.join(repoPath, '..', '.orch-worktrees', repoName, branchSlug);
+}
+
+export function createWorktree(repoPath: string, branchName: string, baseBranch?: string): string | null {
+  try {
+    const worktreePath = getWorktreePath(repoPath, branchName);
+    const base = baseBranch || getDefaultBranch(repoPath);
+    execSync('git fetch origin', { cwd: repoPath, stdio: 'pipe' });
+    execSync(`git worktree add "${worktreePath}" -b "${branchName}" "origin/${base}"`, { cwd: repoPath, stdio: 'pipe' });
+    return worktreePath;
+  } catch (err) {
+    console.error('[GitOps] Failed to create worktree:', err);
+    return null;
+  }
+}
+
+export function removeWorktree(repoPath: string, worktreePath: string): void {
+  try {
+    execSync(`git worktree remove --force "${worktreePath}"`, { cwd: repoPath, stdio: 'pipe' });
+    execSync('git worktree prune', { cwd: repoPath, stdio: 'pipe' });
+  } catch (err) {
+    console.error('[GitOps] Failed to remove worktree:', err);
+  }
+}
+
 export function cloneRepo(cloneUrl: string, targetName: string): boolean {
   const targetPath = path.resolve(config.repos.baseDir, targetName);
   try {
