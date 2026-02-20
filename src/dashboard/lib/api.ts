@@ -122,6 +122,18 @@ export async function cloneRepo(cloneUrl: string, targetName: string): Promise<{
   return res.json();
 }
 
+export async function openTerminalWithCommand(command: string, title?: string): Promise<void> {
+  const res = await fetch('/api/terminal/run-command', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ command, title }),
+  });
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error || 'Failed to open terminal');
+  }
+}
+
 export async function openTerminalForRepo(repoName: string, workItemId?: number): Promise<void> {
   const res = await fetch('/api/open-terminal', {
     method: 'POST',

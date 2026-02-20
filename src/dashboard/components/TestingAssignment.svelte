@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { WorkItem, GitHubRepo } from '../lib/types';
   import { typeClass, extractRepoFromGitHubUrl } from '../lib/utils';
-  import { testWorkitem } from '../lib/api';
+  import { testWorkitem, openTerminalWithCommand } from '../lib/api';
   import {
     getReviewedItems,
     getMyTestingItems,
@@ -45,20 +45,17 @@
     writePreference(SHOW_OTHERS_STORAGE_KEY, showOthers);
   }
 
-  function handleCopyCommand() {
+  async function handleOpenTerminal() {
     const cmd = generateAssignCommand();
     if (!cmd) {
-      if (selectedTeamMembers.size === 0) {
-        alert('Select at least one team member');
-      } else {
-        alert('No reviewed items to assign');
-      }
+      alert(selectedTeamMembers.size === 0 ? 'Select at least one team member' : 'No reviewed items to assign');
       return;
     }
-    navigator.clipboard.writeText(cmd).then(
-      () => alert(`Copied to clipboard:\n${cmd}\n\nPaste in Claude Code to run the skill.`),
-      () => prompt('Copy this command:', cmd)
-    );
+    try {
+      await openTerminalWithCommand(cmd, 'Assign Testing');
+    } catch (err) {
+      alert(`Failed to open terminal: ${err}`);
+    }
   }
 
   async function handleTest(wi: WorkItem) {
@@ -267,7 +264,7 @@
     <div class="assign-controls">
       <button class="action-btn secondary" onclick={selectAllTeam}>All</button>
       <button class="action-btn secondary" onclick={deselectAllTeam}>None</button>
-      <button class="action-btn" onclick={handleCopyCommand}>Copy Command</button>
+      <button class="action-btn" onclick={handleOpenTerminal}>Open Terminal</button>
     </div>
   </div>
 </div>

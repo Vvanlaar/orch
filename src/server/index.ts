@@ -1,9 +1,9 @@
 import cors from 'cors';
 import { exec, execSync, spawn } from 'child_process';
 import express from 'express';
-import { existsSync, readFileSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'fs';
 import { createServer } from 'http';
-import { homedir } from 'os';
+import { homedir, tmpdir } from 'os';
 import path, { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -225,6 +225,46 @@ app.post('/api/tasks/:id/complete', (req, res) => {
   res.json({ success: true });
 });
 
+function launchDetached(command: string, args: string[]): Promise<boolean> {
+  return new Promise(resolve => {
+    let settled = false;
+    try {
+      const proc = spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: false, shell: false });
+      proc.once('error', () => { if (!settled) { settled = true; resolve(false); } });
+      proc.once('spawn', () => { if (!settled) { settled = true; proc.unref(); resolve(true); } });
+    } catch { resolve(false); }
+  });
+}
+
+type ShellResult = { success: boolean; terminal?: string; hint?: string; error?: string };
+
+async function tryTerminalFallbacks(
+  tryTerminal: (terminal: string) => Promise<boolean>,
+  windowsFallbacks: string[],
+  linuxFallbacks: string[],
+  sessionId?: string,
+): Promise<ShellResult> {
+  const preferred = getTerminalPreference();
+  const fallbacks = isWindowsPlatform() ? windowsFallbacks : linuxFallbacks;
+
+  if (preferred === 'auto') {
+    for (const terminal of fallbacks) {
+      if (await tryTerminal(terminal)) {
+        const hint = terminal === 'tmux' && sessionId ? `Attach with: tmux attach -t ${sessionId}` : undefined;
+        return { success: true, terminal, hint };
+      }
+    }
+    const msg = isWindowsPlatform() ? 'Failed to open terminal' : 'Failed to open terminal. Install gnome-terminal or xterm.';
+    return { success: false, error: msg };
+  }
+
+  if (await tryTerminal(preferred)) {
+    const hint = preferred === 'tmux' && sessionId ? `Attach with: tmux attach -t ${sessionId}` : undefined;
+    return { success: true, terminal: preferred, hint };
+  }
+  return { success: false, error: `Failed to open ${preferred} terminal` };
+}
+
 function resolveWorkspacePath(repoPath: string, ticketId?: number): string {
   if (!ticketId) return repoPath;
   const repoName = path.basename(repoPath);
@@ -234,23 +274,13 @@ function resolveWorkspacePath(repoPath: string, ticketId?: number): string {
   return match ? path.join(worktreeBase, match) : repoPath;
 }
 
-async function openShellAtPath(shellPath: string, title: string): Promise<{ success: boolean; terminal?: string; hint?: string; error?: string }> {
+async function openShellAtPath(shellPath: string, title: string): Promise<ShellResult> {
   const sessionId = `orch-term-${Date.now()}`;
   const encode = (cmd: string) => Buffer.from(cmd, 'utf16le').toString('base64');
   const escapePsSingle = (v: string) => v.replace(/'/g, "''");
   const encodedPsCommand = encode(
     `Set-Location -LiteralPath '${escapePsSingle(shellPath)}'; $Host.UI.RawUI.WindowTitle='${escapePsSingle(title)}'`
   );
-
-  const launchDetached = (command: string, args: string[]): Promise<boolean> =>
-    new Promise(resolve => {
-      let settled = false;
-      try {
-        const proc = spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: false, shell: false });
-        proc.once('error', () => { if (!settled) { settled = true; resolve(false); } });
-        proc.once('spawn', () => { if (!settled) { settled = true; proc.unref(); resolve(true); } });
-      } catch { resolve(false); }
-    });
 
   const tryTerminal = (terminal: string): Promise<boolean> => {
     if (isWindowsPlatform()) {
@@ -260,15 +290,15 @@ async function openShellAtPath(shellPath: string, title: string): Promise<{ succ
           return launchDetached(wtExe, ['-w', '0', 'nt', '--title', title, '-d', shellPath]);
         }
         case 'powershell':
-          return launchDetached('cmd.exe', ['/c', 'start', title, 'powershell', '-NoExit', '-EncodedCommand', encodedPsCommand]);
+          return launchDetached('cmd.exe', ['/c', 'start', `"${title}"`, 'powershell', '-NoExit', '-EncodedCommand', encodedPsCommand]);
         case 'pwsh': {
           const pwshExe = findTerminalPath('pwsh') || 'pwsh';
-          return launchDetached('cmd.exe', ['/c', 'start', title, pwshExe, '-NoExit', '-EncodedCommand', encodedPsCommand]);
+          return launchDetached('cmd.exe', ['/c', 'start', `"${title}"`, pwshExe, '-NoExit', '-EncodedCommand', encodedPsCommand]);
         }
         case 'git-bash':
-          return launchDetached('cmd.exe', ['/c', 'start', title, 'C:\\Program Files\\Git\\git-bash.exe', `--cd=${shellPath}`]);
+          return launchDetached('cmd.exe', ['/c', 'start', `"${title}"`, 'C:\\Program Files\\Git\\git-bash.exe', `--cd=${shellPath}`]);
         default:
-          return launchDetached('cmd.exe', ['/c', 'start', title, 'cmd', '/k', `cd /d "${shellPath}"`]);
+          return launchDetached('cmd.exe', ['/c', 'start', `"${title}"`, 'cmd', '/k', `cd /d "${shellPath}"`]);
       }
     }
     return new Promise(resolve => {
@@ -281,23 +311,51 @@ async function openShellAtPath(shellPath: string, title: string): Promise<{ succ
     });
   };
 
-  const preferred = getTerminalPreference();
-  if (preferred === 'auto') {
+  return tryTerminalFallbacks(tryTerminal, ['wt', 'cmd'], ['gnome-terminal', 'xterm', 'tmux'], sessionId);
+}
+
+async function openShellWithCommand(cmd: string, title: string): Promise<ShellResult> {
+  const tmpFile = path.join(tmpdir(), `orch-cmd-${Date.now()}.sh`);
+  const escaped = cmd.replace(/\\/g, '\\\\').replace(/\$/g, '\\$').replace(/`/g, '\\`').replace(/"/g, '\\"');
+  const script = `#!/bin/bash\necho "Press Enter to run (or edit):"\nread -e -p "$ " -i "${escaped}" input\neval "$input"\nrm -- "$0"\nexec bash\n`;
+  writeFileSync(tmpFile, script, { mode: 0o755 });
+
+  const unixPath = tmpFile.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_, d) => `/${d.toLowerCase()}`);
+  const qtitle = `"${title}"`;
+
+  const tryTerminal = (terminal: string): Promise<boolean> => {
     if (isWindowsPlatform()) {
-      if (await tryTerminal('wt')) return { success: true, terminal: 'wt' };
-      if (await tryTerminal('cmd')) return { success: true, terminal: 'cmd' };
-      return { success: false, error: 'Failed to open terminal' };
+      switch (terminal) {
+        case 'wt': {
+          const wtExe = findTerminalPath('wt') || 'wt';
+          return launchDetached(wtExe, ['-w', '0', 'nt', '--title', title, '--', 'bash', unixPath]);
+        }
+        case 'git-bash':
+          return launchDetached('cmd.exe', ['/c', 'start', qtitle, 'C:\\Program Files\\Git\\git-bash.exe', '--', unixPath]);
+        case 'powershell':
+          return launchDetached('cmd.exe', ['/c', 'start', qtitle, 'powershell', '-NoExit', '-Command', `bash '${unixPath}'`]);
+        case 'pwsh': {
+          const pwshExe = findTerminalPath('pwsh') || 'pwsh';
+          return launchDetached('cmd.exe', ['/c', 'start', qtitle, pwshExe, '-NoExit', '-Command', `bash '${unixPath}'`]);
+        }
+        default:
+          return launchDetached('cmd.exe', ['/c', 'start', qtitle, 'bash', unixPath]);
+      }
     }
-    if (await tryTerminal('gnome-terminal')) return { success: true, terminal: 'gnome-terminal' };
-    if (await tryTerminal('xterm')) return { success: true, terminal: 'xterm' };
-    if (await tryTerminal('tmux')) return { success: true, terminal: 'tmux', hint: `Attach with: tmux attach -t ${sessionId}` };
-    return { success: false, error: 'Failed to open terminal. Install gnome-terminal, xterm, or tmux.' };
+    return new Promise(resolve => {
+      const cmds: Record<string, string> = {
+        'gnome-terminal': `gnome-terminal --title="${title}" -- bash "${unixPath}"`,
+        'xterm': `xterm -T "${title}" -e "bash '${unixPath}'"`,
+      };
+      exec(cmds[terminal] ?? `bash "${unixPath}"`, err => resolve(!err));
+    });
+  };
+
+  const result = await tryTerminalFallbacks(tryTerminal, ['wt', 'git-bash', 'cmd'], ['gnome-terminal', 'xterm']);
+  if (!result.success) {
+    try { unlinkSync(tmpFile); } catch {}
   }
-  if (await tryTerminal(preferred)) {
-    const hint = preferred === 'tmux' ? `Attach with: tmux attach -t ${sessionId}` : undefined;
-    return { success: true, terminal: preferred, hint };
-  }
-  return { success: false, error: `Failed to open ${preferred} terminal` };
+  return result;
 }
 
 function sendShellResult(res: express.Response, result: Awaited<ReturnType<typeof openShellAtPath>>): void {
@@ -337,6 +395,12 @@ app.post('/api/open-terminal', async (req, res) => {
   const workspacePath = resolveWorkspacePath(basePath, workItemId);
   const title = workItemId ? `#${workItemId} ${repoName}` : repoName;
   sendShellResult(res, await openShellAtPath(workspacePath, title));
+});
+
+app.post('/api/terminal/run-command', async (req, res) => {
+  const { command, title } = req.body as { command: string; title?: string };
+  if (!command) { res.status(400).json({ error: 'command required' }); return; }
+  sendShellResult(res, await openShellWithCommand(command, title ?? 'Orch Command'));
 });
 
 function resolveRepoPath(repo: string): { repoPath: string; localFolder: string } | null {
