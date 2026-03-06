@@ -106,6 +106,22 @@ export async function setTerminalInteractiveConfig(interactiveSession: boolean):
   if (!res.ok) throw new Error('Failed to set interactive terminal config');
 }
 
+// Credentials config
+export async function getCredentials(): Promise<Record<string, string>> {
+  const res = await fetch('/api/config/credentials');
+  if (!res.ok) throw new Error('Failed to get credentials');
+  return res.json();
+}
+
+export async function saveCredentials(creds: Record<string, string>): Promise<void> {
+  const res = await fetch('/api/config/credentials', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(creds),
+  });
+  if (!res.ok) throw new Error('Failed to save credentials');
+}
+
 // GitHub org repos
 export async function fetchOrgRepos(): Promise<GitHubRepo[]> {
   const res = await fetch('/api/github/org-repos');
