@@ -38,11 +38,11 @@ jobs:
 
       - name: Fix tar extraction on Windows
         if: runner.os == 'Windows'
-        working-directory: desktop/node_modules/electrobun/.cache
         shell: bash
         run: |
-          if [ -f electrobun-win-x64.tar.gz ] && [ ! -f electrobun.exe ]; then
-            tar --force-local -xzf electrobun-win-x64.tar.gz
+          dir="desktop/node_modules/electrobun/.cache"
+          if [ -d "$dir" ] && [ -f "$dir/electrobun-win-x64.tar.gz" ] && [ ! -f "$dir/electrobun.exe" ]; then
+            tar --force-local -xzf "$dir/electrobun-win-x64.tar.gz" -C "$dir"
           fi
 
       - name: Build desktop app
