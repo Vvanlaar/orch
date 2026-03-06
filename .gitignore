@@ -3,3 +3,5 @@ dist/
 .env
 *.db
 orch-tasks.json
+desktop/build/
+desktop/artifacts/

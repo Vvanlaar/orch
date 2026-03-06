@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "start": "electrobun dev",
-    "build": "electrobun build"
+    "start": "bunx electrobun dev",
+    "build": "bunx electrobun build"
   },
   "dependencies": {
     "electrobun": "latest"

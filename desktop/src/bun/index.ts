@@ -1,4 +1,5 @@
-import { BrowserWindow, Application } from "electrobun/bun";
+import { BrowserWindow, PATHS } from "electrobun/bun";
+import { join } from "path";
 
 const port = process.env.PORT || "3011";
 const SERVER_URL = `http://localhost:${port}`;
@@ -20,20 +21,15 @@ async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
   throw new Error(`Server failed to start within ${timeoutMs}ms`);
 }
 
-// Start the Express server
-await import("../../dist/server/index.js");
+// Start the Express server from bundled dist
+const serverPath = join(PATHS.RESOURCES_FOLDER, "dist", "server", "index.js");
+await import(serverPath);
 
-// Wait for it to be ready
 await waitForServer(SERVER_URL);
 
-// Create the main window
 const mainWindow = new BrowserWindow({
   title: "Orch",
   url: SERVER_URL,
   width: 1280,
   height: 800,
-});
-
-Application.on("will-quit", () => {
-  process.exit(0);
 });
