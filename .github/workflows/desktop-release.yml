@@ -49,14 +49,24 @@ jobs:
         working-directory: desktop
         run: bunx electrobun build --env=stable --targets=${{ matrix.target }}
 
+      - name: Collect release files
+        shell: bash
+        run: |
+          mkdir -p desktop/release
+          # Copy top-level artifacts (zips, tar.zst, json)
+          cp desktop/artifacts/stable-${{ matrix.target }}-*.zip desktop/release/ 2>/dev/null || true
+          cp desktop/artifacts/stable-${{ matrix.target }}-*.tar.zst desktop/release/ 2>/dev/null || true
+          # Copy exe/installer from subdirectory (Windows)
+          cp desktop/artifacts/stable-${{ matrix.target }}-*-Setup/*-Setup.exe desktop/release/ 2>/dev/null || true
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.target }}
-          path: desktop/artifacts/*
+          path: desktop/release/*
 
       - name: Upload to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: desktop/artifacts/*
+          files: desktop/release/*
