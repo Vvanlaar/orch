@@ -11,6 +11,7 @@ import {
   appendStreamingOutput,
   clearStreamingOutput,
   updateTaskPid,
+  updateTaskRepoPath,
   updateTaskStatus,
   getTask,
 } from './task-queue.js';
@@ -382,21 +383,37 @@ function deriveCloneUrl(task: Task): string | null {
   return null;
 }
 
+function resolveOrCloneRepo(task: Task): string | null {
+  const basename = path.basename(task.repoPath);
+  const orchClonePath = path.resolve(config.repos.baseDir, '.orch-clones', basename);
+
+  if (existsSync(path.join(orchClonePath, '.git'))) {
+    console.log(`[Task #${task.id}] Found in .orch-clones/: ${orchClonePath}`);
+    return orchClonePath;
+  }
+
+  const cloneUrl = deriveCloneUrl(task);
+  const clonedPath = cloneUrl ? cloneRepo(cloneUrl, basename) : null;
+  if (clonedPath) {
+    console.log(`[Task #${task.id}] Cloned ${cloneUrl} -> ${clonedPath}`);
+  }
+  return clonedPath;
+}
+
 async function processTask(task: Task): Promise<void> {
   console.log(`Processing task #${task.id} (${task.type}) for ${task.repo}`);
 
-  // Ensure repo folder exists — auto-clone or prompt user
+  // Ensure repo folder exists — check .orch-clones/, then auto-clone
   if (!existsSync(task.repoPath)) {
-    const cloneUrl = deriveCloneUrl(task);
-    const targetName = path.basename(task.repoPath);
-    if (cloneUrl && cloneRepo(cloneUrl, targetName)) {
-      console.log(`[Task #${task.id}] Cloned ${cloneUrl} -> ${task.repoPath}`);
-    } else {
+    const resolvedPath = resolveOrCloneRepo(task);
+    if (!resolvedPath) {
       console.warn(`[Task #${task.id}] Repo not found and clone failed; waiting for user input`);
       updateTaskStatus(task.id, 'needs-repo');
       notifyUpdate();
       return;
     }
+    updateTaskRepoPath(task.id, resolvedPath, false);
+    task.repoPath = resolvedPath;
   }
 
   // Route pr-comment-fix to specialized processor

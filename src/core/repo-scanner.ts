@@ -58,43 +58,50 @@ function parseRemoteUrl(remote: string): { fullName: string; source: 'github' | 
   return { fullName: remote, source: 'unknown' };
 }
 
-export function scanRepos(): RepoInfo[] {
-  const baseDir = resolve(config.repos.baseDir);
+function scanDirectory(dir: string, namePrefix: string): RepoInfo[] {
+  try {
+    if (!existsSync(dir) || !statSync(dir).isDirectory()) return [];
+  } catch { return []; }
+
   const repos: RepoInfo[] = [];
-
-  if (!existsSync(baseDir)) {
-    console.warn(`[Scanner] Base directory not found: ${baseDir}`);
-    return repos;
-  }
-
-  const entries = readdirSync(baseDir);
-
-  for (const entry of entries) {
-    const fullPath = join(baseDir, entry);
-
-    // Skip if not a directory
+  for (const entry of readdirSync(dir)) {
+    try {
+    const fullPath = join(dir, entry);
     if (!statSync(fullPath).isDirectory()) continue;
-
-    // Skip if not a git repo
     if (!existsSync(join(fullPath, '.git'))) continue;
 
     const remote = getGitRemote(fullPath);
     const parsed = remote ? parseRemoteUrl(remote) : { fullName: null, source: 'unknown' as const };
 
-    // Log unrecognized remotes so we can add support for them
     if (remote && parsed.source === 'unknown') {
       console.log(`[Scanner] Unknown remote format for ${entry}: ${remote}`);
     }
 
     repos.push({
       localPath: fullPath,
-      localName: entry,
-      remote: parsed.fullName || entry, // Use local name as fallback
+      localName: namePrefix ? `${namePrefix}/${entry}` : entry,
+      remote: parsed.fullName || entry,
       source: parsed.source,
     });
+    } catch {
+      console.warn(`[Scanner] Failed to scan ${namePrefix ? namePrefix + '/' : ''}${entry}`);
+    }
+  }
+  return repos;
+}
+
+export function scanRepos(): RepoInfo[] {
+  const baseDir = resolve(config.repos.baseDir);
+
+  if (!existsSync(baseDir)) {
+    console.warn(`[Scanner] Base directory not found: ${baseDir}`);
+    return [];
   }
 
-  return repos;
+  return [
+    ...scanDirectory(baseDir, ''),
+    ...scanDirectory(join(baseDir, '.orch-clones'), '.orch-clones'),
+  ];
 }
 
 export function buildRepoMapping(): Record<string, string> {

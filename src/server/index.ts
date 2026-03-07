@@ -379,7 +379,13 @@ app.post('/api/tasks/:id/terminal', async (req, res) => {
 
 app.post('/api/open-terminal', async (req, res) => {
   const { repoName, workItemId } = req.body as { repoName: string; workItemId?: number };
-  if (!repoName || typeof repoName !== 'string' || /[/\\]|\.\./.test(repoName)) {
+  if (!repoName || typeof repoName !== 'string' || /\.\./.test(repoName)) {
+    res.status(400).json({ error: 'Invalid repoName' });
+    return;
+  }
+  // Allow .orch-clones/<name> but reject other path traversal
+  const segments = repoName.replace(/\\/g, '/').split('/');
+  if (segments.length > 2 || (segments.length === 2 && segments[0] !== '.orch-clones')) {
     res.status(400).json({ error: 'Invalid repoName' });
     return;
   }
@@ -545,6 +551,12 @@ app.get('/api/github/org-repos', async (_req, res) => {
     });
     const localRepos = getScannedRepos();
     const localNames = new Set(localRepos.map(r => r.localName));
+    // Also match bare names for .orch-clones/ entries
+    for (const r of localRepos) {
+      if (r.localName.startsWith('.orch-clones/')) {
+        localNames.add(r.localName.slice('.orch-clones/'.length));
+      }
+    }
     const repos = data.map(r => ({
       name: r.name,
       full_name: r.full_name,
@@ -581,9 +593,9 @@ app.post('/api/repos/clone', (req, res) => {
     res.status(400).json({ success: false, error: 'Invalid target name' });
     return;
   }
-  const success = cloneRepo(cloneUrl, targetName);
-  if (success) {
-    res.json({ success: true });
+  const clonedPath = cloneRepo(cloneUrl, targetName);
+  if (clonedPath) {
+    res.json({ success: true, path: clonedPath });
   } else {
     res.status(500).json({ success: false, error: 'Clone failed' });
   }

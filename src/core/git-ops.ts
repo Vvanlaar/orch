@@ -1,4 +1,5 @@
 import { execFileSync, execSync } from 'child_process';
+import { mkdirSync } from 'fs';
 import path from 'path';
 import { Octokit } from 'octokit';
 import { config } from './config.js';
@@ -87,6 +88,7 @@ export function createBranch(repoPath: string, branchName: string, baseBranch?: 
       stdio: 'pipe',
     });
 
+    initSubmodules(repoPath);
     return true;
   } catch (err) {
     console.error('[GitOps] Failed to create branch:', err);
@@ -131,9 +133,18 @@ export function checkoutBranch(repoPath: string, branchName: string): boolean {
       cwd: repoPath,
       stdio: 'pipe',
     });
+    initSubmodules(repoPath);
     return true;
   } catch {
     return false;
+  }
+}
+
+function initSubmodules(cwd: string): void {
+  try {
+    execSync('git submodule update --init --recursive', { cwd, stdio: 'pipe', timeout: 120000 });
+  } catch (err) {
+    console.error('[GitOps] Failed to init submodules:', err);
   }
 }
 
@@ -182,6 +193,7 @@ export function createWorktree(repoPath: string, branchName: string, baseBranch?
     const base = baseBranch || getDefaultBranch(repoPath);
     execSync('git fetch origin', { cwd: repoPath, stdio: 'pipe' });
     execSync(`git worktree add "${worktreePath}" -b "${branchName}" "origin/${base}"`, { cwd: repoPath, stdio: 'pipe' });
+    initSubmodules(worktreePath);
     return worktreePath;
   } catch (err) {
     console.error('[GitOps] Failed to create worktree:', err);
@@ -198,18 +210,20 @@ export function removeWorktree(repoPath: string, worktreePath: string): void {
   }
 }
 
-export function cloneRepo(cloneUrl: string, targetName: string): boolean {
-  const targetPath = path.resolve(config.repos.baseDir, targetName);
+export function cloneRepo(cloneUrl: string, targetName: string): string | null {
+  const clonesDir = path.resolve(config.repos.baseDir, '.orch-clones');
+  const targetPath = path.join(clonesDir, targetName);
   try {
+    mkdirSync(clonesDir, { recursive: true });
     // Use execFileSync to avoid command injection
-    execFileSync('git', ['clone', cloneUrl, targetPath], {
+    execFileSync('git', ['clone', '--recurse-submodules', cloneUrl, targetPath], {
       timeout: 120000,
       stdio: 'pipe',
     });
-    return true;
+    return targetPath;
   } catch (err) {
     console.error('[GitOps] Failed to clone repo:', err);
-    return false;
+    return null;
   }
 }
 

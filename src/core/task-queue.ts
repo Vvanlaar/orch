@@ -106,8 +106,10 @@ export function updateTaskStatus(id: number, status: TaskStatus): void {
   updateTask(id, updates);
 }
 
-export function updateTaskRepoPath(id: number, newPath: string): void {
-  updateTask(id, { repoPath: newPath, status: 'pending' });
+export function updateTaskRepoPath(id: number, newPath: string, resetStatus = true): void {
+  const updates: Record<string, unknown> = { repoPath: newPath };
+  if (resetStatus) updates.status = 'pending';
+  updateTask(id, updates);
 }
 
 export function deleteTask(id: number): boolean {
