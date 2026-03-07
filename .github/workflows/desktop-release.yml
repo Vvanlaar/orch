@@ -1,0 +1,72 @@
+name: Desktop Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: win-x64
+          - os: macos-latest
+            target: macos-arm64
+          - os: ubuntu-latest
+            target: linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install and build server + dashboard
+        run: npm ci && npm run build
+
+      - name: Install desktop deps
+        working-directory: desktop
+        run: bun install
+
+      - name: Fix tar extraction on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          dir="desktop/node_modules/electrobun/.cache"
+          if [ -d "$dir" ] && [ -f "$dir/electrobun-win-x64.tar.gz" ] && [ ! -f "$dir/electrobun.exe" ]; then
+            tar --force-local -xzf "$dir/electrobun-win-x64.tar.gz" -C "$dir"
+          fi
+
+      - name: Build desktop app
+        working-directory: desktop
+        run: bunx electrobun build --env=stable --targets=${{ matrix.target }}
+
+      - name: Collect release files
+        shell: bash
+        run: |
+          mkdir -p desktop/release
+          # Copy top-level artifacts (zips, tar.zst, json)
+          cp desktop/artifacts/stable-${{ matrix.target }}-*.zip desktop/release/ 2>/dev/null || true
+          cp desktop/artifacts/stable-${{ matrix.target }}-*.tar.zst desktop/release/ 2>/dev/null || true
+          # Copy exe/installer from subdirectory (Windows)
+          cp desktop/artifacts/stable-${{ matrix.target }}-*-Setup/*-Setup.exe desktop/release/ 2>/dev/null || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.target }}
+          path: desktop/release/*
+
+      - name: Upload to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop/release/*

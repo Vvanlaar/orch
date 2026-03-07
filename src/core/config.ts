@@ -16,10 +16,10 @@ export const config: Config = {
     org: envOr('GITHUB_ORG', 'bluebillywig'),
   },
   ado: {
-    organization: envOr('ADO_ORG', ''),
+    organization: envOr('ADO_ORG', 'bluebillywig'),
     pat: envOr('ADO_PAT', ''),
-    project: envOr('ADO_PROJECT', ''),
-    team: envOr('ADO_TEAM', ''),
+    project: envOr('ADO_PROJECT', 'BBNew'),
+    team: envOr('ADO_TEAM', 'Core'),
     reviewedByField: envOr('ADO_REVIEWED_BY_FIELD', 'Microsoft.VSTS.Common.ReviewedBy'),
   },
   claude: {

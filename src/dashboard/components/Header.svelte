@@ -2,6 +2,7 @@
   import { getConnectionState } from '../stores/websocket.svelte';
   import { getUsage, formatResetTime } from '../stores/usage.svelte';
   import { getSettings, fetchTerminalConfig, detectTerminals, selectInteractiveSession, selectTerminal } from '../stores/settings.svelte';
+  import { getCredentials, saveCredentials } from '../lib/api';
   import type { TerminalId } from '../lib/types';
   import { onMount } from 'svelte';
 
@@ -21,11 +22,30 @@
   let reset7d = $derived(formatResetTime(usage?.seven_day?.resets_at));
 
   let settingsOpen = $state(false);
+  let creds = $state<Record<string, string>>({});
+  let credsSaving = $state(false);
+  let credsMessage = $state('');
 
   function toggleSettings() {
     settingsOpen = !settingsOpen;
-    if (settingsOpen && !settings.loaded) {
-      fetchTerminalConfig();
+    if (settingsOpen) {
+      if (!settings.loaded) fetchTerminalConfig();
+      getCredentials().then(c => creds = c).catch(() => {});
+    }
+  }
+
+  async function handleSaveCredentials() {
+    credsSaving = true;
+    credsMessage = '';
+    try {
+      await saveCredentials(creds);
+      credsMessage = 'Saved';
+      creds = await getCredentials();
+      setTimeout(() => credsMessage = '', 2000);
+    } catch {
+      credsMessage = 'Error';
+    } finally {
+      credsSaving = false;
     }
   }
 
@@ -106,6 +126,25 @@
             {#if settings.terminals.length === 0}
               <div class="no-terminals">Click "Analyze" to detect terminals</div>
             {/if}
+          </div>
+          <div class="dropdown-header">
+            <span>Credentials</span>
+            <button class="analyze-btn" onclick={handleSaveCredentials} disabled={credsSaving}>
+              {credsSaving ? 'Saving...' : credsMessage || 'Save'}
+            </button>
+          </div>
+          <div class="creds-list">
+            {#each ['ADO_PAT', 'ADO_ORG', 'ADO_PROJECT', 'ADO_TEAM', 'GITHUB_TOKEN'] as key}
+              <label class="cred-field">
+                <span class="cred-label">{key}</span>
+                <input
+                  type={key.includes('PAT') || key.includes('TOKEN') ? 'password' : 'text'}
+                  value={creds[key] ?? ''}
+                  oninput={(e) => creds[key] = (e.currentTarget as HTMLInputElement).value}
+                  placeholder={key}
+                />
+              </label>
+            {/each}
           </div>
         </div>
       {/if}
@@ -218,7 +257,7 @@
     background: #161b22;
     border: 1px solid #30363d;
     border-radius: 8px;
-    min-width: 220px;
+    min-width: 280px;
     z-index: 100;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   }
@@ -302,5 +341,38 @@
     color: #8b949e;
     font-size: 12px;
     text-align: center;
+  }
+
+  .creds-list {
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .cred-field {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .cred-label {
+    font-size: 10px;
+    color: #8b949e;
+  }
+
+  .cred-field input {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    color: #c9d1d9;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-family: monospace;
+  }
+
+  .cred-field input:focus {
+    outline: none;
+    border-color: #58a6ff;
   }
 </style>

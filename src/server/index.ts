@@ -655,6 +655,96 @@ app.post('/api/config/terminal', (req, res) => {
   });
 });
 
+// Credentials config (reads/writes .env file)
+const envPath = join(__dirname, '..', '..', '.env');
+
+function readEnvLines(): string[] {
+  try {
+    return readFileSync(envPath, 'utf-8').split('\n');
+  } catch {
+    return [];
+  }
+}
+
+function parseEnvLines(lines: string[]): Record<string, string> {
+  const vars: Record<string, string> = {};
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx === -1) continue;
+    vars[trimmed.slice(0, eqIdx)] = trimmed.slice(eqIdx + 1);
+  }
+  return vars;
+}
+
+function writeEnvFile(existingLines: string[], vars: Record<string, string>) {
+  const remaining = { ...vars };
+  const lines: string[] = [];
+  for (const line of existingLines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) { lines.push(line); continue; }
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx === -1) { lines.push(line); continue; }
+    const key = trimmed.slice(0, eqIdx);
+    if (key in remaining) {
+      lines.push(`${key}=${remaining[key]}`);
+      delete remaining[key];
+    } else {
+      lines.push(line);
+    }
+  }
+  for (const [key, val] of Object.entries(remaining)) {
+    lines.push(`${key}=${val}`);
+  }
+  writeFileSync(envPath, lines.join('\n'));
+}
+
+const credentialKeys = ['ADO_PAT', 'ADO_ORG', 'ADO_PROJECT', 'ADO_TEAM', 'GITHUB_TOKEN'] as const;
+
+const configUpdaters: Record<string, (val: string) => void> = {
+  ADO_PAT: (v) => { config.ado.pat = v; },
+  ADO_ORG: (v) => { config.ado.organization = v; },
+  ADO_PROJECT: (v) => { config.ado.project = v; },
+  ADO_TEAM: (v) => { config.ado.team = v; },
+  GITHUB_TOKEN: (v) => { config.github.token = v; },
+};
+
+app.get('/api/config/credentials', (_req, res) => {
+  const env = parseEnvLines(readEnvLines());
+  const result: Record<string, string> = {};
+  for (const key of credentialKeys) {
+    const val = env[key] || '';
+    if ((key.includes('PAT') || key.includes('TOKEN')) && val.length > 4) {
+      result[key] = '***' + val.slice(-4);
+    } else {
+      result[key] = val;
+    }
+  }
+  res.json(result);
+});
+
+app.post('/api/config/credentials', (req, res) => {
+  const updates = req.body as Record<string, string>;
+  const lines = readEnvLines();
+  const env = parseEnvLines(lines);
+  let changed = false;
+  for (const key of credentialKeys) {
+    if (key in updates && typeof updates[key] === 'string') {
+      const val = updates[key].trim();
+      if (val.startsWith('***')) continue;
+      env[key] = val;
+      process.env[key] = val;
+      configUpdaters[key]?.(val);
+      changed = true;
+    }
+  }
+  if (changed) {
+    writeEnvFile(lines, env);
+  }
+  res.json({ success: true });
+});
+
 const validOwnerFilters: OwnerFilter[] = ['my', 'unassigned', 'all'];
 
 app.get('/api/workitems', async (req, res) => {
