@@ -409,6 +409,12 @@ app.post('/api/terminal/run-command', async (req, res) => {
   sendShellResult(res, await openShellWithCommand(command, title ?? 'Orch Command'));
 });
 
+/** Resolve a local folder name to an absolute path, returning null if no .git exists there. */
+function resolveLocalRepo(localFolder: string): string | null {
+  const full = path.resolve(config.repos.baseDir, localFolder);
+  return existsSync(join(full, '.git')) ? full : null;
+}
+
 function resolveRepoPath(repo: string): { repoPath: string; localFolder: string } | null {
   const repoMapping = getEffectiveRepoMapping();
   let localFolder = repoMapping[repo];
@@ -419,7 +425,9 @@ function resolveRepoPath(repo: string): { repoPath: string; localFolder: string 
   }
 
   if (!localFolder) return null;
-  return { repoPath: path.resolve(config.repos.baseDir, localFolder), localFolder };
+  const repoPath = resolveLocalRepo(localFolder);
+  if (!repoPath) return null;
+  return { repoPath, localFolder };
 }
 
 function resolveFromRepositoryField(repositories: string[] | undefined): { repoPath: string; repoName: string } | null {
@@ -430,7 +438,8 @@ function resolveFromRepositoryField(repositories: string[] | undefined): { repoP
     if (resolved) return { repoPath: resolved.repoPath, repoName: repo };
     for (const [remote, local] of Object.entries(repoMapping)) {
       if (remote.endsWith('/' + repo) || local === repo) {
-        return { repoPath: path.resolve(config.repos.baseDir, local), repoName: remote };
+        const repoPath = resolveLocalRepo(local);
+        if (repoPath) return { repoPath, repoName: remote };
       }
     }
   }
@@ -764,27 +773,22 @@ app.post('/api/actions/analyze-workitem', (req, res) => {
   }
 
   // Fallback: find a repo for this project
-  if (!repoPath) {
+  if (!repoPath && project) {
     for (const [remote, local] of Object.entries(repoMapping)) {
-      if (remote.includes(project)) {
-        repoPath = path.resolve(config.repos.baseDir, local);
-        repoName = remote;
-        break;
+      if (remote.toLowerCase().includes(project.toLowerCase())) {
+        const candidate = resolveLocalRepo(local);
+        if (candidate) {
+          repoPath = candidate;
+          repoName = remote;
+          console.log(`[analyze-workitem] Found by project: ${remote} -> ${local}`);
+          break;
+        }
       }
     }
   }
 
   if (!repoPath) {
-    // Use first available repo as fallback
-    const firstRepo = Object.entries(repoMapping)[0];
-    if (firstRepo) {
-      repoPath = path.resolve(config.repos.baseDir, firstRepo[1]);
-      repoName = firstRepo[0];
-    }
-  }
-
-  if (!repoPath) {
-    res.status(400).json({ error: 'No repos available' });
+    res.status(400).json({ error: 'No repo found for this work item. Set the Repository field in ADO or clone the repo.' });
     return;
   }
 
@@ -925,10 +929,13 @@ app.post('/api/actions/test-workitem', (req, res) => {
   if (!repoPath && project) {
     for (const [remote, local] of Object.entries(repoMapping)) {
       if (remote.toLowerCase().includes(project.toLowerCase())) {
-        repoPath = path.resolve(config.repos.baseDir, local);
-        repoName = remote;
-        console.log(`[test-workitem] Found by project: ${remote} -> ${local}`);
-        break;
+        const candidate = resolveLocalRepo(local);
+        if (candidate) {
+          repoPath = candidate;
+          repoName = remote;
+          console.log(`[test-workitem] Found by project: ${remote} -> ${local}`);
+          break;
+        }
       }
     }
   }
@@ -999,10 +1006,13 @@ app.post('/api/actions/review-resolution', (req, res) => {
   if (!repoPath && project) {
     for (const [remote, local] of Object.entries(repoMapping)) {
       if (remote.toLowerCase().includes(project.toLowerCase())) {
-        repoPath = path.resolve(config.repos.baseDir, local);
-        repoName = remote;
-        console.log(`[review-resolution] Found by project: ${remote} -> ${local}`);
-        break;
+        const candidate = resolveLocalRepo(local);
+        if (candidate) {
+          repoPath = candidate;
+          repoName = remote;
+          console.log(`[review-resolution] Found by project: ${remote} -> ${local}`);
+          break;
+        }
       }
     }
   }
