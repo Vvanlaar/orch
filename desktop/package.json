@@ -1,12 +1,25 @@
 {
   "name": "orch-desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
+  "type": "module",
+  "main": "main.js",
   "scripts": {
-    "start": "bunx electrobun dev",
-    "build": "bunx electrobun build"
+    "start": "electron .",
+    "build": "electron-builder --win --mac --linux",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac",
+    "build:linux": "electron-builder --linux"
   },
   "dependencies": {
-    "electrobun": "latest"
+    "cors": "^2.8.6",
+    "dotenv": "^16.4.0",
+    "express": "^4.21.2",
+    "octokit": "^4.1.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^35.0.0",
+    "electron-builder": "^26.0.0"
   }
 }

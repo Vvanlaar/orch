@@ -1,0 +1,19 @@
+appId: dev.orch.desktop
+productName: Orch
+directories:
+  output: artifacts
+files:
+  - main.js
+  - server/**/*
+  - core/**/*
+  - dashboard/**/*
+  - node_modules/**/*
+win:
+  target: nsis
+nsis:
+  oneClick: true
+  perMachine: false
+mac:
+  target: dmg
+linux:
+  target: AppImage

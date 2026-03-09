@@ -14,11 +14,11 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            target: win-x64
+            target: win
           - os: macos-latest
-            target: macos-arm64
+            target: mac
           - os: ubuntu-latest
-            target: linux-x64
+            target: linux
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -27,71 +27,39 @@ jobs:
         with:
           node-version: 22
 
-      - uses: oven-sh/setup-bun@v2
-
       - name: Install and build server + dashboard
         run: npm ci && npm run build
 
-      - name: Install desktop deps
-        working-directory: desktop
-        run: bun install
-
-      - name: Fix tar extraction on Windows
-        if: runner.os == 'Windows'
+      - name: Prepare desktop package
         shell: bash
         run: |
-          dir="desktop/node_modules/electrobun/.cache"
-          if [ -d "$dir" ] && [ -f "$dir/electrobun-win-x64.tar.gz" ] && [ ! -f "$dir/electrobun.exe" ]; then
-            tar --force-local -xzf "$dir/electrobun-win-x64.tar.gz" -C "$dir"
-          fi
+          # Copy compiled server and core into desktop/
+          cp -r dist/server desktop/server
+          cp -r dist/core desktop/core
+          cp -r dist/dashboard desktop/dashboard
+
+      - name: Install desktop deps
+        working-directory: desktop
+        run: npm install
 
       - name: Build desktop app
         working-directory: desktop
-        run: bunx electrobun build --env=stable --targets=${{ matrix.target }}
-
-      - name: Collect release files
-        shell: bash
-        run: |
-          mkdir -p desktop/release
-          # Copy top-level artifacts (zips, tar.zst, json)
-          cp desktop/artifacts/stable-${{ matrix.target }}-*.zip desktop/release/ 2>/dev/null || true
-          cp desktop/artifacts/stable-${{ matrix.target }}-*.tar.zst desktop/release/ 2>/dev/null || true
-          # Copy exe/installer from subdirectory (Windows)
-          cp desktop/artifacts/stable-${{ matrix.target }}-*-Setup/*-Setup.exe desktop/release/ 2>/dev/null || true
-
-      - name: Build self-extracting installer (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p desktop/sfx-tmp
-          for zip in desktop/artifacts/stable-win-x64-*-Setup.zip; do
-            [ -f "$zip" ] && unzip -o "$zip" -d desktop/sfx-tmp/
-          done
-          SETUP_EXE=$(ls desktop/sfx-tmp/*.exe 2>/dev/null | head -1)
-          [ -z "$SETUP_EXE" ] && { echo "No .exe found in sfx-tmp"; exit 1; }
-          SETUP_EXE=$(basename "$SETUP_EXE")
-          cat > desktop/sfx-tmp/config.txt << SFXEOF
-          ;!@Install@!UTF-8!
-          Title="Orch Setup"
-          RunProgram="%%T\\${SETUP_EXE}"
-          ;!@InstallEnd@!
-          SFXEOF
-          sed -i 's/^[[:space:]]*//' desktop/sfx-tmp/config.txt
-          7z a -mx=5 desktop/sfx-tmp/payload.7z ./desktop/sfx-tmp/*.exe ./desktop/sfx-tmp/*.tar.zst ./desktop/sfx-tmp/*.json 2>/dev/null || \
-            7z a -mx=5 desktop/sfx-tmp/payload.7z ./desktop/sfx-tmp/* -x!config.txt -x!payload.7z
-          SFX_MODULE="/c/Program Files/7-Zip/7z.sfx"
-          [ -f "$SFX_MODULE" ] || { echo "7z.sfx not found at $SFX_MODULE"; exit 1; }
-          cat "$SFX_MODULE" desktop/sfx-tmp/config.txt desktop/sfx-tmp/payload.7z > desktop/release/Orch-Setup.exe
+        run: npx electron-builder --${{ matrix.target }} --publish never
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.target }}
-          path: desktop/release/*
+          path: |
+            desktop/artifacts/*.exe
+            desktop/artifacts/*.dmg
+            desktop/artifacts/*.AppImage
 
       - name: Upload to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: desktop/release/*
+          files: |
+            desktop/artifacts/*.exe
+            desktop/artifacts/*.dmg
+            desktop/artifacts/*.AppImage
