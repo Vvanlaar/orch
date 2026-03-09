@@ -6,7 +6,7 @@
   import TaskList from './components/TaskList.svelte';
   import ProcessList from './components/ProcessList.svelte';
   import { connect } from './stores/websocket.svelte';
-  import { fetchPRs, fetchWorkItems, fetchResolvedByMe } from './stores/workItems.svelte';
+  import { fetchPRs, fetchWorkItems, fetchResolvedByMe, fetchResolvedWithComments } from './stores/workItems.svelte';
   import { fetchTasks } from './stores/tasks.svelte';
   import { fetchClaudeUsage } from './stores/usage.svelte';
   import { fetchReviewedItems, fetchTeamMembers } from './stores/testing.svelte';
@@ -16,6 +16,7 @@
     fetchPRs();
     fetchWorkItems();
     fetchResolvedByMe();
+    fetchResolvedWithComments();
     fetchTasks();
     fetchClaudeUsage();
     fetchReviewedItems();
@@ -54,7 +55,7 @@
   }
 
   .container {
-    max-width: 1400px;
+    max-width: 1600px;
     margin: 0 auto;
     padding: 20px;
   }

@@ -255,6 +255,62 @@ export async function getMyResolvedWorkItems(): Promise<AdoWorkItem[]> {
   return fetchAdoWorkItemsByQuery(query, 'Fetching resolved-by-me work items');
 }
 
+// Cache for PR comment lookups (2min TTL)
+let prCommentsCache: { items: (AdoWorkItem & { commentCount: number })[]; expiry: number } | null = null;
+let cachedGitHubUsername: string | null = null;
+
+async function getGitHubUsername(): Promise<string> {
+  if (cachedGitHubUsername) return cachedGitHubUsername;
+  const { data: user } = await octokit.rest.users.getAuthenticated();
+  cachedGitHubUsername = user.login;
+  return cachedGitHubUsername;
+}
+
+export async function getResolvedWithPRComments(): Promise<(AdoWorkItem & { commentCount: number })[]> {
+  if (!config.github.token) return [];
+
+  const now = Date.now();
+  if (prCommentsCache && now < prCommentsCache.expiry) {
+    return prCommentsCache.items;
+  }
+
+  try {
+    const resolved = await getMyResolvedWorkItems();
+    const withPr = resolved.filter(wi => wi.githubPrUrl).slice(0, 10);
+    if (withPr.length === 0) return [];
+
+    const username = await getGitHubUsername();
+    const results: (AdoWorkItem & { commentCount: number })[] = [];
+
+    for (const wi of withPr) {
+      const match = wi.githubPrUrl!.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
+      if (!match) continue;
+      const [, owner, repo, prNum] = match;
+
+      try {
+        const { data: comments } = await octokit.rest.pulls.listReviewComments({
+          owner,
+          repo,
+          pull_number: parseInt(prNum),
+        });
+        const unresolved = comments.filter(c => c.user?.login !== username && !c.in_reply_to_id);
+        if (unresolved.length > 0) {
+          results.push({ ...wi, commentCount: unresolved.length });
+        }
+      } catch (err) {
+        console.error(`[UserItems] Error checking PR comments for ${owner}/${repo}#${prNum}:`, err);
+      }
+    }
+
+    prCommentsCache = { items: results, expiry: now + 2 * 60 * 1000 };
+    console.log(`[UserItems] Found ${results.length} resolved items with PR comments`);
+    return results;
+  } catch (err) {
+    console.error('[UserItems] Error fetching resolved items with PR comments:', err);
+    return [];
+  }
+}
+
 export async function getCurrentSprint(): Promise<{ path: string; name: string } | null> {
   if (!checkAdoConfig('project', 'team')) return null;
 

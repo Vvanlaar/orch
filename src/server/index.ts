@@ -27,7 +27,7 @@ import { Octokit } from 'octokit';
 import { approveSuggestion, completeTask, createTask, deleteTask, dismissSuggestion, failTask, getAllTasks, getAllTasksWithOutput, getTask, getTasksWithPids, retryTask, updateTaskRepoPath } from '../core/task-queue.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
 import type { TerminalId } from '../core/types.js';
-import { getCurrentAdoUser, getMyAdoWorkItems, getMyGitHubPRs, getMyResolvedWorkItems, getReviewedItemsInSprint, getTeamMembers, getWorkItemsBySprints, type OwnerFilter } from '../core/user-items.js';
+import { getCurrentAdoUser, getMyAdoWorkItems, getMyGitHubPRs, getMyResolvedWorkItems, getResolvedWithPRComments, getReviewedItemsInSprint, getTeamMembers, getWorkItemsBySprints, type OwnerFilter } from '../core/user-items.js';
 import { startNtfyListener } from '../core/ntfy-listener.js';
 import { adoRouter } from './webhooks/ado.js';
 import { githubRouter } from './webhooks/github.js';
@@ -795,6 +795,11 @@ app.get('/api/my/workitems', async (_req, res) => {
 
 app.get('/api/my/resolved-workitems', async (_req, res) => {
   const items = await getMyResolvedWorkItems();
+  res.json(items);
+});
+
+app.get('/api/my/resolved-with-comments', async (_req, res) => {
+  const items = await getResolvedWithPRComments();
   res.json(items);
 });
 

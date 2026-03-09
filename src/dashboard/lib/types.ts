@@ -27,6 +27,7 @@ export interface WorkItem {
   resolvedBy?: string;
   reviewedBy?: string;
   repositories?: string[];
+  commentCount?: number;
 }
 
 export interface Task {

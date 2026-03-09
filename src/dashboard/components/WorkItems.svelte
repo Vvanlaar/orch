@@ -12,6 +12,7 @@
     setOwnerFilter,
     getPRFromCache,
     getWorkItemFromCache,
+    getResolvedWithComments,
   } from '../stores/workItems.svelte';
 
   const ownerFilters: { key: OwnerFilter; label: string }[] = [
@@ -30,7 +31,7 @@
   ];
 
   type ViewMode = 'list' | 'kanban';
-  type KanbanColumnKey = 'todo' | 'inprogress' | 'resolved' | 'reviewed' | 'other';
+  type KanbanColumnKey = 'todo' | 'inprogress' | 'resolved' | 'pr-comments' | 'reviewed' | 'other';
 
   const viewModes: { key: ViewMode; label: string }[] = [
     { key: 'list', label: 'List' },
@@ -41,6 +42,7 @@
     { key: 'todo', label: 'To Do' },
     { key: 'inprogress', label: 'In Progress' },
     { key: 'resolved', label: 'Resolved' },
+    { key: 'pr-comments', label: 'PR Comments' },
     { key: 'reviewed', label: 'Reviewed' },
     { key: 'other', label: 'Other' },
   ];
@@ -111,6 +113,9 @@
     return isResolved && hasPr;
   }
 
+  let prCommentItems = $derived(getResolvedWithComments());
+  let prCommentIds = $derived(new Set(prCommentItems.map(wi => wi.id)));
+
   function getKanbanColumn(state: string): KanbanColumnKey {
     const normalized = state.toLowerCase().trim();
     if (normalized === 'new' || normalized === 'to do' || normalized === 'todo') return 'todo';
@@ -121,7 +126,8 @@
   }
 
   function getKanbanItems(column: KanbanColumnKey): WorkItem[] {
-    return items.workItems.filter((wi) => getKanbanColumn(wi.state) === column);
+    if (column === 'pr-comments') return prCommentItems;
+    return items.workItems.filter((wi) => !prCommentIds.has(wi.id) && getKanbanColumn(wi.state) === column);
   }
 
   async function handleInvestigate(wi: WorkItem) {
@@ -143,6 +149,71 @@
   function setViewMode(mode: ViewMode) {
     viewMode = mode;
     writePreference(VIEW_MODE_STORAGE_KEY, mode);
+  }
+
+  // --- Local notes per ticket ---
+  const NOTES_PREFIX = 'orch.workitem.notes.';
+  let expandedNotes = $state(new Set<number>());
+  let noteTexts = $state(new Map<number, string>());
+  let idsWithNotes = $state(new Set<number>());
+  let debounceTimers = new Map<number, ReturnType<typeof setTimeout>>();
+
+  // Scan localStorage for existing notes on init
+  if (typeof window !== 'undefined') {
+    const initIds = new Set<number>();
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(NOTES_PREFIX)) {
+        const id = parseInt(key.slice(NOTES_PREFIX.length));
+        const val = localStorage.getItem(key);
+        if (!isNaN(id) && val) {
+          try {
+            const text = JSON.parse(val);
+            if (text) initIds.add(id);
+          } catch {}
+        }
+      }
+    }
+    if (initIds.size > 0) idsWithNotes = initIds;
+  }
+
+  function toggleNotes(id: number) {
+    if (expandedNotes.has(id)) {
+      expandedNotes.delete(id);
+      expandedNotes = new Set(expandedNotes);
+    } else {
+      expandedNotes.add(id);
+      expandedNotes = new Set(expandedNotes);
+      // Lazy-load from localStorage
+      if (!noteTexts.has(id)) {
+        const text = readPreference(`${NOTES_PREFIX}${id}`, '', (v): v is string => typeof v === 'string');
+        noteTexts.set(id, text);
+        noteTexts = new Map(noteTexts);
+      }
+    }
+  }
+
+  function updateNote(id: number, text: string) {
+    noteTexts.set(id, text);
+    noteTexts = new Map(noteTexts);
+    if (text) {
+      idsWithNotes.add(id);
+      idsWithNotes = new Set(idsWithNotes);
+    } else {
+      idsWithNotes.delete(id);
+      idsWithNotes = new Set(idsWithNotes);
+    }
+    // Debounced save
+    const existing = debounceTimers.get(id);
+    if (existing) clearTimeout(existing);
+    debounceTimers.set(id, setTimeout(() => {
+      writePreference(`${NOTES_PREFIX}${id}`, text);
+      debounceTimers.delete(id);
+    }, 500));
+  }
+
+  function hasNote(id: number): boolean {
+    return idsWithNotes.has(id);
   }
 </script>
 
@@ -237,46 +308,64 @@
 
         {#each items.workItems as wi (wi.id)}
           {@const hasPr = !!(wi.githubPrUrl || (wi.resolution && wi.resolution.includes('github.com')))}
-          <div class="item">
-            <div class="item-info">
-              <div class="item-title">{wi.title}</div>
-              <div class="item-meta">
-                <span>{wi.project} #{wi.id}</span>
-                <span class="badge type {typeClass(wi.type)}">{wi.type}</span>
-                <span class="badge state {stateClass(wi.state)}">{wi.state}</span>
-                {#if currentOwner !== 'my' && wi.assignedTo}
-                  <span class="badge" style="background:#8b949e20;color:#8b949e;">{wi.assignedTo}</span>
+          <div class="item-wrapper">
+            <div class="item">
+              <div class="item-info">
+                <div class="item-title">{wi.title}</div>
+                <div class="item-meta">
+                  <span>{wi.project} #{wi.id}</span>
+                  <span class="badge type {typeClass(wi.type)}">{wi.type}</span>
+                  <span class="badge state {stateClass(wi.state)}">{wi.state}</span>
+                  {#if wi.commentCount}
+                    <span class="badge" style="background:#f0883e20;color:#f0883e;">{wi.commentCount} comments</span>
+                  {/if}
+                  {#if currentOwner !== 'my' && wi.assignedTo}
+                    <span class="badge" style="background:#8b949e20;color:#8b949e;">{wi.assignedTo}</span>
+                  {/if}
+                  {#if wi.repositories?.length}
+                    {#each wi.repositories as repo}
+                      <span class="badge" style="background:#da3b0120;color:#da3b01;">{repo}</span>
+                    {/each}
+                  {/if}
+                  {#if hasPr}
+                    <span class="badge" style="background:#3fb95020;color:#3fb950;">PR</span>
+                  {/if}
+                  <span>{formatTime(wi.updatedAt)}</span>
+                </div>
+              </div>
+              <div class="item-actions">
+                <button class="action-btn secondary" title="Investigate ticket with Claude" onclick={() => handleInvestigate(wi)}>Inv</button>
+                {#if isResolvedWithPR(wi)}
+                  <button class="action-btn" onclick={() => handleReviewResolution(wi.id)}>Review</button>
+                {:else}
+                  <button class="action-btn" onclick={() => handleAnalyzeWorkItem(wi.id)}>
+                    {wi.type.toLowerCase().includes('bug') ? 'Fix' : 'Implement'}
+                  </button>
                 {/if}
                 {#if wi.repositories?.length}
-                  {#each wi.repositories as repo}
-                    <span class="badge" style="background:#da3b0120;color:#da3b01;">{repo}</span>
-                  {/each}
+                  <button class="action-btn secondary" title="Open workspace terminal" onclick={() => handleOpenTerminal(wi.repositories![0], wi.id)}>
+                    &lt;/&gt;
+                  </button>
                 {/if}
-                {#if hasPr}
-                  <span class="badge" style="background:#3fb95020;color:#3fb950;">PR</span>
+                <button class="action-btn secondary notes-btn" class:has-note={hasNote(wi.id)} title="Toggle notes" onclick={() => toggleNotes(wi.id)}>
+                  Notes{#if hasNote(wi.id)}<span class="note-dot"></span>{/if}
+                </button>
+                {#if wi.githubPrUrl}
+                  <a href={wi.githubPrUrl} target="_blank" class="action-btn secondary">PR</a>
                 {/if}
-                <span>{formatTime(wi.updatedAt)}</span>
+                <a href={wi.url} target="_blank" class="action-btn secondary">View →</a>
               </div>
             </div>
-            <div class="item-actions">
-              <button class="action-btn secondary" title="Investigate ticket with Claude" onclick={() => handleInvestigate(wi)}>Inv</button>
-              {#if isResolvedWithPR(wi)}
-                <button class="action-btn" onclick={() => handleReviewResolution(wi.id)}>Review</button>
-              {:else}
-                <button class="action-btn" onclick={() => handleAnalyzeWorkItem(wi.id)}>
-                  {wi.type.toLowerCase().includes('bug') ? 'Fix' : 'Implement'}
-                </button>
-              {/if}
-              {#if wi.repositories?.length}
-                <button class="action-btn secondary" title="Open workspace terminal" onclick={() => handleOpenTerminal(wi.repositories![0], wi.id)}>
-                  &lt;/&gt;
-                </button>
-              {/if}
-              {#if wi.githubPrUrl}
-                <a href={wi.githubPrUrl} target="_blank" class="action-btn secondary">PR</a>
-              {/if}
-              <a href={wi.url} target="_blank" class="action-btn secondary">View →</a>
-            </div>
+            {#if expandedNotes.has(wi.id)}
+              <div class="note-area">
+                <textarea
+                  class="note-textarea"
+                  placeholder="Add notes..."
+                  value={noteTexts.get(wi.id) || ''}
+                  oninput={(e) => updateNote(wi.id, (e.target as HTMLTextAreaElement).value)}
+                ></textarea>
+              </div>
+            {/if}
           </div>
         {/each}
       {/if}
@@ -306,6 +395,9 @@
                         <span>{wi.project} #{wi.id}</span>
                         <span class="badge type {typeClass(wi.type)}">{wi.type}</span>
                         <span class="badge state {stateClass(wi.state)}">{wi.state}</span>
+                        {#if wi.commentCount}
+                          <span class="badge" style="background:#f0883e20;color:#f0883e;">{wi.commentCount} comments</span>
+                        {/if}
                         {#if currentOwner !== 'my' && wi.assignedTo}
                           <span class="badge" style="background:#8b949e20;color:#8b949e;">{wi.assignedTo}</span>
                         {/if}
@@ -335,11 +427,24 @@
                             &lt;/&gt;
                           </button>
                         {/if}
+                        <button class="action-btn secondary notes-btn" class:has-note={hasNote(wi.id)} title="Toggle notes" onclick={() => toggleNotes(wi.id)}>
+                          Notes{#if hasNote(wi.id)}<span class="note-dot"></span>{/if}
+                        </button>
                         {#if wi.githubPrUrl}
                           <a href={wi.githubPrUrl} target="_blank" class="action-btn secondary">PR</a>
                         {/if}
                         <a href={wi.url} target="_blank" class="action-btn secondary">View →</a>
                       </div>
+                      {#if expandedNotes.has(wi.id)}
+                        <div class="note-area">
+                          <textarea
+                            class="note-textarea"
+                            placeholder="Add notes..."
+                            value={noteTexts.get(wi.id) || ''}
+                            oninput={(e) => updateNote(wi.id, (e.target as HTMLTextAreaElement).value)}
+                          ></textarea>
+                        </div>
+                      {/if}
                     </div>
                   {/each}
                 {/if}
@@ -418,17 +523,16 @@
   }
 
   .kanban-board-wrapper {
-    max-height: 520px;
+    max-height: calc(100vh - 280px);
     overflow: auto;
     border-top: 1px solid #30363d;
   }
 
   .kanban-board {
     display: grid;
-    grid-template-columns: repeat(5, minmax(220px, 1fr));
+    grid-template-columns: repeat(6, minmax(200px, 1fr));
     gap: 12px;
     padding: 12px 16px;
-    min-width: 1120px;
   }
 
   .kanban-column {
@@ -438,7 +542,6 @@
     display: flex;
     flex-direction: column;
     min-height: 340px;
-    max-height: 480px;
   }
 
   .kanban-column-header {
@@ -500,5 +603,53 @@
     font-size: 12px;
     text-align: center;
     padding: 16px 8px;
+  }
+
+  .item-wrapper {
+    border-bottom: 1px solid #21262d;
+  }
+
+  .item-wrapper .item {
+    border-bottom: none;
+  }
+
+  .notes-btn {
+    position: relative;
+  }
+
+  .note-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    background: #58a6ff;
+    border-radius: 50%;
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+
+  .note-area {
+    padding: 0 16px 10px;
+  }
+
+  .kanban-card .note-area {
+    padding: 8px 0 0;
+  }
+
+  .note-textarea {
+    width: 100%;
+    min-height: 60px;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    color: #c9d1d9;
+    font-size: 12px;
+    font-family: inherit;
+    padding: 6px 8px;
+    resize: vertical;
+  }
+
+  .note-textarea:focus {
+    outline: none;
+    border-color: #58a6ff;
   }
 </style>

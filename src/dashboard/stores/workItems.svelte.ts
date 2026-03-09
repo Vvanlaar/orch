@@ -5,6 +5,7 @@ import { readPreference, writePreference } from '../lib/preferences';
 let prs = $state<PR[]>([]);
 let workItems = $state<WorkItem[]>([]);
 let resolvedByMe = $state<WorkItem[]>([]);
+let resolvedWithComments = $state<WorkItem[]>([]);
 
 const FILTER_STORAGE_KEY = 'orch.dashboard.workitems.filter';
 const OWNER_FILTER_STORAGE_KEY = 'orch.dashboard.workitems.owner-filter';
@@ -118,5 +119,20 @@ export async function fetchResolvedByMe() {
   } catch (err) {
     console.error('Failed to fetch resolved-by-me items:', err);
     resolvedByMe = [];
+  }
+}
+
+export function getResolvedWithComments() {
+  return resolvedWithComments;
+}
+
+export async function fetchResolvedWithComments() {
+  try {
+    const res = await fetch('/api/my/resolved-with-comments');
+    resolvedWithComments = await res.json();
+    resolvedWithComments.forEach((wi) => workItemCache.set(wi.id, wi));
+  } catch (err) {
+    console.error('Failed to fetch resolved-with-comments:', err);
+    resolvedWithComments = [];
   }
 }
