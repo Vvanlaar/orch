@@ -9,12 +9,49 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install and build server + dashboard
+        run: npm ci && npm run build
+
+      - name: Prepare desktop package
+        shell: bash
+        run: |
+          cp -r dist/server desktop/server
+          cp -r dist/core desktop/core
+          cp -r dist/dashboard desktop/dashboard
+
+      - name: Install desktop deps
+        working-directory: desktop
+        run: npm install
+
+      - name: Build desktop app
+        working-directory: desktop
+        run: npx electron-builder --win --publish never
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-win
+          path: desktop/artifacts/*.exe
+
+      - name: Upload to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop/artifacts/*.exe
+
+  build-other:
     strategy:
       matrix:
         include:
-          - os: windows-latest
-            target: win
           - os: macos-latest
             target: mac
           - os: ubuntu-latest
@@ -33,7 +70,6 @@ jobs:
       - name: Prepare desktop package
         shell: bash
         run: |
-          # Copy compiled server and core into desktop/
           cp -r dist/server desktop/server
           cp -r dist/core desktop/core
           cp -r dist/dashboard desktop/dashboard
@@ -51,7 +87,6 @@ jobs:
         with:
           name: desktop-${{ matrix.target }}
           path: |
-            desktop/artifacts/*.exe
             desktop/artifacts/*.dmg
             desktop/artifacts/*.AppImage
 
@@ -60,6 +95,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            desktop/artifacts/*.exe
             desktop/artifacts/*.dmg
             desktop/artifacts/*.AppImage
