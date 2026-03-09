@@ -32,7 +32,7 @@ export interface WorkItem {
 export interface Task {
   id: number;
   type: string;
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'needs-repo';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'needs-repo' | 'suggestion' | 'dismissed';
   repo: string;
   createdAt: string;
   result?: string;

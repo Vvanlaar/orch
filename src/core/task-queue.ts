@@ -44,6 +44,56 @@ export function createTask(
   return task;
 }
 
+export function createSuggestion(
+  type: TaskType,
+  repo: string,
+  repoPath: string,
+  context: TaskContext
+): Task {
+  const db = loadDb();
+  const task: Task = {
+    id: db.nextId++,
+    type,
+    status: 'suggestion',
+    repo,
+    repoPath,
+    context,
+    createdAt: new Date().toISOString(),
+  };
+  db.tasks.push(task);
+  saveDb(db);
+  return task;
+}
+
+export function getPendingSuggestions(): Task[] {
+  const db = loadDb();
+  return db.tasks
+    .filter((t) => t.status === 'suggestion')
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+export function approveSuggestion(id: number, extraPrompt?: string): Task | null {
+  const db = loadDb();
+  const idx = db.tasks.findIndex((t) => t.id === id);
+  if (idx === -1 || db.tasks[idx].status !== 'suggestion') return null;
+  if (extraPrompt) {
+    db.tasks[idx].context.suggestionNote = extraPrompt;
+  }
+  db.tasks[idx].status = 'pending';
+  saveDb(db);
+  return db.tasks[idx];
+}
+
+export function dismissSuggestion(id: number): boolean {
+  const db = loadDb();
+  const idx = db.tasks.findIndex((t) => t.id === id);
+  if (idx === -1 || db.tasks[idx].status !== 'suggestion') return false;
+  db.tasks[idx].status = 'dismissed';
+  db.tasks[idx].completedAt = new Date().toISOString();
+  saveDb(db);
+  return true;
+}
+
 export function getTask(id: number): Task | undefined {
   const db = loadDb();
   return db.tasks.find((t) => t.id === id);

@@ -24,10 +24,11 @@ import {
 import { startPoller } from '../core/poller.js';
 import { getEffectiveRepoMapping, getScannedRepos } from '../core/repo-scanner.js';
 import { Octokit } from 'octokit';
-import { completeTask, createTask, deleteTask, failTask, getAllTasks, getAllTasksWithOutput, getTask, getTasksWithPids, retryTask, updateTaskRepoPath } from '../core/task-queue.js';
+import { approveSuggestion, completeTask, createTask, deleteTask, dismissSuggestion, failTask, getAllTasks, getAllTasksWithOutput, getTask, getTasksWithPids, retryTask, updateTaskRepoPath } from '../core/task-queue.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
 import type { TerminalId } from '../core/types.js';
 import { getCurrentAdoUser, getMyAdoWorkItems, getMyGitHubPRs, getMyResolvedWorkItems, getReviewedItemsInSprint, getTeamMembers, getWorkItemsBySprints, type OwnerFilter } from '../core/user-items.js';
+import { startNtfyListener } from '../core/ntfy-listener.js';
 import { adoRouter } from './webhooks/ado.js';
 import { githubRouter } from './webhooks/github.js';
 
@@ -183,6 +184,31 @@ app.post('/api/tasks/:id/retry', (req, res) => {
   triggerUpdate();
   broadcastTasks();
   res.json({ taskId: newTask.id, message: `Retry task #${newTask.id} created (attempt ${newTask.context.retryCount})` });
+});
+
+// Approve suggestion
+app.post('/api/tasks/:id/approve', (req, res) => {
+  const id = parseInt(req.params.id);
+  const { extraPrompt } = req.body || {};
+  const task = approveSuggestion(id, extraPrompt);
+  if (!task) {
+    res.status(400).json({ error: 'Task not found or not a suggestion' });
+    return;
+  }
+  triggerUpdate();
+  broadcastTasks();
+  res.json({ success: true, message: `Task #${id} approved` });
+});
+
+// Dismiss suggestion
+app.post('/api/tasks/:id/dismiss', (req, res) => {
+  const id = parseInt(req.params.id);
+  if (!dismissSuggestion(id)) {
+    res.status(400).json({ error: 'Task not found or not a suggestion' });
+    return;
+  }
+  broadcastTasks();
+  res.json({ success: true, message: `Task #${id} dismissed` });
 });
 
 // Set repo path for needs-repo tasks
@@ -1153,4 +1179,6 @@ server.listen(config.server.port, () => {
   if (config.polling.enabled) {
     startPoller(config.polling.intervalMs);
   }
+
+  startNtfyListener();
 });

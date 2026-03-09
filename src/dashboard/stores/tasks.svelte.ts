@@ -124,6 +124,26 @@ export async function openTerminal(taskId: number) {
   }
 }
 
+export async function approveTask(taskId: number) {
+  const res = await fetch(`/api/tasks/${taskId}/approve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  if (!res.ok) {
+    const result = await res.json();
+    throw new Error(result.error);
+  }
+}
+
+export async function dismissTask(taskId: number) {
+  const res = await fetch(`/api/tasks/${taskId}/dismiss`, { method: 'POST' });
+  if (!res.ok) {
+    const result = await res.json();
+    throw new Error(result.error);
+  }
+}
+
 export async function setRepoPath(taskId: number, repoPath: string) {
   const res = await fetch(`/api/tasks/${taskId}/repo-path`, {
     method: 'PUT',

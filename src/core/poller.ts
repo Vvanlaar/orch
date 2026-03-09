@@ -1,10 +1,22 @@
 import { Octokit } from 'octokit';
 import { config } from './config.js';
-import { createTask, getAllTasks } from './task-queue.js';
+import { createTask, createSuggestion, getAllTasks } from './task-queue.js';
 import { triggerUpdate } from './task-processor.js';
+import { sendNtfySuggestion } from './ntfy-sender.js';
 import { getEffectiveRepoMapping } from './repo-scanner.js';
-import type { TaskContext } from './types.js';
+import type { Task, TaskContext } from './types.js';
 import path from 'path';
+
+const suggestionMode = !!process.env.NTFY_COMMAND_TOPIC;
+
+function createTaskOrSuggestion(type: Parameters<typeof createTask>[0], repo: string, repoPath: string, context: TaskContext): Task {
+  if (suggestionMode) {
+    const task = createSuggestion(type, repo, repoPath, context);
+    sendNtfySuggestion(task).catch(() => {});
+    return task;
+  }
+  return createTask(type, repo, repoPath, context);
+}
 
 const octokit = new Octokit({ auth: config.github.token });
 
@@ -128,9 +140,9 @@ async function pollMyPRReviewComments(repoFullName: string): Promise<void> {
         reviewComments,
       };
 
-      createTask('pr-comment-fix', repoFullName, repoPath, context);
+      createTaskOrSuggestion('pr-comment-fix', repoFullName, repoPath, context);
       markProcessed(key);
-      console.log(`[Poller] Created pr-comment-fix task for ${repoFullName}#${pr.number} (${unresolvedComments.length} comments)`);
+      console.log(`[Poller] Created pr-comment-fix ${suggestionMode ? 'suggestion' : 'task'} for ${repoFullName}#${pr.number} (${unresolvedComments.length} comments)`);
       triggerUpdate();
     }
   } catch (err) {
@@ -169,9 +181,9 @@ async function pollGitHubRepo(repoFullName: string): Promise<void> {
         url: pr.html_url,
       };
 
-      createTask('pr-review', repoFullName, repoPath, context);
+      createTaskOrSuggestion('pr-review', repoFullName, repoPath, context);
       markProcessed(key);
-      console.log(`[Poller] Created PR review task for ${repoFullName}#${pr.number}`);
+      console.log(`[Poller] Created PR review ${suggestionMode ? 'suggestion' : 'task'} for ${repoFullName}#${pr.number}`);
       triggerUpdate();
     }
   } catch (err) {
@@ -205,9 +217,9 @@ async function pollGitHubRepo(repoFullName: string): Promise<void> {
         url: issue.html_url,
       };
 
-      createTask('issue-fix', repoFullName, repoPath, context);
+      createTaskOrSuggestion('issue-fix', repoFullName, repoPath, context);
       markProcessed(key);
-      console.log(`[Poller] Created issue-fix task for ${repoFullName}#${issue.number}`);
+      console.log(`[Poller] Created issue-fix ${suggestionMode ? 'suggestion' : 'task'} for ${repoFullName}#${issue.number}`);
       triggerUpdate();
     }
   } catch (err) {
@@ -245,9 +257,9 @@ async function pollAdoRepo(project: string, repoName: string, localPath: string)
       };
 
       const repoFullName = `${project}/${repoName}`;
-      createTask('pr-review', repoFullName, localPath, context);
+      createTaskOrSuggestion('pr-review', repoFullName, localPath, context);
       markProcessed(key);
-      console.log(`[Poller] Created PR review task for ${repoFullName}!${pr.pullRequestId}`);
+      console.log(`[Poller] Created PR review ${suggestionMode ? 'suggestion' : 'task'} for ${repoFullName}!${pr.pullRequestId}`);
       triggerUpdate();
     }
   } catch (err) {

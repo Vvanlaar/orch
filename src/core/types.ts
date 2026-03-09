@@ -1,4 +1,4 @@
-export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'needs-repo';
+export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'needs-repo' | 'suggestion' | 'dismissed';
 
 export type TerminalId = 'auto' | 'wt' | 'cmd' | 'powershell' | 'pwsh' | 'git-bash' | 'gnome-terminal' | 'xterm' | 'tmux';
 
@@ -56,6 +56,8 @@ export interface TaskContext {
   // Remote-only mode (no local repo, use gh CLI remotely)
   remoteOnly?: boolean;
   ghRepoRef?: string; // "owner/repo" for gh commands
+  // Ntfy suggestion workflow
+  suggestionNote?: string; // user-appended instructions from ntfy reply
 }
 
 export interface Config {

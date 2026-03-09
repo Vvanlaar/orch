@@ -13,6 +13,8 @@
     completeTask,
     openTerminal,
     setRepoPath,
+    approveTask,
+    dismissTask,
   } from '../stores/tasks.svelte';
 
   interface Props {
@@ -29,6 +31,7 @@
 
   let isRunning = $derived(task.status === 'running');
   let isFailed = $derived(task.status === 'failed');
+  let isSuggestion = $derived(task.status === 'suggestion');
   let needsRepo = $derived(task.status === 'needs-repo');
   let canDelete = $derived(task.status !== 'running');
   let hasOutput = $derived(!!output);
@@ -99,6 +102,24 @@
     }
   }
 
+  async function handleApprove(e: Event) {
+    e.stopPropagation();
+    try {
+      await approveTask(task.id);
+    } catch (err: any) {
+      alert('Failed to approve: ' + err.message);
+    }
+  }
+
+  async function handleDismiss(e: Event) {
+    e.stopPropagation();
+    try {
+      await dismissTask(task.id);
+    } catch (err: any) {
+      alert('Failed to dismiss: ' + err.message);
+    }
+  }
+
   function handleSteerKey(e: KeyboardEvent) {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -129,7 +150,10 @@
     <div class="task-time">{formatTime(task.createdAt)}</div>
     <div class="task-actions">
       <button class="action-btn secondary" onclick={handleTerminal} title="Open terminal">&lt;/&gt;</button>
-      {#if isRunning}
+      {#if isSuggestion}
+        <button class="action-btn approve-btn" onclick={handleApprove}>Approve</button>
+        <button class="action-btn dismiss-btn" onclick={handleDismiss}>Skip</button>
+      {:else if isRunning}
         <button class="action-btn done-btn" onclick={handleComplete}>Done</button>
         <button class="action-btn stop-btn" onclick={handleStop}>Stop</button>
       {:else if isFailed}
@@ -240,6 +264,16 @@
     color: #8b949e;
   }
 
+  .task-status.suggestion {
+    background: #a371f720;
+    color: #a371f7;
+  }
+
+  .task-status.dismissed {
+    background: #8b949e20;
+    color: #8b949e;
+  }
+
   .task-info {
     overflow: hidden;
   }
@@ -277,6 +311,14 @@
 
   .retry-btn {
     background: #f0883e !important;
+  }
+
+  .approve-btn {
+    background: #3fb950 !important;
+  }
+
+  .dismiss-btn {
+    background: #8b949e !important;
   }
 
   .retry-btn:hover {
