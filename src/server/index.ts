@@ -87,7 +87,7 @@ app.use(cors({ origin: true }));
 app.use(express.json());
 
 // Dashboard - serve built Svelte app or fallback to old HTML
-const distDashboard = join(__dirname, '../../dist/dashboard');
+const distDashboard = process.env.DASHBOARD_DIR || join(__dirname, '../../dist/dashboard');
 const oldDashboard = join(__dirname, '../dashboard/index.old.html');
 
 if (existsSync(join(distDashboard, 'index.html'))) {
@@ -656,7 +656,7 @@ app.post('/api/config/terminal', (req, res) => {
 });
 
 // Credentials config (reads/writes .env file)
-const envPath = join(__dirname, '..', '..', '.env');
+const envPath = process.env.ENV_FILE_PATH || join(__dirname, '..', '..', '.env');
 
 function readEnvLines(): string[] {
   try {
