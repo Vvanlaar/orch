@@ -59,14 +59,6 @@ jobs:
           # Copy exe/installer from subdirectory (Windows)
           cp desktop/artifacts/stable-${{ matrix.target }}-*-Setup/*-Setup.exe desktop/release/ 2>/dev/null || true
 
-      - name: Extract exe from setup zip (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          for zip in desktop/artifacts/stable-win-x64-*-Setup.zip; do
-            [ -f "$zip" ] && unzip -jo "$zip" "*.exe" -d desktop/release/
-          done
-
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
