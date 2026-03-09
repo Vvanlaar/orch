@@ -1,5 +1,5 @@
-import { app, BrowserWindow } from 'electron';
-import { existsSync, mkdirSync } from 'fs';
+import { app, BrowserWindow, shell } from 'electron';
+import { existsSync, mkdirSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -13,7 +13,21 @@ process.env.DESKTOP_MODE = 'true';
 // ~/.orch/.env for credentials (writable location outside app bundle)
 const orchDir = join(homedir(), '.orch');
 if (!existsSync(orchDir)) mkdirSync(orchDir, { recursive: true });
-process.env.ENV_FILE_PATH = join(orchDir, '.env');
+const envFilePath = join(orchDir, '.env');
+process.env.ENV_FILE_PATH = envFilePath;
+
+// Load saved credentials into process.env before server import
+if (existsSync(envFilePath)) {
+  for (const line of readFileSync(envFilePath, 'utf-8').split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq === -1) continue;
+    const key = trimmed.slice(0, eq);
+    const val = trimmed.slice(eq + 1);
+    if (!process.env[key]) process.env[key] = val;
+  }
+}
 
 const port = process.env.PORT || '13011';
 process.env.PORT = port;
@@ -56,6 +70,10 @@ app.whenReady().then(async () => {
     await waitForServer(SERVER_URL);
 
     const win = new BrowserWindow({ title: 'Orch', width: 1280, height: 800 });
+    win.webContents.setWindowOpenHandler(({ url }) => {
+      shell.openExternal(url);
+      return { action: 'deny' };
+    });
     win.loadURL(SERVER_URL);
   } catch (err) {
     console.error('[Orch Desktop] Fatal error:', err);
