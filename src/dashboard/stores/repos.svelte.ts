@@ -3,6 +3,7 @@ import { fetchOrgRepos, cloneRepo as apiCloneRepo } from '../lib/api';
 
 let orgRepos = $state<GitHubRepo[]>([]);
 let loading = $state(false);
+let loaded = $state(false);
 let cloning = $state<string | null>(null);
 
 export function getOrgRepos() {
@@ -17,8 +18,12 @@ export function getCloningRepo() {
   return cloning;
 }
 
+export function isLoaded() {
+  return loaded;
+}
+
 export async function loadOrgRepos() {
-  if (loading) return;
+  if (loading || loaded) return;
   loading = true;
   try {
     orgRepos = await fetchOrgRepos();
@@ -26,6 +31,7 @@ export async function loadOrgRepos() {
     console.error('Failed to load org repos:', err);
   } finally {
     loading = false;
+    loaded = true;
   }
 }
 

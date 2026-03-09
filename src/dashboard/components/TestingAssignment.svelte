@@ -18,7 +18,7 @@
   } from '../stores/testing.svelte';
   import { readPreference, writePreference } from '../lib/preferences';
   import { getCurrentUser } from '../stores/currentUser.svelte';
-  import { getOrgRepos, isLoading, getCloningRepo, loadOrgRepos, cloneRepo } from '../stores/repos.svelte';
+  import { getOrgRepos, isLoading, isLoaded, getCloningRepo, loadOrgRepos, cloneRepo } from '../stores/repos.svelte';
 
   let reviewedItems = $derived(getReviewedItems());
   let myItems = $derived(getMyTestingItems());
@@ -89,7 +89,7 @@
   }
 
   $effect(() => {
-    if (orgRepos.length === 0 && !reposLoading) {
+    if (!isLoaded() && !reposLoading) {
       loadOrgRepos();
     }
   });
