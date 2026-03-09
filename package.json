@@ -1,6 +1,6 @@
 {
   "name": "orch",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Event-driven Claude Code orchestrator for GitHub and Azure DevOps",
   "type": "module",
   "main": "dist/server/index.js",
