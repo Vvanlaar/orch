@@ -15,7 +15,8 @@ const orchDir = join(homedir(), '.orch');
 if (!existsSync(orchDir)) mkdirSync(orchDir, { recursive: true });
 process.env.ENV_FILE_PATH = join(orchDir, '.env');
 
-const port = process.env.PORT || '3011';
+const port = process.env.PORT || '13011';
+process.env.PORT = port;
 const SERVER_URL = `http://localhost:${port}`;
 
 async function waitForServer(url, timeoutMs = 15000) {
