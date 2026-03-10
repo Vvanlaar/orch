@@ -6,7 +6,7 @@ import { tmpdir } from 'os';
 import type { Task, TerminalId } from './types.js';
 import { config } from './config.js';
 import { loadLearnings } from './learnings.js';
-import { findTerminalPath, getTerminalInteractiveSession, getTerminalPreference, isWindowsPlatform } from './settings.js';
+import { findTerminalPath, getTerminalInteractiveSession, getTerminalPreference, isMacPlatform, isWindowsPlatform } from './settings.js';
 
 // Process registry for steering running tasks
 const runningProcesses = new Map<number, ChildProcess>();
@@ -255,7 +255,23 @@ export async function runClaudeInTerminal(
   }
 
   function buildNonWindowsTerminalCmd(terminal: TerminalId): string | null {
+    const escapedBashCmd = bashClaudeCmd.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    const escapedPath = repoPathPosix.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     switch (terminal) {
+      // macOS
+      case 'terminal-app':
+        return `osascript -e 'tell application "Terminal" to do script "cd ${escapedPath} && ${escapedBashCmd}"'`;
+      case 'iterm2':
+        return [
+          'osascript',
+          `-e 'tell application "iTerm2"'`,
+          `-e 'create window with default profile'`,
+          `-e 'tell current session of current window'`,
+          `-e 'write text "cd ${escapedPath} && ${escapedBashCmd}"'`,
+          `-e 'end tell'`,
+          `-e 'end tell'`,
+        ].join(' ');
+      // Linux
       case 'gnome-terminal':
         return `gnome-terminal --title="${title}" --working-directory="${repoPathPosix}" -- bash -c '${bashClaudeCmd}; exec bash'`;
       case 'xterm':
@@ -326,6 +342,8 @@ export async function runClaudeInTerminal(
     powershell: 'PowerShell',
     pwsh: 'PowerShell Core',
     'git-bash': 'Git Bash',
+    'terminal-app': 'Terminal',
+    'iterm2': 'iTerm2',
     'gnome-terminal': 'GNOME Terminal',
     xterm: 'XTerm',
     tmux: 'tmux',
@@ -336,7 +354,9 @@ export async function runClaudeInTerminal(
   if (preferred === 'auto') {
     const candidates: TerminalId[] = isWindowsPlatform()
       ? ['wt', 'git-bash', 'powershell', 'cmd']
-      : ['gnome-terminal', 'xterm', 'tmux'];
+      : isMacPlatform()
+        ? ['iterm2', 'terminal-app', 'tmux']
+        : ['gnome-terminal', 'xterm', 'tmux'];
     result = await tryTerminals(candidates);
   } else {
     result = await tryTerminal(preferred);

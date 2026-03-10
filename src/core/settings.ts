@@ -12,6 +12,7 @@ interface Settings {
 }
 
 const isWindows = process.platform === 'win32';
+const isMac = process.platform === 'darwin';
 
 const KNOWN_TERMINALS: Terminal[] = [
   { id: 'auto', name: 'Auto (System Default)', cmd: null },
@@ -21,6 +22,9 @@ const KNOWN_TERMINALS: Terminal[] = [
   { id: 'powershell', name: 'PowerShell', cmd: 'powershell' },
   { id: 'pwsh', name: 'PowerShell Core', cmd: 'pwsh' },
   { id: 'git-bash', name: 'Git Bash', cmd: 'bash' },
+  // macOS
+  { id: 'terminal-app', name: 'Terminal', cmd: 'open' },
+  { id: 'iterm2', name: 'iTerm2', cmd: 'osascript' },
   // Linux
   { id: 'gnome-terminal', name: 'GNOME Terminal', cmd: 'gnome-terminal' },
   { id: 'xterm', name: 'XTerm', cmd: 'xterm' },
@@ -67,7 +71,7 @@ export function setTerminalInteractiveSession(interactive: boolean): void {
 export function detectAvailableTerminals(): Terminal[] {
   return KNOWN_TERMINALS.map(t => ({
     ...t,
-    available: t.cmd === null ? true : isTerminalAvailable(t.cmd),
+    available: t.cmd === null ? true : isTerminalAvailable(t.id, t.cmd),
   }));
 }
 
@@ -79,16 +83,22 @@ const KNOWN_TERMINAL_PATHS: Record<string, string[]> = {
   wt: [
     `${process.env.LOCALAPPDATA}\\Microsoft\\WindowsApps\\wt.exe`,
   ],
+  'terminal-app': ['/System/Applications/Utilities/Terminal.app'],
+  'iterm2': ['/Applications/iTerm.app'],
 };
 
-function isTerminalAvailable(cmd: string): boolean {
+function isTerminalAvailable(id: string, cmd: string): boolean {
+  // macOS app bundles: check existence instead of `which`
+  const bundlePaths = KNOWN_TERMINAL_PATHS[id];
+  if (isMac && bundlePaths?.some(p => p.endsWith('.app'))) {
+    return bundlePaths.some(p => existsSync(p));
+  }
   try {
     const whichCmd = isWindows ? `where ${cmd}` : `which ${cmd}`;
     execSync(whichCmd, { stdio: 'ignore' });
     return true;
   } catch {
-    const paths = KNOWN_TERMINAL_PATHS[cmd];
-    return paths?.some(p => existsSync(p)) ?? false;
+    return bundlePaths?.some(p => existsSync(p)) ?? false;
   }
 }
 
@@ -103,4 +113,8 @@ export function getKnownTerminals(): Terminal[] {
 
 export function isWindowsPlatform(): boolean {
   return isWindows;
+}
+
+export function isMacPlatform(): boolean {
+  return isMac;
 }
