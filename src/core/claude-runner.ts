@@ -391,11 +391,27 @@ Be concise and actionable. Format your response as markdown suitable for a PR co
 }
 
 function buildAdoWorkItemPrompt(verb: string, context: Task['context']): string {
+  const goal = verb.toLowerCase() === 'fix' ? 'fix' : 'implementation';
   return `${verb} ADO work item #${context.workItemId}: ${context.title}
 
-Use /ado-start ${context.workItemId} to fetch the ticket, set up your workspace, explore the codebase, and write a ${verb.toLowerCase() === 'fix' ? 'fix' : 'implementation'} plan.
+${context.body ? `## Description\n${context.body}\n` : ''}
+## Phase 1: Understand & Plan
+1. Explore the codebase to understand relevant components, patterns, and conventions
+2. Identify files that need changes
+3. Write a brief ${goal} plan before coding
 
-When done implementing, use /ado-resolve to commit, push, create the PR, and resolve the ticket.`;
+## Phase 2: Implement
+1. Create a branch: \`git checkout -b ${context.workItemId}-<short-desc>\` from the upstream default branch
+2. Make the necessary code changes
+3. Keep changes minimal and focused
+
+## Phase 3: Commit & Push
+1. Commit with a descriptive message
+2. Push to the fork remote
+3. Create a PR targeting the upstream default branch (usually \`master\`)
+   - Include \`#${context.workItemId}\` in the PR title
+
+Provide a brief summary of changes when done.`;
 }
 
 export function buildIssueFixPrompt(context: Task['context']): string {
