@@ -2,7 +2,7 @@ import { execFileSync, execSync } from 'child_process';
 import { mkdirSync } from 'fs';
 import path from 'path';
 import { Octokit } from 'octokit';
-import { config } from './config.js';
+import { config, WORKSPACES_DIR } from './config.js';
 
 const octokit = new Octokit({ auth: config.github.token });
 
@@ -184,7 +184,7 @@ export async function createGitHubPR(
 export function getWorktreePath(repoPath: string, branchName: string): string {
   const repoName = path.basename(repoPath);
   const branchSlug = branchName.replace(/\//g, '-');
-  return path.join(repoPath, '..', '.orch-worktrees', repoName, branchSlug);
+  return path.join(WORKSPACES_DIR, 'worktrees', repoName, branchSlug);
 }
 
 export function createWorktree(repoPath: string, branchName: string, baseBranch?: string): string | null {
@@ -211,7 +211,7 @@ export function removeWorktree(repoPath: string, worktreePath: string): void {
 }
 
 export function cloneRepo(cloneUrl: string, targetName: string): string | null {
-  const clonesDir = path.resolve(config.repos.baseDir, '.orch-clones');
+  const clonesDir = path.join(WORKSPACES_DIR, 'clones');
   const targetPath = path.join(clonesDir, targetName);
   try {
     mkdirSync(clonesDir, { recursive: true });

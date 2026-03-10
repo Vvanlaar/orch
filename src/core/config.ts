@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import path from 'path';
 import type { Config, TerminalId } from './types.js';
 
 function envOr(key: string, fallback: string): string {
@@ -14,6 +15,7 @@ export const config: Config = {
     webhookSecret: envOr('GITHUB_WEBHOOK_SECRET', ''),
     token: envOr('GITHUB_TOKEN', ''),
     org: envOr('GITHUB_ORG', 'bluebillywig'),
+    clientId: envOr('GITHUB_OAUTH_CLIENT_ID', ''),
   },
   ado: {
     organization: envOr('ADO_ORG', 'bluebillywig'),
@@ -38,3 +40,7 @@ export const config: Config = {
     intervalMs: parseInt(envOr('POLLING_INTERVAL_MS', '60000')),
   },
 };
+
+export const WORKSPACES_DIR = path.resolve(
+  process.env.WORKSPACES_DIR || path.join(process.cwd(), '.workspaces')
+);

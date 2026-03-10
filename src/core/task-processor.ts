@@ -1,7 +1,7 @@
 import { existsSync } from 'fs';
 import path from 'path';
 import { Octokit } from 'octokit';
-import { config } from './config.js';
+import { config, WORKSPACES_DIR } from './config.js';
 import {
   getPendingTasks,
   getRunningCount,
@@ -17,6 +17,7 @@ import {
 } from './task-queue.js';
 import { extractLesson, storeLearning, updateSkillIfRelevant } from './learnings.js';
 import { runClaude, runClaudeStreaming, runClaudeInTerminal, claudeEmitter, steerTask, buildPromptForTask, buildPrCommentFixPrompt, buildCodeSimplifierPrompt, buildSelfReviewPrompt, buildCommentResolutionPrompt } from './claude-runner.js';
+import { getTerminalInteractiveSession } from './settings.js';
 import {
   cloneRepo,
   getGitStatus,
@@ -385,10 +386,10 @@ function deriveCloneUrl(task: Task): string | null {
 
 function resolveOrCloneRepo(task: Task): string | null {
   const basename = path.basename(task.repoPath);
-  const orchClonePath = path.resolve(config.repos.baseDir, '.orch-clones', basename);
+  const orchClonePath = path.join(WORKSPACES_DIR, 'clones', basename);
 
   if (existsSync(path.join(orchClonePath, '.git'))) {
-    console.log(`[Task #${task.id}] Found in .orch-clones/: ${orchClonePath}`);
+    console.log(`[Task #${task.id}] Found in .workspaces/clones/: ${orchClonePath}`);
     return orchClonePath;
   }
 
@@ -447,7 +448,7 @@ async function processTask(task: Task): Promise<void> {
     const prompt = buildPromptForTask(task);
 
     // Terminal mode: open in separate window, task stays "running" until manually completed
-    if (config.claude.terminalMode || forceTerminal) {
+    if (config.claude.terminalMode || forceTerminal || getTerminalInteractiveSession()) {
       const termResult = await runClaudeInTerminal(task.id, task, prompt, { allowEdits });
       if (!termResult.success) {
         failTask(task.id, termResult.error || 'Failed to open terminal');

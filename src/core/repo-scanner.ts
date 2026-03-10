@@ -1,7 +1,7 @@
 import { readdirSync, existsSync, statSync } from 'fs';
 import { execSync } from 'child_process';
 import { join, resolve } from 'path';
-import { config } from './config.js';
+import { config, WORKSPACES_DIR } from './config.js';
 
 export interface RepoInfo {
   localPath: string;
@@ -100,7 +100,7 @@ export function scanRepos(): RepoInfo[] {
 
   return [
     ...scanDirectory(baseDir, ''),
-    ...scanDirectory(join(baseDir, '.orch-clones'), '.orch-clones'),
+    ...scanDirectory(join(WORKSPACES_DIR, 'clones'), '.workspaces/clones'),
   ];
 }
 
