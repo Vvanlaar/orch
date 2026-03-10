@@ -15,6 +15,16 @@ export function formatResetTime(iso: string | undefined): string {
   return h > 0 ? `resets in ${h}h ${m}m` : `resets in ${m}m`;
 }
 
+export function formatUpdatedAt(iso: string | undefined): string {
+  if (!iso) return '';
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 60_000) return 'updated just now';
+  const m = Math.floor(ms / 60_000);
+  if (m < 60) return `updated ${m}m ago`;
+  const h = Math.floor(m / 60);
+  return `updated ${h}h ${m % 60}m ago`;
+}
+
 export async function fetchClaudeUsage() {
   try {
     const res = await fetch('/api/claude/usage');

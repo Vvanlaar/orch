@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getConnectionState } from '../stores/websocket.svelte';
-  import { getUsage, formatResetTime } from '../stores/usage.svelte';
+  import { getUsage, formatResetTime, formatUpdatedAt } from '../stores/usage.svelte';
   import { getSettings, fetchTerminalConfig, detectTerminals, selectInteractiveSession, selectTerminal } from '../stores/settings.svelte';
   import { getCredentials, saveCredentials } from '../lib/api';
   import { getAuth, fetchAuthStatus, beginDeviceFlow, cancelDeviceFlow } from '../stores/auth.svelte';
@@ -24,6 +24,7 @@
   let usage7d = $derived(Math.round(usage?.seven_day?.utilization ?? 0));
   let reset5h = $derived(formatResetTime(usage?.five_hour?.resets_at));
   let reset7d = $derived(formatResetTime(usage?.seven_day?.resets_at));
+  let updatedAt = $derived(formatUpdatedAt(usage?.updatedAt));
 
   let auth = $derived(getAuth());
   let notifState = $derived(getNotificationState());
@@ -107,13 +108,14 @@
     oninput={(e) => setSearchQuery((e.currentTarget as HTMLInputElement).value)}
   />
   <div class="header-right">
-    <div class="usage-bars">
+    <div class="usage-bars" title={updatedAt}>
       <span>5h</span>
       <progress class="bright" value={usage5h} max="100" title={reset5h}></progress>
       <span class="pct">{usage5h}%</span>
       <span class="spacer">7d</span>
       <progress class="dim" value={usage7d} max="100" title={reset7d}></progress>
       <span class="pct">{usage7d}%</span>
+      {#if updatedAt}<span class="updated-at">{updatedAt}</span>{/if}
     </div>
     <label class="toggle-wrap" title="When enabled, Fix/Implement tasks open Claude in interactive terminal mode.">
       <input
@@ -302,6 +304,12 @@
   .pct {
     min-width: 28px;
     font-size: 10px;
+  }
+
+  .updated-at {
+    font-size: 9px;
+    color: #6e7681;
+    margin-left: 4px;
   }
 
   .toggle-wrap {

@@ -901,12 +901,26 @@ app.get('/api/ado/me', async (_req, res) => {
 });
 
 let usageCache: { data: unknown; ts: number } | null = null;
+let usageErrorCache: { status: number; ts: number } | null = null;
 const USAGE_CACHE_MS = 60_000; // 1 minute
+const USAGE_ERROR_CACHE_MS = 5 * 60_000; // 5 minutes for error backoff
+
+function wrapUsageResponse(data: unknown, ts: number) {
+  return { ...(data as Record<string, unknown>), updatedAt: new Date(ts).toISOString() };
+}
 
 app.get('/api/claude/usage', async (_req, res) => {
   try {
     if (usageCache && Date.now() - usageCache.ts < USAGE_CACHE_MS) {
-      return res.json(usageCache.data);
+      return res.json(wrapUsageResponse(usageCache.data, usageCache.ts));
+    }
+    // Back off on recent upstream errors — return stale data if available
+    if (usageErrorCache && Date.now() - usageErrorCache.ts < USAGE_ERROR_CACHE_MS) {
+      if (usageCache) {
+        return res.json(wrapUsageResponse(usageCache.data, usageCache.ts));
+      }
+      res.status(usageErrorCache.status).json({ error: `API error: ${usageErrorCache.status} (backoff)` });
+      return;
     }
     const credsPath = join(homedir(), '.claude', '.credentials.json');
     if (!existsSync(credsPath)) {
@@ -929,13 +943,24 @@ app.get('/api/claude/usage', async (_req, res) => {
       },
     });
     if (!resp.ok) {
+      usageErrorCache = { status: resp.status, ts: Date.now() };
+      // Return stale data on error if available
+      if (usageCache) {
+        return res.json(wrapUsageResponse(usageCache.data, usageCache.ts));
+      }
       res.status(resp.status).json({ error: `API error: ${resp.status}` });
       return;
     }
+    usageErrorCache = null;
     const usage = await resp.json();
-    usageCache = { data: usage, ts: Date.now() };
-    res.json(usage);
+    const now = Date.now();
+    usageCache = { data: usage, ts: now };
+    res.json(wrapUsageResponse(usage, now));
   } catch (err) {
+    // Return stale data on error if available
+    if (usageCache) {
+      return res.json(wrapUsageResponse(usageCache.data, usageCache.ts));
+    }
     res.status(500).json({ error: String(err) });
   }
 });

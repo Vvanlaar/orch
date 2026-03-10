@@ -57,6 +57,7 @@ export interface TeamMember {
 export interface ClaudeUsage {
   five_hour?: { utilization: number; resets_at: string };
   seven_day?: { utilization: number; resets_at: string };
+  updatedAt?: string;
 }
 
 export interface Process {
