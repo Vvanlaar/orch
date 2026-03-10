@@ -4,6 +4,7 @@
   import type { PR, WorkItem, FilterType, OwnerFilter } from '../lib/types';
   import { formatTime, stateClass, typeClass, extractAdoTicket } from '../lib/utils';
   import { reviewPR, fixPRComments, analyzeWorkItem, reviewResolution, openTerminalForRepo, openTerminalWithCommand } from '../lib/api';
+  import { showToast } from '../stores/toast.svelte';
   import {
     getFilteredItems,
     setFilter,
@@ -82,45 +83,45 @@
 
   async function handleReviewPR(key: string) {
     const pr = getPRFromCache(key);
-    if (!pr) return alert('PR not found');
+    if (!pr) return showToast('PR not found', 'warning');
     try {
       const result = await reviewPR(pr);
-      alert(`Task #${result.taskId} created: ${result.message}`);
+      showToast(`Task #${result.taskId} created: ${result.message}`, 'success');
     } catch (err: any) {
-      alert('Failed to create task: ' + err.message);
+      showToast('Failed to create task: ' + err.message, 'error');
     }
   }
 
   async function handleFixComments(key: string) {
     const pr = getPRFromCache(key);
-    if (!pr) return alert('PR not found');
+    if (!pr) return showToast('PR not found', 'warning');
     try {
       const result = await fixPRComments(pr);
-      alert(`Task #${result.taskId} created: ${result.message}`);
+      showToast(`Task #${result.taskId} created: ${result.message}`, 'success');
     } catch (err: any) {
-      alert('Failed to create task: ' + err.message);
+      showToast('Failed to create task: ' + err.message, 'error');
     }
   }
 
   async function handleAnalyzeWorkItem(id: number) {
     const wi = getWorkItemFromCache(id);
-    if (!wi) return alert('Work item not found');
+    if (!wi) return showToast('Work item not found', 'warning');
     try {
       const result = await analyzeWorkItem(wi);
-      alert(`Task #${result.taskId} created: ${result.message}`);
+      showToast(`Task #${result.taskId} created: ${result.message}`, 'success');
     } catch (err: any) {
-      alert('Failed to create task: ' + err.message);
+      showToast('Failed to create task: ' + err.message, 'error');
     }
   }
 
   async function handleReviewResolution(id: number) {
     const wi = getWorkItemFromCache(id);
-    if (!wi) return alert('Work item not found');
+    if (!wi) return showToast('Work item not found', 'warning');
     try {
       const result = await reviewResolution(wi);
-      alert(`Task #${result.taskId} created: ${result.message}`);
+      showToast(`Task #${result.taskId} created: ${result.message}`, 'success');
     } catch (err: any) {
-      alert('Failed to create task: ' + err.message);
+      showToast('Failed to create task: ' + err.message, 'error');
     }
   }
 
@@ -150,7 +151,7 @@
   function getPRKanbanColumn(pr: PR): PRKanbanColumnKey {
     if (pr.draft) return 'draft';
     if (pr.role === 'reviewer') return 'needs-review';
-    if (pr.commentCount && pr.commentCount > 0) return 'has-comments';
+    if (pr.commentCount) return 'has-comments';
     return 'open';
   }
 
@@ -167,7 +168,7 @@
     try {
       await openTerminalWithCommand(`claude "investigate ticket #${wi.id}"`, `Investigate #${wi.id}`);
     } catch (err: any) {
-      alert('Failed: ' + err.message);
+      showToast('Failed: ' + err.message, 'error');
     }
   }
 
@@ -175,7 +176,7 @@
     try {
       await openTerminalForRepo(repoName, workItemId);
     } catch (err: any) {
-      alert('Failed: ' + err.message);
+      showToast('Failed: ' + err.message, 'error');
     }
   }
 
@@ -224,7 +225,6 @@
     return prCollapsedColumns.has(key);
   }
 
-
   // --- Local notes per ticket ---
   const NOTES_PREFIX = 'orch.workitem.notes.';
   let expandedNotes = $state(new Set<number>());
@@ -252,31 +252,27 @@
   }
 
   function toggleNotes(id: number) {
-    if (expandedNotes.has(id)) {
-      expandedNotes.delete(id);
-      expandedNotes = new Set(expandedNotes);
-    } else {
+    const expanding = !expandedNotes.has(id);
+    if (expanding) {
       expandedNotes.add(id);
-      expandedNotes = new Set(expandedNotes);
       // Lazy-load from localStorage
       if (!noteTexts.has(id)) {
         const text = readPreference(`${NOTES_PREFIX}${id}`, '', (v): v is string => typeof v === 'string');
         noteTexts.set(id, text);
         noteTexts = new Map(noteTexts);
       }
+    } else {
+      expandedNotes.delete(id);
     }
+    expandedNotes = new Set(expandedNotes);
   }
 
   function updateNote(id: number, text: string) {
     noteTexts.set(id, text);
     noteTexts = new Map(noteTexts);
-    if (text) {
-      idsWithNotes.add(id);
-      idsWithNotes = new Set(idsWithNotes);
-    } else {
-      idsWithNotes.delete(id);
-      idsWithNotes = new Set(idsWithNotes);
-    }
+    if (text) idsWithNotes.add(id);
+    else idsWithNotes.delete(id);
+    idsWithNotes = new Set(idsWithNotes);
     // Debounced save
     const existing = debounceTimers.get(id);
     if (existing) clearTimeout(existing);
@@ -401,7 +397,7 @@
         {/each}
 
         {#each items.workItems as wi (wi.id)}
-          {@const hasPr = !!(wi.githubPrUrl || (wi.resolution && wi.resolution.includes('github.com')))}
+          {@const hasPr = !!(wi.githubPrUrl || wi.resolution?.includes('github.com'))}
           <div class="list-row" style="border-left-color: {typeBorderColor(wi.type)};">
             <div class="list-row-content">
               <div class="list-row-top">
@@ -553,7 +549,7 @@
                     <div class="kanban-empty">No items</div>
                   {/if}
                   {#each columnItems as wi (wi.id)}
-                    {@const hasPr = !!(wi.githubPrUrl || (wi.resolution && wi.resolution.includes('github.com')))}
+                    {@const hasPr = !!(wi.githubPrUrl || wi.resolution?.includes('github.com'))}
                     <div class="kanban-card" style="border-left-color: {typeBorderColor(wi.type)};">
                       <div class="kanban-card-top">
                         <a href={wi.url} target="_blank" class="ticket-link">#{wi.id} · {wi.project}</a>

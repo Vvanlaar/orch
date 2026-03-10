@@ -2,6 +2,7 @@
   import type { WorkItem, GitHubRepo } from '../lib/types';
   import { typeClass, extractRepoFromGitHubUrl } from '../lib/utils';
   import { testWorkitem, openTerminalWithCommand } from '../lib/api';
+  import { showToast } from '../stores/toast.svelte';
   import {
     getReviewedItems,
     getMyTestingItems,
@@ -20,10 +21,17 @@
   import { getCurrentUser } from '../stores/currentUser.svelte';
   import { getOrgRepos, isLoading, isLoaded, getCloningRepo, loadOrgRepos, cloneRepo } from '../stores/repos.svelte';
 
+  import { getSearchQuery, matchesSearch } from '../stores/search.svelte';
+
+  let searchQuery = $derived(getSearchQuery());
+  function filterTesting(items: WorkItem[]): WorkItem[] {
+    if (!searchQuery) return items;
+    return items.filter(wi => matchesSearch(searchQuery, wi.id, wi.title, wi.type, wi.assignedTo, wi.resolvedBy, wi.reviewedBy));
+  }
   let reviewedItems = $derived(getReviewedItems());
-  let myItems = $derived(getMyTestingItems());
-  let unassignedItems = $derived(getUnassignedItems());
-  let otherItems = $derived(getOtherAssignedItems());
+  let myItems = $derived(filterTesting(getMyTestingItems()));
+  let unassignedItems = $derived(filterTesting(getUnassignedItems()));
+  let otherItems = $derived(filterTesting(getOtherAssignedItems()));
   let teamMembers = $derived(getTeamMembers());
   let selectedTeamMembers = $derived(getSelectedTeamMembers());
   let sprintName = $derived(getSprintName());
@@ -48,13 +56,13 @@
   async function handleOpenTerminal() {
     const cmd = generateAssignCommand();
     if (!cmd) {
-      alert(selectedTeamMembers.size === 0 ? 'Select at least one team member' : 'No reviewed items to assign');
+      showToast(selectedTeamMembers.size === 0 ? 'Select at least one team member' : 'No reviewed items to assign', 'warning');
       return;
     }
     try {
       await openTerminalWithCommand(cmd, 'Assign Testing');
     } catch (err) {
-      alert(`Failed to open terminal: ${err}`);
+      showToast(`Failed to open terminal: ${err}`, 'error');
     }
   }
 
@@ -64,7 +72,7 @@
       const selectedRepo = selectedRepos.get(wi.id);
       await testWorkitem(wi, selectedRepo);
     } catch (err) {
-      alert(`Failed: ${err}`);
+      showToast(`Failed: ${err}`, 'error');
     } finally {
       testingItem = null;
     }
@@ -95,7 +103,7 @@
   });
 </script>
 
-<div class="card" style="margin-bottom: 24px;">
+<div class="card">
   <h2>Testing Assignment</h2>
   <div class="sprint-header">
     <span>{sprintName}</span>
@@ -120,7 +128,7 @@
             <div class="item-info">
               <div class="item-title">{wi.title}</div>
               <div class="item-meta">
-                <span>#{wi.id}</span>
+                <a href={wi.url} target="_blank" class="ticket-link">#{wi.id}</a>
                 <span class="badge type {typeClass(wi.type)}">{wi.type}</span>
                 {#if detectedRepo}
                   <span class="badge repo">{detectedRepo}</span>
@@ -163,7 +171,6 @@
               >
                 {testingItem === wi.id ? 'Starting...' : 'Test'}
               </button>
-              <a href={wi.url} target="_blank" class="action-btn secondary">View →</a>
             </div>
           </div>
         {/each}
@@ -178,7 +185,7 @@
             <div class="item-info">
               <div class="item-title">{wi.title}</div>
               <div class="item-meta">
-                <span>#{wi.id}</span>
+                <a href={wi.url} target="_blank" class="ticket-link">#{wi.id}</a>
                 <span class="badge type {typeClass(wi.type)}">{wi.type}</span>
                 {#if detectedRepo}
                   <span class="badge repo">{detectedRepo}</span>
@@ -189,9 +196,6 @@
                 <span class="badge-person">Resolved: {wi.resolvedBy || 'N/A'}</span>
                 <span class="badge-person">Reviewed: {wi.reviewedBy || 'N/A'}</span>
               </div>
-            </div>
-            <div class="item-actions">
-              <a href={wi.url} target="_blank" class="action-btn secondary">View →</a>
             </div>
           </div>
         {/each}
@@ -216,7 +220,7 @@
               <div class="item-info">
                 <div class="item-title">{wi.title}</div>
                 <div class="item-meta">
-                  <span>#{wi.id}</span>
+                  <a href={wi.url} target="_blank" class="ticket-link">#{wi.id}</a>
                   <span class="badge type {typeClass(wi.type)}">{wi.type}</span>
                   {#if detectedRepo}
                     <span class="badge repo">{detectedRepo}</span>
@@ -227,9 +231,6 @@
                   <span class="badge-person">Resolved: {wi.resolvedBy || 'N/A'}</span>
                   <span class="badge-person">Reviewed: {wi.reviewedBy || 'N/A'}</span>
                 </div>
-              </div>
-              <div class="item-actions">
-                <a href={wi.url} target="_blank" class="action-btn secondary">View →</a>
               </div>
             </div>
           {/each}
@@ -270,13 +271,24 @@
 </div>
 
 <style>
+  .ticket-link {
+    color: #8b949e;
+    text-decoration: none;
+    transition: color 0.15s;
+  }
+
+  .ticket-link:hover {
+    color: #58a6ff;
+  }
+
   .sprint-header {
-    padding: 12px 16px;
-    background: #21262d;
-    font-size: 13px;
+    padding: 10px 18px;
+    background: #151b23;
+    font-size: 12px;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    color: #8b949e;
   }
 
   .current-user {
@@ -285,23 +297,26 @@
   }
 
   .section-header {
-    padding: 8px 16px;
-    background: #1c2128;
-    font-size: 12px;
+    padding: 8px 18px;
+    background: #151b23;
+    font-size: 11px;
     font-weight: 600;
     color: #8b949e;
     border-bottom: 1px solid #21262d;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
   }
 
   .section-header.clickable {
     cursor: pointer;
+    transition: background 0.1s;
   }
 
   .section-header.clickable:hover {
-    background: #21262d;
+    background: #161b22;
   }
 
   .toggle-icon {
@@ -312,85 +327,93 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 12px 16px;
-    border-top: 1px solid #30363d;
-    gap: 16px;
+    padding: 12px 18px;
+    border-top: 1px solid #2a313b;
+    gap: 12px;
   }
 
   .assign-left {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
     flex: 1;
     flex-wrap: wrap;
   }
 
   .assign-label {
-    font-size: 12px;
+    font-size: 11px;
     color: #8b949e;
     white-space: nowrap;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
   }
 
   .team-selection {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 4px;
   }
 
   .team-member {
-    padding: 3px 8px;
-    border-radius: 12px;
-    background: #21262d;
+    padding: 3px 10px;
+    border-radius: 6px;
+    background: #2a313b;
     cursor: pointer;
     font-size: 11px;
+    font-weight: 500;
+    transition: all 0.15s;
   }
 
   .team-member:hover {
-    background: #30363d;
+    background: #353d47;
   }
 
   .team-member.selected {
-    background: #238636;
-    color: #fff;
+    background: #123620;
+    color: #3fb950;
+    border: 1px solid #16381f;
   }
 
   .assign-controls {
     display: flex;
-    gap: 6px;
+    gap: 4px;
     flex-shrink: 0;
   }
 
   .reviewed-meta {
     display: flex;
-    gap: 8px;
+    gap: 6px;
     margin-top: 4px;
   }
 
   .badge-person {
-    background: #30363d;
-    color: #c9d1d9;
+    background: #2a313b;
+    color: #8b949e;
     padding: 2px 8px;
     border-radius: 4px;
-    font-size: 11px;
+    font-size: 10px;
+    font-weight: 500;
   }
 
   .badge-person.assigned {
-    background: #2d5016;
-    color: #90ee90;
+    background: #123620;
+    color: #3fb950;
   }
 
   .badge-person.unassigned {
-    background: #501616;
-    color: #ee9090;
+    background: #361414;
+    color: #f85149;
   }
 
   .badge.repo {
-    background: #1f3b5c;
+    background: #122a4a;
     color: #58a6ff;
     padding: 2px 8px;
     border-radius: 4px;
-    font-size: 11px;
-    font-family: monospace;
+    font-size: 10px;
+    font-weight: 500;
+    font-family: 'IBM Plex Mono', monospace;
   }
 
   .repo-selector {
@@ -402,21 +425,23 @@
 
   .repo-selector select {
     padding: 4px 8px;
-    background: #21262d;
-    border: 1px solid #30363d;
-    border-radius: 4px;
+    background: #0d1117;
+    border: 1px solid #2a313b;
+    border-radius: 6px;
     color: #c9d1d9;
     font-size: 11px;
     min-width: 180px;
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    transition: border-color 0.15s;
   }
 
   .repo-selector select:focus {
     outline: none;
-    border-color: #58a6ff;
+    border-color: #1f4a85;
   }
 
   .clone-btn {
     padding: 4px 8px !important;
-    font-size: 11px !important;
+    font-size: 10px !important;
   }
 </style>

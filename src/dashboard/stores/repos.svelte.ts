@@ -1,5 +1,6 @@
 import type { GitHubRepo } from '../lib/types';
 import { fetchOrgRepos, cloneRepo as apiCloneRepo } from '../lib/api';
+import { showToast } from './toast.svelte';
 
 let orgRepos = $state<GitHubRepo[]>([]);
 let loading = $state(false);
@@ -46,12 +47,12 @@ export async function cloneRepo(repo: GitHubRepo): Promise<boolean> {
       );
       return true;
     } else {
-      alert(`Clone failed: ${result.error}`);
+      showToast(`Clone failed: ${result.error}`, 'error');
       return false;
     }
   } catch (err) {
     console.error('Failed to clone repo:', err);
-    alert(`Clone failed: ${err}`);
+    showToast(`Clone failed: ${err}`, 'error');
     return false;
   } finally {
     cloning = null;

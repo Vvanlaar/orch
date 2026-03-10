@@ -8,39 +8,46 @@
     killOldProcesses,
     killAllProcesses,
   } from '../stores/processes.svelte';
+  import { getSearchQuery, matchesSearch } from '../stores/search.svelte';
+  import { showToast, showConfirm } from '../stores/toast.svelte';
 
-  let processes = $derived(getProcesses());
+  let allProcesses = $derived(getProcesses());
   let loading = $derived(isLoading());
+  let searchQuery = $derived(getSearchQuery());
+  let processes = $derived.by(() => {
+    if (!searchQuery) return allProcesses;
+    return allProcesses.filter(p => matchesSearch(searchQuery, p.pid, p.taskId, p.taskType, p.repo));
+  });
 
   async function handleKill(pid: number) {
-    if (!confirm(`Kill process ${pid}?`)) return;
+    if (!await showConfirm(`Kill process ${pid}?`)) return;
     try {
       await killProcess(pid);
     } catch (err) {
-      alert('Failed to kill process');
+      showToast('Failed to kill process', 'error');
     }
   }
 
   async function handleKillOld() {
-    if (!confirm('Kill Orch task processes older than 2 hours?')) return;
+    if (!await showConfirm('Kill Orch task processes older than 2 hours?')) return;
     try {
       await killOldProcesses();
     } catch (err) {
-      alert('Failed to kill old processes');
+      showToast('Failed to kill old processes', 'error');
     }
   }
 
   async function handleKillAll() {
-    if (!confirm('Kill all Orch task processes?')) return;
+    if (!await showConfirm('Kill all Orch task processes?')) return;
     try {
       await killAllProcesses();
     } catch (err) {
-      alert('Failed to kill processes');
+      showToast('Failed to kill processes', 'error');
     }
   }
 </script>
 
-<div class="card" style="margin-top: 24px;">
+<div class="card">
   <h2 class="process-header">
     <span>Processes</span>
     <div class="process-actions">
@@ -86,18 +93,33 @@
 
   .process-actions {
     display: flex;
-    gap: 8px;
+    gap: 6px;
   }
 
   .kill-old {
-    background: #f0883e !important;
+    background: #7a4510 !important;
+    color: #f0883e !important;
+  }
+
+  .kill-old:hover {
+    background: #8b5011 !important;
   }
 
   .kill-all {
-    background: #f85149 !important;
+    background: #5c1010 !important;
+    color: #f85149 !important;
+  }
+
+  .kill-all:hover {
+    background: #6e1212 !important;
   }
 
   .kill-btn {
-    background: #f85149 !important;
+    background: #5c1010 !important;
+    color: #f85149 !important;
+  }
+
+  .kill-btn:hover {
+    background: #6e1212 !important;
   }
 </style>

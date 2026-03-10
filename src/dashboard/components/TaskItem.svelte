@@ -2,6 +2,7 @@
   import type { Task } from '../lib/types';
   import { formatTime, extractRepoFromGitHubUrl } from '../lib/utils';
   import { send } from '../stores/websocket.svelte';
+  import { showToast, showConfirm } from '../stores/toast.svelte';
   import {
     isExpanded,
     toggleExpanded,
@@ -47,7 +48,7 @@
       await setRepoPath(task.id, repoPathInput.trim());
       repoPathInput = '';
     } catch (err: any) {
-      alert('Failed: ' + err.message);
+      showToast('Failed: ' + err.message, 'error');
     }
   }
 
@@ -57,21 +58,21 @@
 
   async function handleStop(e: Event) {
     e.stopPropagation();
-    if (!confirm(`Stop task #${task.id}?`)) return;
+    if (!await showConfirm(`Stop task #${task.id}?`)) return;
     try {
       await stopTask(task.id);
     } catch (err: any) {
-      alert('Failed to stop task: ' + err.message);
+      showToast('Failed to stop task: ' + err.message, 'error');
     }
   }
 
   async function handleDelete(e: Event) {
     e.stopPropagation();
-    if (!confirm(`Delete task #${task.id}?`)) return;
+    if (!await showConfirm(`Delete task #${task.id}?`)) return;
     try {
       await deleteTask(task.id);
     } catch (err: any) {
-      alert('Failed to delete task: ' + err.message);
+      showToast('Failed to delete task: ' + err.message, 'error');
     }
   }
 
@@ -80,7 +81,7 @@
     try {
       await retryTask(task.id);
     } catch (err: any) {
-      alert('Failed to retry task: ' + err.message);
+      showToast('Failed to retry task: ' + err.message, 'error');
     }
   }
 
@@ -89,7 +90,7 @@
     try {
       await completeTask(task.id);
     } catch (err: any) {
-      alert('Failed to complete task: ' + err.message);
+      showToast('Failed to complete task: ' + err.message, 'error');
     }
   }
 
@@ -98,7 +99,7 @@
     try {
       await openTerminal(task.id);
     } catch (err: any) {
-      alert('Failed to open terminal: ' + err.message);
+      showToast('Failed to open terminal: ' + err.message, 'error');
     }
   }
 
@@ -107,7 +108,7 @@
     try {
       await approveTask(task.id);
     } catch (err: any) {
-      alert('Failed to approve: ' + err.message);
+      showToast('Failed to approve: ' + err.message, 'error');
     }
   }
 
@@ -116,7 +117,7 @@
     try {
       await dismissTask(task.id);
     } catch (err: any) {
-      alert('Failed to dismiss: ' + err.message);
+      showToast('Failed to dismiss: ' + err.message, 'error');
     }
   }
 
@@ -214,12 +215,13 @@
 
   .task {
     display: grid;
-    grid-template-columns: 60px 90px minmax(0, 1fr) 80px auto;
-    gap: 12px;
-    padding: 12px 16px;
+    grid-template-columns: 48px 80px minmax(0, 1fr) 72px auto;
+    gap: 10px;
+    padding: 10px 18px;
     align-items: center;
     overflow: hidden;
     cursor: pointer;
+    transition: background 0.1s;
   }
 
   .task:hover {
@@ -227,50 +229,52 @@
   }
 
   .task-id {
-    font-family: monospace;
+    font-family: 'IBM Plex Mono', monospace;
     color: #8b949e;
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .task-status {
-    font-size: 11px;
-    padding: 2px 8px;
-    border-radius: 12px;
+    font-size: 10px;
+    font-weight: 500;
+    padding: 3px 8px;
+    border-radius: 4px;
     text-align: center;
+    letter-spacing: 0.02em;
   }
 
   .task-status.pending {
-    background: #f0883e20;
+    background: #362210;
     color: #f0883e;
   }
 
   .task-status.running {
-    background: #58a6ff20;
+    background: #122a4a;
     color: #58a6ff;
   }
 
   .task-status.completed {
-    background: #3fb95020;
+    background: #123620;
     color: #3fb950;
   }
 
   .task-status.failed {
-    background: #f8514920;
+    background: #361414;
     color: #f85149;
   }
 
   .task-status.needs-repo {
-    background: #8b949e20;
+    background: #2a313b;
     color: #8b949e;
   }
 
   .task-status.suggestion {
-    background: #a371f720;
+    background: #22163c;
     color: #a371f7;
   }
 
   .task-status.dismissed {
-    background: #8b949e20;
+    background: #2a313b;
     color: #8b949e;
   }
 
@@ -279,25 +283,29 @@
   }
 
   .task-type {
-    font-size: 11px;
+    font-size: 10px;
     color: #8b949e;
+    letter-spacing: 0.02em;
   }
 
   .task-title {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 13px;
+    font-size: 12px;
+    font-weight: 500;
+    color: #e6edf3;
   }
 
   .task-time {
-    font-size: 12px;
+    font-size: 11px;
     color: #8b949e;
+    font-family: 'IBM Plex Mono', monospace;
   }
 
   .task-actions {
     display: flex;
-    gap: 8px;
+    gap: 6px;
     align-items: center;
   }
 
@@ -326,10 +334,10 @@
   }
 
   .task-output {
-    font-family: 'Monaco', 'Consolas', monospace;
-    font-size: 12px;
+    font-family: 'IBM Plex Mono', 'Consolas', monospace;
+    font-size: 11px;
     background: #0d1117;
-    padding: 12px;
+    padding: 12px 18px;
     max-height: 400px;
     overflow-y: auto;
     overflow-x: hidden;
@@ -349,12 +357,12 @@
   }
 
   .task-output .no-output {
-    color: #8b949e;
+    color: #6e7681;
   }
 
   .steer-input {
     display: none;
-    padding: 8px 12px;
+    padding: 8px 18px;
     gap: 8px;
     border-top: 1px solid #21262d;
     background: #161b22;
@@ -367,30 +375,31 @@
   .steer-input input {
     flex: 1;
     background: #0d1117;
-    border: 1px solid #30363d;
+    border: 1px solid #2a313b;
     color: #c9d1d9;
     padding: 6px 10px;
-    border-radius: 4px;
-    font-family: 'Monaco', 'Consolas', monospace;
-    font-size: 12px;
+    border-radius: 6px;
+    font-family: 'IBM Plex Mono', 'Consolas', monospace;
+    font-size: 11px;
+    transition: border-color 0.15s;
   }
 
   .steer-input input:focus {
     outline: none;
-    border-color: #58a6ff;
+    border-color: #1f4a85;
   }
 
   .repo-path-input {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 12px;
+    padding: 8px 18px;
     border-top: 1px solid #21262d;
     background: #161b22;
   }
 
   .repo-label {
-    font-size: 12px;
+    font-size: 11px;
     color: #8b949e;
     white-space: nowrap;
   }
@@ -398,16 +407,17 @@
   .repo-path-input input {
     flex: 1;
     background: #0d1117;
-    border: 1px solid #30363d;
+    border: 1px solid #2a313b;
     color: #c9d1d9;
     padding: 6px 10px;
-    border-radius: 4px;
-    font-family: 'Monaco', 'Consolas', monospace;
-    font-size: 12px;
+    border-radius: 6px;
+    font-family: 'IBM Plex Mono', 'Consolas', monospace;
+    font-size: 11px;
+    transition: border-color 0.15s;
   }
 
   .repo-path-input input:focus {
     outline: none;
-    border-color: #58a6ff;
+    border-color: #1f4a85;
   }
 </style>

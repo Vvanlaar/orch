@@ -16,6 +16,7 @@
   import NotificationSidebar from './components/NotificationSidebar.svelte';
   import OrchestratorPanel from './components/OrchestratorPanel.svelte';
   import OrchestratorChat from './components/OrchestratorChat.svelte';
+  import ToastContainer from './components/ToastContainer.svelte';
 
   function refreshAll() {
     fetchPRs();
@@ -56,6 +57,7 @@
 </div>
 <NotificationSidebar />
 <OrchestratorChat />
+<ToastContainer />
 
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
