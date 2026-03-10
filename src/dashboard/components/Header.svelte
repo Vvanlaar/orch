@@ -3,6 +3,10 @@
   import { getUsage, formatResetTime } from '../stores/usage.svelte';
   import { getSettings, fetchTerminalConfig, detectTerminals, selectInteractiveSession, selectTerminal } from '../stores/settings.svelte';
   import { getCredentials, saveCredentials } from '../lib/api';
+  import { getAuth, fetchAuthStatus, beginDeviceFlow, cancelDeviceFlow } from '../stores/auth.svelte';
+  import { getNotificationState, toggleSidebar } from '../stores/notifications.svelte';
+  import { triggerOrchestration, toggleChat } from '../stores/orchestrator.svelte';
+  import { getSearchQuery, setSearchQuery } from '../stores/search.svelte';
   import type { TerminalId } from '../lib/types';
   import { onMount } from 'svelte';
 
@@ -21,17 +25,21 @@
   let reset5h = $derived(formatResetTime(usage?.five_hour?.resets_at));
   let reset7d = $derived(formatResetTime(usage?.seven_day?.resets_at));
 
+  let auth = $derived(getAuth());
+  let notifState = $derived(getNotificationState());
+  let currentSearch = $derived(getSearchQuery());
+  let searchInput: HTMLInputElement;
   let settingsOpen = $state(false);
   let creds = $state<Record<string, string>>({});
   let credsSaving = $state(false);
   let credsMessage = $state('');
 
   function toggleSettings() {
-    settingsOpen = !settingsOpen;
-    if (settingsOpen) {
-      if (!settings.loaded) fetchTerminalConfig();
-      getCredentials().then(c => creds = c).catch(() => {});
-    }
+    if (settingsOpen) { closeSettings(); return; }
+    settingsOpen = true;
+    if (!settings.loaded) fetchTerminalConfig();
+    getCredentials().then(c => creds = c).catch(() => {});
+    fetchAuthStatus();
   }
 
   async function handleSaveCredentials() {
@@ -58,22 +66,46 @@
     selectInteractiveSession(input.checked);
   }
 
+  function closeSettings() {
+    settingsOpen = false;
+    if (auth.flowState === 'polling') cancelDeviceFlow();
+  }
+
   function handleClickOutside(e: MouseEvent) {
     const target = e.target as HTMLElement;
     if (!target.closest('.settings-container')) {
-      settingsOpen = false;
+      closeSettings();
+    }
+  }
+
+  function handleSearchKey(e: KeyboardEvent) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+      e.preventDefault();
+      searchInput?.focus();
     }
   }
 
   onMount(() => {
     fetchTerminalConfig();
     document.addEventListener('click', handleClickOutside);
-    return () => document.removeEventListener('click', handleClickOutside);
+    document.addEventListener('keydown', handleSearchKey);
+    return () => {
+      document.removeEventListener('click', handleClickOutside);
+      document.removeEventListener('keydown', handleSearchKey);
+    };
   });
 </script>
 
 <header>
   <h1>Orch Dashboard</h1>
+  <input
+    bind:this={searchInput}
+    class="global-search"
+    type="text"
+    placeholder="Search tickets, PRs, repos... (Ctrl+K)"
+    value={currentSearch}
+    oninput={(e) => setSearchQuery((e.currentTarget as HTMLInputElement).value)}
+  />
   <div class="header-right">
     <div class="usage-bars">
       <span>5h</span>
@@ -128,6 +160,34 @@
             {/if}
           </div>
           <div class="dropdown-header">
+            <span>GitHub</span>
+            {#if auth.flowState === 'complete' || auth.authenticated}
+              <span class="gh-connected">Connected</span>
+            {/if}
+          </div>
+          <div class="gh-auth-section">
+            {#if !auth.clientIdConfigured}
+              <span class="gh-hint">Set GITHUB_OAUTH_CLIENT_ID in .env</span>
+            {:else if auth.authenticated && auth.flowState === 'idle'}
+              <span class="gh-status">GitHub authenticated</span>
+            {:else if auth.flowState === 'idle'}
+              <button class="gh-signin-btn" onclick={beginDeviceFlow}>Sign in with GitHub</button>
+            {:else if auth.flowState === 'polling'}
+              <div class="gh-code-flow">
+                <code class="gh-user-code">{auth.userCode}</code>
+                <a href={auth.verificationUri} target="_blank" rel="noopener noreferrer" class="gh-link">
+                  Open github.com/login/device
+                </a>
+                <button class="gh-cancel-btn" onclick={cancelDeviceFlow}>Cancel</button>
+              </div>
+            {:else if auth.flowState === 'complete'}
+              <span class="gh-status">GitHub connected!</span>
+            {:else if auth.flowState === 'error'}
+              <span class="gh-error">{auth.errorMessage}</span>
+              <button class="gh-signin-btn" onclick={beginDeviceFlow}>Retry</button>
+            {/if}
+          </div>
+          <div class="dropdown-header">
             <span>Credentials</span>
             <button class="analyze-btn" onclick={handleSaveCredentials} disabled={credsSaving}>
               {credsSaving ? 'Saving...' : credsMessage || 'Save'}
@@ -149,6 +209,24 @@
         </div>
       {/if}
     </div>
+    <button class="orch-btn" onclick={triggerOrchestration} title="Run Auto-Orchestrator">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0zM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0zm4.879-2.773L11 8l-4.621 2.773A.25.25 0 0 1 6 10.523V5.477a.25.25 0 0 1 .379-.25z"/>
+      </svg>
+    </button>
+    <button class="chat-btn" onclick={toggleChat} title="Orchestrator Chat">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M1.5 2.75a.25.25 0 0 1 .25-.25h12.5a.25.25 0 0 1 .25.25v8.5a.25.25 0 0 1-.25.25h-6.5a.75.75 0 0 0-.53.22L4.5 14.44v-2.19a.75.75 0 0 0-.75-.75H1.75a.25.25 0 0 1-.25-.25v-8.5zM1.75 1A1.75 1.75 0 0 0 0 2.75v8.5C0 12.216.784 13 1.75 13H3v1.543a1.457 1.457 0 0 0 2.487 1.03L8.44 12.5h5.81c.966 0 1.75-.784 1.75-1.75v-8.5A1.75 1.75 0 0 0 14.25 1H1.75z"/>
+      </svg>
+    </button>
+    <button class="notif-btn" onclick={toggleSidebar} title="Notifications">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M8 16a2 2 0 0 0 2-2H6a2 2 0 0 0 2 2zM8 1.918l-.797.161A4.002 4.002 0 0 0 4 6c0 .628-.134 2.197-.459 3.742-.16.767-.376 1.566-.663 2.258h10.244c-.287-.692-.502-1.49-.663-2.258C12.134 8.197 12 6.628 12 6a4.002 4.002 0 0 0-3.203-3.92L8 1.917zM14.22 12c.223.447.481.801.78 1H1c.299-.199.557-.553.78-1C2.68 10.2 3 6.88 3 6c0-2.42 1.72-4.44 4.005-4.901a1 1 0 1 1 1.99 0A5.002 5.002 0 0 1 13 6c0 .88.32 4.2 1.22 6z"/>
+      </svg>
+      {#if notifState.unreadCount > 0}
+        <span class="notif-badge-count">{notifState.unreadCount > 99 ? '99+' : notifState.unreadCount}</span>
+      {/if}
+    </button>
     <button class="refresh-btn" onclick={refreshAll}>Refresh</button>
     <div class="status">
       <div class="status-dot" class:disconnected={!connectionState.connected}></div>
@@ -162,31 +240,59 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 24px;
+    margin-bottom: 20px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid #2a313b;
   }
 
   h1 {
-    font-size: 24px;
-    font-weight: 600;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: #e6edf3;
+    flex-shrink: 0;
+  }
+
+  .global-search {
+    flex: 1;
+    max-width: 340px;
+    background: #0d1117;
+    border: 1px solid #2a313b;
+    border-radius: 6px;
+    color: #c9d1d9;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-family: 'IBM Plex Mono', monospace;
+    transition: border-color 0.15s;
+  }
+
+  .global-search:focus {
+    outline: none;
+    border-color: #1f4a85;
+  }
+
+  .global-search::placeholder {
+    color: #6e7681;
   }
 
   .header-right {
     display: flex;
-    gap: 12px;
+    gap: 10px;
     align-items: center;
   }
 
   .usage-bars {
     display: flex;
-    gap: 8px;
+    gap: 6px;
     align-items: center;
-    font-size: 12px;
+    font-size: 11px;
     color: #8b949e;
+    font-family: 'IBM Plex Mono', monospace;
   }
 
   .usage-bars progress {
-    width: 60px;
-    height: 8px;
+    width: 52px;
+    height: 6px;
   }
 
   .spacer {
@@ -194,14 +300,15 @@
   }
 
   .pct {
-    min-width: 32px;
+    min-width: 28px;
+    font-size: 10px;
   }
 
   .toggle-wrap {
     display: flex;
     align-items: center;
-    gap: 8px;
-    font-size: 12px;
+    gap: 6px;
+    font-size: 11px;
     color: #8b949e;
     user-select: none;
   }
@@ -214,19 +321,22 @@
   .status {
     display: flex;
     align-items: center;
-    gap: 8px;
-    font-size: 14px;
+    gap: 6px;
+    font-size: 12px;
+    color: #8b949e;
   }
 
   .status-dot {
-    width: 8px;
-    height: 8px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
     background: #3fb950;
+    box-shadow: 0 0 6px rgba(63, 185, 80, 0.4);
   }
 
   .status-dot.disconnected {
     background: #f85149;
+    box-shadow: 0 0 6px rgba(248, 81, 73, 0.4);
   }
 
   .settings-container {
@@ -234,18 +344,19 @@
   }
 
   .settings-btn {
-    background: #21262d;
-    border: 1px solid #30363d;
+    background: #2a313b;
+    border: 1px solid #353d47;
     border-radius: 6px;
     padding: 6px 8px;
     cursor: pointer;
     color: #8b949e;
     display: flex;
     align-items: center;
+    transition: all 0.15s;
   }
 
   .settings-btn:hover {
-    background: #30363d;
+    background: #353d47;
     color: #c9d1d9;
   }
 
@@ -255,22 +366,24 @@
     right: 0;
     margin-top: 8px;
     background: #161b22;
-    border: 1px solid #30363d;
-    border-radius: 8px;
+    border: 1px solid #2a313b;
+    border-radius: 10px;
     min-width: 280px;
     z-index: 100;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
   }
 
   .dropdown-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 12px;
-    border-bottom: 1px solid #30363d;
-    font-size: 12px;
+    padding: 10px 12px;
+    border-bottom: 1px solid #2a313b;
+    font-size: 11px;
     font-weight: 600;
     color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
 
   .analyze-btn {
@@ -279,8 +392,11 @@
     border: none;
     border-radius: 4px;
     padding: 4px 8px;
-    font-size: 11px;
+    font-size: 10px;
+    font-weight: 500;
     cursor: pointer;
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    transition: background 0.15s;
   }
 
   .analyze-btn:hover:not(:disabled) {
@@ -288,12 +404,12 @@
   }
 
   .analyze-btn:disabled {
-    opacity: 0.6;
+    opacity: 0.5;
     cursor: not-allowed;
   }
 
   .terminal-list {
-    padding: 8px;
+    padding: 6px;
   }
 
   .terminal-option {
@@ -301,35 +417,38 @@
     justify-content: space-between;
     align-items: center;
     width: 100%;
-    padding: 8px 12px;
+    padding: 7px 10px;
     background: transparent;
     border: none;
-    border-radius: 4px;
+    border-radius: 6px;
     color: #c9d1d9;
-    font-size: 13px;
+    font-size: 12px;
     cursor: pointer;
     text-align: left;
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    transition: background 0.1s;
   }
 
   .terminal-option:hover:not(:disabled) {
-    background: #21262d;
+    background: #2a313b;
   }
 
   .terminal-option.selected {
-    background: #388bfd26;
+    background: #122a4a;
   }
 
   .terminal-option.unavailable {
-    color: #484f58;
+    color: #6e7681;
     cursor: not-allowed;
   }
 
   .unavailable-badge {
-    font-size: 10px;
+    font-size: 9px;
     color: #8b949e;
-    background: #30363d;
+    background: #2a313b;
     padding: 2px 6px;
     border-radius: 3px;
+    font-weight: 500;
   }
 
   .check {
@@ -338,8 +457,8 @@
 
   .no-terminals {
     padding: 12px;
-    color: #8b949e;
-    font-size: 12px;
+    color: #6e7681;
+    font-size: 11px;
     text-align: center;
   }
 
@@ -357,22 +476,167 @@
   }
 
   .cred-label {
-    font-size: 10px;
+    font-size: 9px;
     color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
   }
 
   .cred-field input {
     background: #0d1117;
-    border: 1px solid #30363d;
+    border: 1px solid #2a313b;
     border-radius: 4px;
     color: #c9d1d9;
-    padding: 4px 8px;
-    font-size: 12px;
-    font-family: monospace;
+    padding: 5px 8px;
+    font-size: 11px;
+    font-family: 'IBM Plex Mono', monospace;
+    transition: border-color 0.15s;
   }
 
   .cred-field input:focus {
     outline: none;
-    border-color: #58a6ff;
+    border-color: #1f4a85;
+  }
+
+  .gh-auth-section {
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: flex-start;
+  }
+
+  .gh-hint {
+    font-size: 10px;
+    color: #6e7681;
+    font-style: italic;
+  }
+
+  .gh-status {
+    font-size: 11px;
+    color: #3fb950;
+    font-weight: 500;
+  }
+
+  .gh-connected {
+    font-size: 10px;
+    color: #3fb950;
+    font-weight: 500;
+  }
+
+  .gh-signin-btn {
+    background: #2a313b;
+    border: 1px solid #353d47;
+    border-radius: 6px;
+    color: #c9d1d9;
+    padding: 4px 10px;
+    font-size: 11px;
+    cursor: pointer;
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    transition: background 0.15s;
+  }
+
+  .gh-signin-btn:hover {
+    background: #353d47;
+  }
+
+  .gh-code-flow {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: flex-start;
+  }
+
+  .gh-user-code {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    color: #58a6ff;
+    background: #122a4a;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .gh-link {
+    font-size: 11px;
+    color: #58a6ff;
+  }
+
+  .gh-cancel-btn {
+    background: transparent;
+    border: 1px solid #353d47;
+    border-radius: 4px;
+    color: #8b949e;
+    padding: 2px 8px;
+    font-size: 10px;
+    cursor: pointer;
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    transition: color 0.15s;
+  }
+
+  .gh-cancel-btn:hover {
+    color: #c9d1d9;
+  }
+
+  .gh-error {
+    font-size: 11px;
+    color: #f85149;
+  }
+
+  .orch-btn,
+  .chat-btn {
+    background: #22163c;
+    border: 1px solid #3b2460;
+    border-radius: 6px;
+    padding: 6px 8px;
+    cursor: pointer;
+    color: #a371f7;
+    display: flex;
+    align-items: center;
+    transition: all 0.15s;
+  }
+
+  .orch-btn:hover,
+  .chat-btn:hover {
+    background: #3b2460;
+    color: #d2a8ff;
+  }
+
+  .notif-btn {
+    position: relative;
+    background: #2a313b;
+    border: 1px solid #353d47;
+    border-radius: 6px;
+    padding: 6px 8px;
+    cursor: pointer;
+    color: #8b949e;
+    display: flex;
+    align-items: center;
+    transition: all 0.15s;
+  }
+
+  .notif-btn:hover {
+    background: #353d47;
+    color: #c9d1d9;
+  }
+
+  .notif-badge-count {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    background: #da3633;
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
+    min-width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 4px;
+    font-family: 'IBM Plex Mono', monospace;
   }
 </style>

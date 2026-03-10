@@ -11,6 +11,11 @@
   import { fetchClaudeUsage } from './stores/usage.svelte';
   import { fetchReviewedItems, fetchTeamMembers } from './stores/testing.svelte';
   import { fetchCurrentUser } from './stores/currentUser.svelte';
+  import { fetchNotifications } from './stores/notifications.svelte';
+  import { fetchOrchestratorState } from './stores/orchestrator.svelte';
+  import NotificationSidebar from './components/NotificationSidebar.svelte';
+  import OrchestratorPanel from './components/OrchestratorPanel.svelte';
+  import OrchestratorChat from './components/OrchestratorChat.svelte';
 
   function refreshAll() {
     fetchPRs();
@@ -22,6 +27,8 @@
     fetchReviewedItems();
     fetchTeamMembers();
     fetchCurrentUser();
+    fetchNotifications();
+    fetchOrchestratorState();
   }
 
   onMount(() => {
@@ -36,12 +43,23 @@
 <div class="container">
   <Header {refreshAll} />
   <WorkItems />
-  <TestingAssignment />
-  <TaskList />
-  <ProcessList />
+  <OrchestratorPanel />
+  <div class="bottom-grid">
+    <div class="bottom-left">
+      <TaskList />
+      <ProcessList />
+    </div>
+    <div class="bottom-right">
+      <TestingAssignment />
+    </div>
+  </div>
 </div>
+<NotificationSidebar />
+<OrchestratorChat />
 
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
   :global(*) {
     box-sizing: border-box;
     margin: 0;
@@ -49,22 +67,44 @@
   }
 
   :global(body) {
-    font-family: system-ui, -apple-system, sans-serif;
+    font-family: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
     background: #0d1117;
     color: #c9d1d9;
+    -webkit-font-smoothing: antialiased;
   }
 
   .container {
     max-width: 1600px;
     margin: 0 auto;
-    padding: 20px;
+    padding: 20px 24px;
   }
 
+  .bottom-grid {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr;
+    gap: 20px;
+    align-items: start;
+  }
+
+  .bottom-left {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  @media (max-width: 1100px) {
+    .bottom-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  /* --- Card system --- */
   :global(.card) {
     background: #161b22;
-    border: 1px solid #30363d;
-    border-radius: 6px;
+    border: 1px solid #2a313b;
+    border-radius: 10px;
     overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
   }
 
   :global(.card-list) {
@@ -72,87 +112,121 @@
     overflow-y: auto;
   }
 
-  :global(h2) {
-    font-size: 16px;
-    font-weight: 600;
-    padding: 16px;
-    border-bottom: 1px solid #30363d;
+  :global(.card-list::-webkit-scrollbar) {
+    width: 6px;
   }
 
-  :global(.empty) {
-    padding: 48px;
-    text-align: center;
+  :global(.card-list::-webkit-scrollbar-track) {
+    background: transparent;
+  }
+
+  :global(.card-list::-webkit-scrollbar-thumb) {
+    background: #30363d;
+    border-radius: 3px;
+  }
+
+  :global(h2) {
+    font-size: 13px;
+    font-weight: 600;
+    padding: 14px 18px;
+    border-bottom: 1px solid #2a313b;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
     color: #8b949e;
   }
 
+  :global(.empty) {
+    padding: 40px;
+    text-align: center;
+    color: #6e7681;
+    font-size: 13px;
+  }
+
+  /* --- Badges --- */
   :global(.badge) {
-    font-size: 11px;
+    font-size: 10px;
+    font-weight: 500;
     padding: 2px 8px;
-    border-radius: 12px;
+    border-radius: 4px;
+    letter-spacing: 0.02em;
   }
 
   :global(.badge.state) {
-    background: #30363d;
+    background: #2a313b;
     color: #8b949e;
   }
 
   :global(.badge.state-active),
   :global(.badge.state-open) {
-    background: #3fb95020;
+    background: #123620;
     color: #3fb950;
   }
 
   :global(.badge.state-new) {
-    background: #58a6ff20;
+    background: #122a4a;
     color: #58a6ff;
   }
 
   :global(.badge.state-resolved),
   :global(.badge.state-closed) {
-    background: #8b949e20;
+    background: #2a313b;
     color: #8b949e;
   }
 
   :global(.badge.role-author) {
-    background: #a371f720;
+    background: #22163c;
     color: #a371f7;
   }
 
   :global(.badge.role-reviewer) {
-    background: #f0883e20;
+    background: #362210;
     color: #f0883e;
   }
 
   :global(.badge.type) {
-    background: #21262d;
+    background: #2a313b;
     color: #8b949e;
   }
 
   :global(.badge.type-bug) {
-    background: #f8514920;
+    background: #361414;
     color: #f85149;
   }
 
   :global(.badge.type-feature),
   :global(.badge.type-story) {
-    background: #3fb95020;
+    background: #123620;
     color: #3fb950;
   }
 
   :global(.badge.type-task) {
-    background: #58a6ff20;
+    background: #122a4a;
     color: #58a6ff;
   }
 
+  :global(.badge-link) {
+    text-decoration: none;
+    cursor: pointer;
+    transition: filter 0.15s;
+  }
+
+  :global(.badge-link:hover) {
+    filter: brightness(1.3);
+  }
+
+  /* --- Buttons --- */
   :global(.action-btn) {
     background: #238636;
     border: none;
     color: #fff;
-    padding: 4px 10px;
-    border-radius: 4px;
+    padding: 5px 12px;
+    border-radius: 6px;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 11px;
+    font-weight: 500;
     white-space: nowrap;
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    transition: background 0.15s, opacity 0.15s;
   }
 
   :global(.action-btn:hover) {
@@ -160,40 +234,47 @@
   }
 
   :global(.action-btn:disabled) {
-    background: #21262d;
-    color: #8b949e;
+    background: #2a313b;
+    color: #6e7681;
     cursor: not-allowed;
   }
 
   :global(.action-btn.secondary) {
-    background: #30363d;
+    background: #2a313b;
+    color: #8b949e;
   }
 
   :global(.action-btn.secondary:hover) {
-    background: #3d444d;
+    background: #353d47;
+    color: #c9d1d9;
   }
 
   :global(.refresh-btn) {
-    background: #21262d;
-    border: 1px solid #30363d;
+    background: #2a313b;
+    border: 1px solid #353d47;
     color: #c9d1d9;
-    padding: 6px 12px;
+    padding: 6px 14px;
     border-radius: 6px;
     cursor: pointer;
-    font-size: 13px;
+    font-size: 12px;
+    font-weight: 500;
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    transition: background 0.15s;
   }
 
   :global(.refresh-btn:hover) {
-    background: #30363d;
+    background: #353d47;
   }
 
+  /* --- Item rows --- */
   :global(.item) {
     display: grid;
     grid-template-columns: 1fr auto;
     gap: 12px;
-    padding: 12px 16px;
+    padding: 10px 18px;
     border-bottom: 1px solid #21262d;
     align-items: center;
+    transition: background 0.1s;
   }
 
   :global(.item:hover) {
@@ -208,40 +289,47 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 14px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #e6edf3;
   }
 
   :global(.item-meta) {
-    font-size: 12px;
+    font-size: 11px;
     color: #8b949e;
     margin-top: 4px;
     display: flex;
-    gap: 12px;
+    gap: 10px;
     flex-wrap: wrap;
+    align-items: center;
   }
 
   :global(.item-actions) {
     display: flex;
-    gap: 8px;
+    gap: 6px;
     align-items: center;
   }
 
+  /* --- Filters --- */
   :global(.filters) {
     display: flex;
-    gap: 8px;
-    padding: 12px 16px;
-    border-bottom: 1px solid #30363d;
+    gap: 6px;
+    padding: 10px 18px;
+    border-bottom: 1px solid #2a313b;
     flex-wrap: wrap;
   }
 
   :global(.filter-btn) {
     background: transparent;
-    border: 1px solid #30363d;
+    border: 1px solid #353d47;
     color: #8b949e;
     padding: 4px 12px;
-    border-radius: 16px;
+    border-radius: 6px;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 11px;
+    font-weight: 500;
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    transition: all 0.15s;
   }
 
   :global(.filter-btn:hover) {
@@ -250,27 +338,30 @@
   }
 
   :global(.filter-btn.active) {
-    background: #58a6ff20;
-    border-color: #58a6ff;
+    background: #122a4a;
+    border-color: #1f4a85;
     color: #58a6ff;
   }
 
+  /* --- Progress --- */
   :global(progress) {
     appearance: none;
-    border-radius: 4px;
+    border-radius: 3px;
     overflow: hidden;
   }
 
   :global(progress::-webkit-progress-bar) {
-    background: #21262d;
-    border-radius: 4px;
+    background: #2a313b;
+    border-radius: 3px;
   }
 
   :global(progress.bright::-webkit-progress-value) {
-    background: #58a6ff;
+    background: linear-gradient(90deg, #1a6dff, #58a6ff);
+    border-radius: 3px;
   }
 
   :global(progress.dim::-webkit-progress-value) {
-    background: #484f58;
+    background: #3d444d;
+    border-radius: 3px;
   }
 </style>

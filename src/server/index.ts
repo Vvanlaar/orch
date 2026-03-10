@@ -1,7 +1,8 @@
 import cors from 'cors';
 import { exec, execSync, spawn } from 'child_process';
 import express from 'express';
-import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'fs';
+import { appendFileSync, existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'fs';
+import { readFile } from 'fs/promises';
 import { createServer } from 'http';
 import { homedir, tmpdir } from 'os';
 import path, { dirname, join } from 'path';
@@ -9,7 +10,7 @@ import { fileURLToPath } from 'url';
 import { WebSocket, WebSocketServer } from 'ws';
 
 import { killTask } from '../core/claude-runner.js';
-import { config } from '../core/config.js';
+import { config, WORKSPACES_DIR } from '../core/config.js';
 import { cloneRepo } from '../core/git-ops.js';
 import {
   detectAvailableTerminals,
@@ -29,6 +30,7 @@ import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, tr
 import type { TerminalId } from '../core/types.js';
 import { getCurrentAdoUser, getMyAdoWorkItems, getMyGitHubPRs, getMyResolvedWorkItems, getResolvedWithPRComments, getReviewedItemsInSprint, getTeamMembers, getWorkItemsBySprints, type OwnerFilter } from '../core/user-items.js';
 import { startNtfyListener } from '../core/ntfy-listener.js';
+import { acceptAction, dismissAction, getOrchestratorState, runChatQuery, runOrchestrator, setNotificationGetter, setOrchestratorUpdateCallback } from '../core/orchestrator.js';
 import { adoRouter } from './webhooks/ado.js';
 import { githubRouter } from './webhooks/github.js';
 
@@ -44,6 +46,8 @@ wss.on('connection', (ws) => {
   clients.add(ws);
   // Send current tasks with streaming output on connect
   ws.send(JSON.stringify({ type: 'tasks', tasks: getAllTasksWithOutput(100) }));
+  // Send current orchestrator state
+  ws.send(JSON.stringify({ type: 'orchestrator', state: getOrchestratorState() }));
 
   ws.on('message', (data) => {
     try {
@@ -294,7 +298,7 @@ async function tryTerminalFallbacks(
 function resolveWorkspacePath(repoPath: string, ticketId?: number): string {
   if (!ticketId) return repoPath;
   const repoName = path.basename(repoPath);
-  const worktreeBase = path.join(repoPath, '..', '.orch-worktrees', repoName);
+  const worktreeBase = path.join(WORKSPACES_DIR, 'worktrees', repoName);
   if (!existsSync(worktreeBase)) return repoPath;
   const match = readdirSync(worktreeBase).find(e => e.startsWith(String(ticketId)));
   return match ? path.join(worktreeBase, match) : repoPath;
@@ -316,15 +320,15 @@ async function openShellAtPath(shellPath: string, title: string): Promise<ShellR
           return launchDetached(wtExe, ['-w', '0', 'nt', '--title', title, '-d', shellPath]);
         }
         case 'powershell':
-          return launchDetached('cmd.exe', ['/c', 'start', `"${title}"`, 'powershell', '-NoExit', '-EncodedCommand', encodedPsCommand]);
+          return launchDetached('powershell', ['-NoExit', '-EncodedCommand', encodedPsCommand]);
         case 'pwsh': {
           const pwshExe = findTerminalPath('pwsh') || 'pwsh';
-          return launchDetached('cmd.exe', ['/c', 'start', `"${title}"`, pwshExe, '-NoExit', '-EncodedCommand', encodedPsCommand]);
+          return launchDetached(pwshExe, ['-NoExit', '-EncodedCommand', encodedPsCommand]);
         }
         case 'git-bash':
-          return launchDetached('cmd.exe', ['/c', 'start', `"${title}"`, 'C:\\Program Files\\Git\\git-bash.exe', `--cd=${shellPath}`]);
+          return launchDetached('C:\\Program Files\\Git\\git-bash.exe', [`--cd=${shellPath}`]);
         default:
-          return launchDetached('cmd.exe', ['/c', 'start', `"${title}"`, 'cmd', '/k', `cd /d "${shellPath}"`]);
+          return launchDetached('cmd.exe', ['/k', `cd /d "${shellPath}" & title ${title}`]);
       }
     }
     return new Promise(resolve => {
@@ -337,7 +341,7 @@ async function openShellAtPath(shellPath: string, title: string): Promise<ShellR
     });
   };
 
-  return tryTerminalFallbacks(tryTerminal, ['wt', 'cmd'], ['gnome-terminal', 'xterm', 'tmux'], sessionId);
+  return tryTerminalFallbacks(tryTerminal, ['wt', 'git-bash', 'cmd'], ['gnome-terminal', 'xterm', 'tmux'], sessionId);
 }
 
 async function openShellWithCommand(cmd: string, title: string): Promise<ShellResult> {
@@ -347,7 +351,6 @@ async function openShellWithCommand(cmd: string, title: string): Promise<ShellRe
   writeFileSync(tmpFile, script, { mode: 0o755 });
 
   const unixPath = tmpFile.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_, d) => `/${d.toLowerCase()}`);
-  const qtitle = `"${title}"`;
 
   const tryTerminal = (terminal: string): Promise<boolean> => {
     if (isWindowsPlatform()) {
@@ -357,15 +360,15 @@ async function openShellWithCommand(cmd: string, title: string): Promise<ShellRe
           return launchDetached(wtExe, ['-w', '0', 'nt', '--title', title, '--', 'bash', unixPath]);
         }
         case 'git-bash':
-          return launchDetached('cmd.exe', ['/c', 'start', qtitle, 'C:\\Program Files\\Git\\git-bash.exe', '--', unixPath]);
+          return launchDetached('C:\\Program Files\\Git\\git-bash.exe', ['--', unixPath]);
         case 'powershell':
-          return launchDetached('cmd.exe', ['/c', 'start', qtitle, 'powershell', '-NoExit', '-Command', `bash '${unixPath}'`]);
+          return launchDetached('powershell', ['-NoExit', '-Command', `bash '${unixPath}'`]);
         case 'pwsh': {
           const pwshExe = findTerminalPath('pwsh') || 'pwsh';
-          return launchDetached('cmd.exe', ['/c', 'start', qtitle, pwshExe, '-NoExit', '-Command', `bash '${unixPath}'`]);
+          return launchDetached(pwshExe, ['-NoExit', '-Command', `bash '${unixPath}'`]);
         }
         default:
-          return launchDetached('cmd.exe', ['/c', 'start', qtitle, 'bash', unixPath]);
+          return launchDetached('cmd.exe', ['/k', `bash "${unixPath}" & title ${title}`]);
       }
     }
     return new Promise(resolve => {
@@ -409,9 +412,9 @@ app.post('/api/open-terminal', async (req, res) => {
     res.status(400).json({ error: 'Invalid repoName' });
     return;
   }
-  // Allow .orch-clones/<name> but reject other path traversal
+  // Allow .workspaces/clones/<name> but reject other path traversal
   const segments = repoName.replace(/\\/g, '/').split('/');
-  if (segments.length > 2 || (segments.length === 2 && segments[0] !== '.orch-clones')) {
+  if (segments.length > 3 || segments.length === 2 || (segments.length === 3 && (segments[0] !== '.workspaces' || segments[1] !== 'clones'))) {
     res.status(400).json({ error: 'Invalid repoName' });
     return;
   }
@@ -419,7 +422,9 @@ app.post('/api/open-terminal', async (req, res) => {
     res.status(400).json({ error: 'workItemId must be a positive integer' });
     return;
   }
-  const basePath = path.resolve(config.repos.baseDir, repoName);
+  const basePath = segments[0] === '.workspaces'
+    ? path.join(WORKSPACES_DIR, ...segments.slice(1))
+    : path.resolve(config.repos.baseDir, repoName);
   if (!existsSync(basePath)) {
     res.status(404).json({ error: `Repo not found: ${basePath}` });
     return;
@@ -437,7 +442,9 @@ app.post('/api/terminal/run-command', async (req, res) => {
 
 /** Resolve a local folder name to an absolute path, returning null if no .git exists there. */
 function resolveLocalRepo(localFolder: string): string | null {
-  const full = path.resolve(config.repos.baseDir, localFolder);
+  const full = localFolder.startsWith('.workspaces/')
+    ? path.join(WORKSPACES_DIR, localFolder.slice('.workspaces/'.length))
+    : path.resolve(config.repos.baseDir, localFolder);
   return existsSync(join(full, '.git')) ? full : null;
 }
 
@@ -586,10 +593,10 @@ app.get('/api/github/org-repos', async (_req, res) => {
     });
     const localRepos = getScannedRepos();
     const localNames = new Set(localRepos.map(r => r.localName));
-    // Also match bare names for .orch-clones/ entries
+    // Also match bare names for .workspaces/clones/ entries
     for (const r of localRepos) {
-      if (r.localName.startsWith('.orch-clones/')) {
-        localNames.add(r.localName.slice('.orch-clones/'.length));
+      if (r.localName.startsWith('.workspaces/clones/')) {
+        localNames.add(r.localName.slice('.workspaces/clones/'.length));
       }
     }
     const repos = data.map(r => ({
@@ -600,9 +607,10 @@ app.get('/api/github/org-repos', async (_req, res) => {
       isLocal: localNames.has(r.name),
     }));
     res.json(repos);
-  } catch (err) {
-    console.error('[org-repos] Error:', err);
-    res.status(500).json({ error: 'Failed to fetch org repos' });
+  } catch (err: any) {
+    const msg = err?.response?.data?.message || err?.message || String(err);
+    console.error('[org-repos] Error:', msg);
+    res.status(500).json({ error: `Failed to fetch org repos: ${msg}` });
   }
 });
 
@@ -771,6 +779,75 @@ app.post('/api/config/credentials', (req, res) => {
   res.json({ success: true });
 });
 
+// GitHub OAuth Device Flow
+app.get('/api/auth/github/status', (_req, res) => {
+  res.json({
+    authenticated: !!config.github.token,
+    clientIdConfigured: !!config.github.clientId,
+  });
+});
+
+app.post('/api/auth/github/device', async (_req, res) => {
+  if (!config.github.clientId) {
+    res.status(400).json({ error: 'GITHUB_OAUTH_CLIENT_ID not configured' });
+    return;
+  }
+  try {
+    const resp = await fetch('https://github.com/login/device/code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ client_id: config.github.clientId, scope: 'repo read:user' }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) { res.status(resp.status).json(data); return; }
+    res.json(data);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/auth/github/poll', async (req, res) => {
+  const { device_code } = req.body;
+  if (!device_code || typeof device_code !== 'string' || !config.github.clientId) {
+    res.status(400).json({ error: 'Missing device_code or client_id' });
+    return;
+  }
+  try {
+    const resp = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        client_id: config.github.clientId,
+        device_code,
+        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+      }),
+    });
+    const data = await resp.json();
+    if (data.error === 'authorization_pending') {
+      res.json({ status: 'pending' });
+    } else if (data.error === 'slow_down') {
+      res.json({ status: 'slow_down' });
+    } else if (data.error === 'expired_token') {
+      res.json({ status: 'expired' });
+    } else if (data.error === 'access_denied') {
+      res.json({ status: 'denied' });
+    } else if (data.access_token) {
+      const token = String(data.access_token).replace(/[\r\n]/g, '');
+      const lines = readEnvLines();
+      const env = parseEnvLines(lines);
+      env.GITHUB_TOKEN = token;
+      process.env.GITHUB_TOKEN = token;
+      config.github.token = token;
+      writeEnvFile(lines, env);
+      res.json({ status: 'complete' });
+    } else {
+      res.json({ status: 'error', error: data.error_description || data.error || 'Unknown error' });
+    }
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 const validOwnerFilters: OwnerFilter[] = ['my', 'unassigned', 'all'];
 
 app.get('/api/workitems', async (req, res) => {
@@ -822,8 +899,14 @@ app.get('/api/ado/me', async (_req, res) => {
   res.json(user);
 });
 
+let usageCache: { data: unknown; ts: number } | null = null;
+const USAGE_CACHE_MS = 60_000; // 1 minute
+
 app.get('/api/claude/usage', async (_req, res) => {
   try {
+    if (usageCache && Date.now() - usageCache.ts < USAGE_CACHE_MS) {
+      return res.json(usageCache.data);
+    }
     const credsPath = join(homedir(), '.claude', '.credentials.json');
     if (!existsSync(credsPath)) {
       res.status(404).json({ error: 'Claude credentials not found' });
@@ -849,6 +932,7 @@ app.get('/api/claude/usage', async (_req, res) => {
       return;
     }
     const usage = await resp.json();
+    usageCache = { data: usage, ts: Date.now() };
     res.json(usage);
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -1160,6 +1244,85 @@ app.post('/api/actions/review-resolution', (req, res) => {
   res.json({ taskId: task.id, message: 'Resolution review task created' });
 });
 
+// --- Orchestrator API ---
+
+app.post('/api/orchestrate', async (_req, res) => {
+  const orchState = getOrchestratorState();
+  if (orchState.status === 'gathering' || orchState.status === 'analyzing') {
+    return res.status(409).json({ error: 'Orchestrator already running' });
+  }
+  try {
+    // Don't await — let it run in background
+    runOrchestrator().catch(err => console.error('[Orchestrator] Error:', err));
+    res.json({ message: 'Orchestration started', runId: getOrchestratorState().runId });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.get('/api/orchestrator/state', (_req, res) => {
+  res.json(getOrchestratorState());
+});
+
+app.post('/api/orchestrator/:id/accept', (req, res) => {
+  const result = acceptAction(req.params.id);
+  if (!result) return res.status(404).json({ error: 'Action not found or already handled' });
+  broadcastTasks();
+  res.json(result);
+});
+
+app.post('/api/orchestrator/:id/dismiss', (req, res) => {
+  const ok = dismissAction(req.params.id);
+  if (!ok) return res.status(404).json({ error: 'Action not found or already handled' });
+  res.json({ ok: true });
+});
+
+app.post('/api/orchestrator/chat', async (req, res) => {
+  const { question } = req.body;
+  if (!question || typeof question !== 'string') {
+    return res.status(400).json({ error: 'question required' });
+  }
+  try {
+    const answer = await runChatQuery(question);
+    res.json({ answer });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// Notifications
+const notificationLogPath = join(homedir(), '.claude', 'notification-log.jsonl');
+
+app.get('/api/notifications', async (_req, res) => {
+  try {
+    if (!existsSync(notificationLogPath)) return res.json([]);
+    const content = await readFile(notificationLogPath, 'utf-8');
+    const lines = content.split('\n').filter(Boolean);
+    const entries = [];
+    for (let i = lines.length - 1; i >= 0 && entries.length < 200; i--) {
+      try { entries.push(JSON.parse(lines[i])); } catch {}
+    }
+    res.json(entries);
+  } catch {
+    res.json([]);
+  }
+});
+
+app.post('/api/notifications/incoming', (req, res) => {
+  const notification = req.body;
+  if (!notification || typeof notification.id !== 'string' || !notification.type || !notification.timestamp) {
+    return res.status(400).json({ error: 'invalid notification' });
+  }
+  // Persist to JSONL
+  try { appendFileSync(notificationLogPath, JSON.stringify(notification) + '\n'); } catch {}
+  // Broadcast to WebSocket clients
+  const message = JSON.stringify({ type: 'notification', notification });
+  clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) client.send(message);
+  });
+  res.json({ ok: true });
+});
+
 // Start server
 server.listen(config.server.port, () => {
   console.log(`Orch server listening on port ${config.server.port}`);
@@ -1180,6 +1343,28 @@ server.listen(config.server.port, () => {
   setTaskUpdateCallback(broadcastTasks);
   setOutputCallback(broadcastOutput);
   startProcessor();
+
+  // Wire orchestrator broadcasts
+  setOrchestratorUpdateCallback((orchState) => {
+    const message = JSON.stringify({ type: 'orchestrator', state: orchState });
+    clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) client.send(message);
+    });
+  });
+
+  // Wire notification getter for orchestrator context
+  setNotificationGetter(() => {
+    try {
+      if (!existsSync(notificationLogPath)) return [];
+      const content = readFileSync(notificationLogPath, 'utf-8');
+      const lines = content.split('\n').filter(Boolean);
+      const entries: any[] = [];
+      for (let i = lines.length - 1; i >= 0 && entries.length < 20; i--) {
+        try { entries.push(JSON.parse(lines[i])); } catch {}
+      }
+      return entries;
+    } catch { return []; }
+  });
 
   if (config.polling.enabled) {
     startPoller(config.polling.intervalMs);

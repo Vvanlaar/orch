@@ -1,4 +1,4 @@
-import type { Task } from '../lib/types';
+import type { Notification, OrchestratorState, Task } from '../lib/types';
 
 // WebSocket connection state
 let ws: WebSocket | null = $state(null);
@@ -7,9 +7,13 @@ let connected = $state(false);
 // Task output handlers
 type OutputHandler = (taskId: number, chunk: string) => void;
 type TasksHandler = (tasks: Task[]) => void;
+type NotificationHandler = (notification: Notification) => void;
+type OrchestratorHandler = (state: OrchestratorState) => void;
 
 let onOutput: OutputHandler | null = null;
 let onTasks: TasksHandler | null = null;
+let onNotification: NotificationHandler | null = null;
+let onOrchestrator: OrchestratorHandler | null = null;
 
 export function setOutputHandler(handler: OutputHandler) {
   onOutput = handler;
@@ -17,6 +21,14 @@ export function setOutputHandler(handler: OutputHandler) {
 
 export function setTasksHandler(handler: TasksHandler) {
   onTasks = handler;
+}
+
+export function setNotificationHandler(handler: NotificationHandler) {
+  onNotification = handler;
+}
+
+export function setOrchestratorHandler(handler: OrchestratorHandler) {
+  onOrchestrator = handler;
 }
 
 export function connect() {
@@ -46,6 +58,10 @@ export function connect() {
         onTasks(data.tasks);
       } else if (data.type === 'output' && onOutput) {
         onOutput(data.taskId, data.chunk);
+      } else if (data.type === 'notification' && onNotification) {
+        onNotification(data.notification);
+      } else if (data.type === 'orchestrator' && onOrchestrator) {
+        onOrchestrator(data.state);
       }
     } catch (e) {
       console.error('WebSocket parse error:', e);

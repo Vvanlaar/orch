@@ -9,6 +9,9 @@ export interface PR {
   updatedAt: string;
   branch?: string;
   baseBranch?: string;
+  commentCount?: number;
+  adoTicketId?: number;
+  adoTicketUrl?: string;
 }
 
 export interface WorkItem {
@@ -65,6 +68,7 @@ export interface Process {
 }
 
 export type FilterType = 'all' | 'new' | 'active' | 'resolved' | 'reviewed' | 'resolved-by-me';
+export type WorkItemMode = 'tickets' | 'prs';
 export type OwnerFilter = 'my' | 'unassigned' | 'all';
 
 export interface GitHubRepo {
@@ -73,6 +77,63 @@ export interface GitHubRepo {
   clone_url: string;
   description?: string;
   isLocal: boolean;
+}
+
+export interface Notification {
+  id: string;
+  type: 'stop' | 'plan-ready';
+  sessionName: string;
+  lastMessage: string;
+  repo: string;
+  machine: string;
+  cwd: string;
+  sessionId: string;
+  timestamp: string;
+}
+
+// --- Orchestrator types ---
+
+export type OrchestratorStatus = 'idle' | 'gathering' | 'analyzing' | 'ready' | 'error';
+export type ChatStatus = 'idle' | 'thinking' | 'error';
+
+export interface OrchestratorAction {
+  id: string;
+  taskType: string;
+  repo: string;
+  title: string;
+  prompt: string;
+  priority: 'high' | 'medium' | 'low';
+  reasoning: string;
+  sourceType: 'ado-workitem' | 'github-pr' | 'pr-comments' | 'testing' | 'notification';
+  sourceId?: string;
+  accepted?: boolean;
+  dismissed?: boolean;
+  taskId?: number;
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+}
+
+export interface OrchestratorState {
+  status: OrchestratorStatus;
+  actions: OrchestratorAction[];
+  completedAt?: string;
+  error?: string;
+  dataSummary?: {
+    adoWorkItems: number;
+    githubPRs: number;
+    prComments: number;
+    testingItems: number;
+    notifications: number;
+  };
+  chat: {
+    status: ChatStatus;
+    messages: ChatMessage[];
+    error?: string;
+  };
 }
 
 export type TerminalId = 'auto' | 'wt' | 'cmd' | 'powershell' | 'pwsh' | 'git-bash';

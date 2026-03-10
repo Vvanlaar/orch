@@ -69,6 +69,7 @@ export interface Config {
     webhookSecret: string;
     token: string;
     org?: string;
+    clientId?: string;
   };
   ado: {
     organization: string;
@@ -91,5 +92,51 @@ export interface Config {
   polling: {
     enabled: boolean;
     intervalMs: number;
+  };
+}
+
+// --- Orchestrator types ---
+
+export type OrchestratorStatus = 'idle' | 'gathering' | 'analyzing' | 'ready' | 'error';
+export type ChatStatus = 'idle' | 'thinking' | 'error';
+
+export interface OrchestratorAction {
+  id: string;
+  taskType: TaskType;
+  repo: string;
+  title: string;
+  prompt: string;
+  priority: 'high' | 'medium' | 'low';
+  reasoning: string;
+  sourceType: 'ado-workitem' | 'github-pr' | 'pr-comments' | 'testing' | 'notification';
+  sourceId?: string;
+  accepted?: boolean;
+  dismissed?: boolean;
+  taskId?: number;
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+}
+
+export interface OrchestratorState {
+  status: OrchestratorStatus;
+  runId: number;
+  actions: OrchestratorAction[];
+  completedAt?: string;
+  error?: string;
+  dataSummary?: {
+    adoWorkItems: number;
+    githubPRs: number;
+    prComments: number;
+    testingItems: number;
+    notifications: number;
+  };
+  chat: {
+    status: ChatStatus;
+    messages: ChatMessage[];
+    error?: string;
   };
 }
