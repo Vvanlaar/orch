@@ -81,7 +81,7 @@ function buildOrchestratorPrompt(data: GatheredData): string {
   if (data.adoWorkItems.length > 0) {
     sections.push('## ADO Work Items (assigned to me, active)');
     for (const wi of data.adoWorkItems) {
-      sections.push(`- #${wi.id} [${wi.type}] "${wi.title}" (${wi.state}) project:${wi.project}${wi.githubPrUrl ? ` PR:${wi.githubPrUrl}` : ''}`);
+      sections.push(`- #${wi.id} [${wi.type}] "${wi.title}" (${wi.state}) project:${wi.project} url:${wi.url}${wi.githubPrUrl ? ` PR:${wi.githubPrUrl}` : ''}`);
     }
     sections.push('');
   }
@@ -90,7 +90,7 @@ function buildOrchestratorPrompt(data: GatheredData): string {
   if (data.githubPRs.length > 0) {
     sections.push('## GitHub PRs (open, my involvement)');
     for (const pr of data.githubPRs) {
-      sections.push(`- ${pr.repo}#${pr.number} "${pr.title}" role:${pr.role} comments:${pr.commentCount ?? 0}${pr.draft ? ' DRAFT' : ''}`);
+      sections.push(`- ${pr.repo}#${pr.number} "${pr.title}" role:${pr.role} comments:${pr.commentCount ?? 0}${pr.draft ? ' DRAFT' : ''} url:${pr.url}`);
     }
     sections.push('');
   }
@@ -99,7 +99,7 @@ function buildOrchestratorPrompt(data: GatheredData): string {
   if (data.prComments.length > 0) {
     sections.push('## PR Review Comments (unresolved, need my response)');
     for (const wi of data.prComments) {
-      sections.push(`- ADO #${wi.id} "${wi.title}" - ${wi.commentCount} unresolved comment threads on PR ${wi.githubPrUrl}`);
+      sections.push(`- ADO #${wi.id} "${wi.title}" - ${wi.commentCount} unresolved comment threads on PR ${wi.githubPrUrl} adoUrl:${wi.url}`);
     }
     sections.push('');
   }
@@ -108,7 +108,7 @@ function buildOrchestratorPrompt(data: GatheredData): string {
   if (data.resolvedItems.length > 0) {
     sections.push('## Resolved Items (I resolved, now assigned to others)');
     for (const wi of data.resolvedItems) {
-      sections.push(`- #${wi.id} "${wi.title}" (${wi.state})${wi.githubPrUrl ? ` PR:${wi.githubPrUrl}` : ''}`);
+      sections.push(`- #${wi.id} "${wi.title}" (${wi.state}) url:${wi.url}${wi.githubPrUrl ? ` PR:${wi.githubPrUrl}` : ''}`);
     }
     sections.push('');
   }
@@ -117,7 +117,7 @@ function buildOrchestratorPrompt(data: GatheredData): string {
   if (data.reviewedItems.items.length > 0) {
     sections.push(`## Reviewed Items (sprint: ${data.reviewedItems.sprintName}, ready for testing)`);
     for (const wi of data.reviewedItems.items) {
-      sections.push(`- #${wi.id} "${wi.title}" reviewedBy:${wi.reviewedBy || 'unknown'}`);
+      sections.push(`- #${wi.id} "${wi.title}" reviewedBy:${wi.reviewedBy || 'unknown'} url:${wi.url}`);
     }
     sections.push('');
   }
@@ -170,7 +170,8 @@ Output ONLY a JSON array (no markdown fences, no explanation):
     "priority": "high",
     "reasoning": "Why this should be done now",
     "sourceType": "pr-comments",
-    "sourceId": "12345"
+    "sourceId": "12345",
+    "sourceUrl": "https://... (the url from the work data above)"
   }
 ]
 
@@ -292,6 +293,7 @@ export async function runOrchestrator(): Promise<void> {
       reasoning: a.reasoning || '',
       sourceType: a.sourceType || 'ado-workitem',
       sourceId: a.sourceId,
+      sourceUrl: a.sourceUrl,
     }));
 
     state = { ...state, status: 'ready', actions, completedAt: new Date().toISOString() };

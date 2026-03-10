@@ -128,7 +128,11 @@
                 <div class="action-meta">
                   <span>{action.repo}</span>
                   {#if action.sourceId}
-                    <span>#{action.sourceId}</span>
+                    {#if action.sourceUrl}
+                      <a class="source-link" href={action.sourceUrl} target="_blank" rel="noopener" onclick={e => e.stopPropagation()}>#{action.sourceId}</a>
+                    {:else}
+                      <span>#{action.sourceId}</span>
+                    {/if}
                   {/if}
                 </div>
               </div>
@@ -344,6 +348,15 @@
     margin-top: 2px;
     display: flex;
     gap: 10px;
+  }
+
+  .source-link {
+    color: #58a6ff;
+    text-decoration: none;
+  }
+
+  .source-link:hover {
+    text-decoration: underline;
   }
 
   .action-controls {

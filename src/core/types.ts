@@ -110,6 +110,7 @@ export interface OrchestratorAction {
   reasoning: string;
   sourceType: 'ado-workitem' | 'github-pr' | 'pr-comments' | 'testing' | 'notification';
   sourceId?: string;
+  sourceUrl?: string;
   accepted?: boolean;
   dismissed?: boolean;
   dismissReason?: string;
