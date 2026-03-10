@@ -14,6 +14,9 @@ export interface GitHubPR {
   createdAt: string;
   updatedAt: string;
   role: 'author' | 'reviewer' | 'mentioned';
+  commentCount?: number;
+  adoTicketId?: number;
+  adoTicketUrl?: string;
 }
 
 export interface AdoWorkItem {
@@ -54,6 +57,11 @@ function extractRepoFromUrl(repositoryUrl: string): string {
 }
 
 function mapPrToGitHubPR(pr: any, role: 'author' | 'reviewer'): GitHubPR {
+  const adoMatch = pr.title?.match(/(?:AB|ADO)?#(\d{4,6})/i);
+  const adoTicketId = adoMatch ? parseInt(adoMatch[1]) : undefined;
+  const adoTicketUrl = adoTicketId && config.ado.organization
+    ? `https://dev.azure.com/${config.ado.organization}/_workitems/edit/${adoTicketId}`
+    : undefined;
   return {
     number: pr.number,
     title: pr.title,
@@ -65,6 +73,9 @@ function mapPrToGitHubPR(pr: any, role: 'author' | 'reviewer'): GitHubPR {
     createdAt: pr.created_at,
     updatedAt: pr.updated_at,
     role,
+    commentCount: pr.comments || 0,
+    adoTicketId,
+    adoTicketUrl,
   };
 }
 
@@ -288,14 +299,42 @@ export async function getResolvedWithPRComments(): Promise<(AdoWorkItem & { comm
       const [, owner, repo, prNum] = match;
 
       try {
-        const { data: comments } = await octokit.rest.pulls.listReviewComments({
-          owner,
-          repo,
-          pull_number: parseInt(prNum),
+        const { repository } = await octokit.graphql<{
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                nodes: {
+                  isResolved: boolean;
+                  comments: { nodes: { author: { login: string } | null }[] };
+                }[];
+              };
+            };
+          };
+        }>(`query($owner: String!, $repo: String!, $prNumber: Int!) {
+          repository(owner: $owner, name: $repo) {
+            pullRequest(number: $prNumber) {
+              reviewThreads(first: 100) {
+                nodes {
+                  isResolved
+                  comments(first: 100) {
+                    nodes { author { login } }
+                  }
+                }
+              }
+            }
+          }
+        }`, { owner, repo, prNumber: parseInt(prNum) });
+
+        const unresolvedUnreplied = repository.pullRequest.reviewThreads.nodes.filter(thread => {
+          if (thread.isResolved) return false;
+          const authors = thread.comments.nodes.map(c => c.author?.login);
+          // skip threads started by user, skip if user has replied
+          if (authors[0] === username) return false;
+          return !authors.slice(1).includes(username);
         });
-        const unresolved = comments.filter(c => c.user?.login !== username && !c.in_reply_to_id);
-        if (unresolved.length > 0) {
-          results.push({ ...wi, commentCount: unresolved.length });
+
+        if (unresolvedUnreplied.length > 0) {
+          results.push({ ...wi, commentCount: unresolvedUnreplied.length });
         }
       } catch (err) {
         console.error(`[UserItems] Error checking PR comments for ${owner}/${repo}#${prNum}:`, err);
