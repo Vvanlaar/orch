@@ -1311,10 +1311,9 @@ app.post('/api/actions/review-resolution', (req, res) => {
   }
 
   if (!repoPath) {
+    const ghRepo = githubPrUrl?.match(/github\.com\/([^/]+\/[^/]+)\/pull/)?.[1];
     const cloned = autoCloneFromRepositories(repositories, project)
-      ?? (githubPrUrl?.match(/github\.com\/([^/]+\/[^/]+)\/pull/)?.[1]
-          ? autoClone(githubPrUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull/)![1], 'github')
-          : null);
+      ?? (ghRepo ? autoClone(ghRepo, 'github') : null);
     if (cloned) { repoPath = cloned.repoPath; repoName = cloned.repoName; }
   }
 
