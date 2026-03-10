@@ -1,8 +1,11 @@
 <script lang="ts">
   import { getOrchestratorState, triggerOrchestration, acceptAction, dismissAction } from '../stores/orchestrator.svelte';
+  import { readPreference, writePreference } from '../lib/preferences';
 
   let state = $derived(getOrchestratorState());
   let expandedId = $state<string | null>(null);
+  let dismissingId = $state<string | null>(null);
+  let dismissReason = $state('');
 
   function toggleExpand(id: string) {
     expandedId = expandedId === id ? null : id;
@@ -25,14 +28,49 @@
     return map[s] || s;
   }
 
+  function startDismiss(id: string) {
+    dismissingId = id;
+    dismissReason = '';
+  }
+
+  function cancelDismiss() {
+    dismissingId = null;
+    dismissReason = '';
+  }
+
+  function confirmDismiss(id: string) {
+    dismissAction(id, dismissReason || undefined);
+    dismissingId = null;
+    dismissReason = '';
+  }
+
+  function handleDismissKey(e: KeyboardEvent, id: string) {
+    if (e.key === 'Enter') confirmDismiss(id);
+    else if (e.key === 'Escape') cancelDismiss();
+  }
+
   let isRunning = $derived(state.status === 'gathering' || state.status === 'analyzing');
   let activeActions = $derived(state.actions.filter(a => !a.dismissed));
+  let dismissedActions = $derived(state.actions.filter(a => a.dismissed));
+
+  const CARD_ID = 'orchestrator';
+  const COLLAPSED_KEY = 'orch.dashboard.cards.collapsed';
+  function getCollapsedCards(): string[] {
+    return readPreference(COLLAPSED_KEY, [] as string[], (v): v is string[] => Array.isArray(v));
+  }
+  let cardCollapsed = $state(getCollapsedCards().includes(CARD_ID));
+  function toggleCard() {
+    cardCollapsed = !cardCollapsed;
+    const current = getCollapsedCards();
+    const next = cardCollapsed ? [...new Set([...current, CARD_ID])] : current.filter(id => id !== CARD_ID);
+    writePreference(COLLAPSED_KEY, next);
+  }
 </script>
 
-<div class="card orch-panel">
-  <h2>
+<div class="card orch-panel" class:collapsed={cardCollapsed}>
+  <h2 onclick={toggleCard}>
     Auto-Orchestrator
-    <span class="orch-controls">
+    <span class="orch-controls" onclick={e => e.stopPropagation()}>
       {#if state.status !== 'idle'}
         <span class="status-badge" class:gathering={state.status === 'gathering'} class:analyzing={state.status === 'analyzing'} class:ready={state.status === 'ready'} class:error={state.status === 'error'}>
           {state.status}
@@ -43,7 +81,7 @@
       </button>
     </span>
   </h2>
-
+  <div class="card-body">
   {#if state.dataSummary && (state.status === 'analyzing' || state.status === 'ready')}
     <div class="data-summary">
       {#if state.dataSummary.adoWorkItems}<span>{state.dataSummary.adoWorkItems} ADO items</span>{/if}
@@ -96,9 +134,21 @@
               <div class="action-controls">
                 {#if action.accepted}
                   <span class="accepted-label">Task #{action.taskId}</span>
+                {:else if dismissingId === action.id}
+                  <div class="dismiss-reason-row">
+                    <input
+                      class="dismiss-reason-input"
+                      type="text"
+                      placeholder="Why? (optional)"
+                      bind:value={dismissReason}
+                      onkeydown={(e) => handleDismissKey(e, action.id)}
+                    />
+                    <button class="action-btn" onclick={() => confirmDismiss(action.id)}>OK</button>
+                    <button class="action-btn secondary" onclick={cancelDismiss}>Cancel</button>
+                  </div>
                 {:else}
                   <button class="action-btn" onclick={() => acceptAction(action.id)}>Accept</button>
-                  <button class="action-btn secondary" onclick={() => dismissAction(action.id)}>Dismiss</button>
+                  <button class="action-btn secondary" onclick={() => startDismiss(action.id)}>Dismiss</button>
                 {/if}
                 <button class="expand-btn" onclick={() => toggleExpand(action.id)}>
                   {expandedId === action.id ? '−' : '+'}
@@ -117,7 +167,20 @@
         {/each}
       </div>
     {/if}
+    {#if dismissedActions.length > 0}
+      <div class="dismissed-section">
+        {#each dismissedActions as action (action.id)}
+          <div class="dismissed-item">
+            <span class="dismissed-title">{action.title}</span>
+            {#if action.dismissReason}
+              <span class="dismiss-reason">— {action.dismissReason}</span>
+            {/if}
+          </div>
+        {/each}
+      </div>
+    {/if}
   {/if}
+  </div>
 </div>
 
 <style>
@@ -344,5 +407,44 @@
     word-break: break-word;
     max-height: 150px;
     overflow-y: auto;
+  }
+
+  .dismiss-reason-row {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+
+  .dismiss-reason-input {
+    background: #0d1117;
+    border: 1px solid #353d47;
+    color: #c9d1d9;
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-size: 11px;
+    width: 160px;
+    outline: none;
+  }
+
+  .dismiss-reason-input:focus {
+    border-color: #58a6ff;
+  }
+
+  .dismissed-section {
+    border-top: 1px solid #21262d;
+    padding: 8px 18px;
+  }
+
+  .dismissed-item {
+    font-size: 11px;
+    color: #484f58;
+    padding: 2px 0;
+    text-decoration: line-through;
+  }
+
+  .dismiss-reason {
+    font-style: italic;
+    color: #484f58;
+    text-decoration: none;
   }
 </style>

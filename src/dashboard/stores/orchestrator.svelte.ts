@@ -43,9 +43,13 @@ export async function acceptAction(id: string) {
   } catch { return null; }
 }
 
-export async function dismissAction(id: string) {
+export async function dismissAction(id: string, reason?: string) {
   try {
-    await fetch(`/api/orchestrator/${id}/dismiss`, { method: 'POST' });
+    await fetch(`/api/orchestrator/${id}/dismiss`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    });
   } catch {}
 }
 

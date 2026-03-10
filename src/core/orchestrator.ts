@@ -1,5 +1,6 @@
 import { config } from './config.js';
 import { runClaude } from './claude-runner.js';
+import { appendFeedback, distillFeedback, getUnprocessedFeedback, loadOrchestratorRules } from './orch-feedback.js';
 import { getAllTasks, createTask } from './task-queue.js';
 import {
   getMyAdoWorkItems,
@@ -140,6 +141,14 @@ function buildOrchestratorPrompt(data: GatheredData): string {
     sections.push('');
   }
 
+  // Inject user preferences/rules from feedback distillation
+  const rules = loadOrchestratorRules();
+  if (rules) {
+    sections.push('## User Preferences & Rules (MUST follow)\n');
+    sections.push(rules);
+    sections.push('');
+  }
+
   sections.push(`## Instructions
 
 Produce a JSON array of recommended actions. Each action should be one concrete task.
@@ -205,6 +214,14 @@ function buildChatPrompt(data: GatheredData, question: string): string {
       if (output) sections.push(`Output:\n${output}`);
       sections.push('');
     }
+  }
+
+  // Inject user preferences/rules
+  const chatRules = loadOrchestratorRules();
+  if (chatRules) {
+    sections.push('## User Preferences & Rules (MUST follow)\n');
+    sections.push(chatRules);
+    sections.push('');
   }
 
   sections.push(`## Question\n\n${question}\n`);
@@ -279,6 +296,11 @@ export async function runOrchestrator(): Promise<void> {
 
     state = { ...state, status: 'ready', actions, completedAt: new Date().toISOString() };
     broadcast();
+
+    // Fire-and-forget: distill feedback if enough unprocessed entries
+    if (getUnprocessedFeedback().length >= 3) {
+      distillFeedback().catch(err => console.error('[orch-feedback] Background distillation error:', err));
+    }
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     state = { ...state, status: 'error', error };
@@ -309,6 +331,11 @@ export async function runChatQuery(question: string): Promise<string> {
 
     const result = await runClaude(syntheticTask, prompt);
     const answer = result.success ? result.output : `Error: ${result.error}`;
+
+    // Detect correction patterns in user question (negative directive + action verb)
+    if (/\b(don'?t|stop|never|ignore|skip|no more)\b.*\b(suggest|recommend|create|add)\b/i.test(question)) {
+      appendFeedback({ type: 'chat-correction', chatContext: question });
+    }
 
     const assistantMsg: ChatMessage = { role: 'assistant', content: answer, timestamp: new Date().toISOString() };
     state = { ...state, chat: { ...state.chat, status: 'idle', messages: [...state.chat.messages, assistantMsg] } };
@@ -345,6 +372,15 @@ export function acceptAction(actionId: string): { taskId: number } | null {
     }
   );
 
+  appendFeedback({
+    type: 'accept',
+    actionId: action.id,
+    actionTitle: action.title,
+    actionTaskType: action.taskType,
+    sourceType: action.sourceType,
+    sourceId: action.sourceId,
+  });
+
   const updated = [...state.actions];
   updated[idx] = { ...action, accepted: true, taskId: task.id };
   state = { ...state, actions: updated };
@@ -353,12 +389,23 @@ export function acceptAction(actionId: string): { taskId: number } | null {
   return { taskId: task.id };
 }
 
-export function dismissAction(actionId: string): boolean {
+export function dismissAction(actionId: string, reason?: string): boolean {
   const idx = state.actions.findIndex(a => a.id === actionId);
   if (idx === -1 || state.actions[idx].accepted || state.actions[idx].dismissed) return false;
 
+  const action = state.actions[idx];
+  appendFeedback({
+    type: 'dismiss',
+    actionId: action.id,
+    actionTitle: action.title,
+    actionTaskType: action.taskType,
+    sourceType: action.sourceType,
+    sourceId: action.sourceId,
+    reason,
+  });
+
   const updated = [...state.actions];
-  updated[idx] = { ...updated[idx], dismissed: true };
+  updated[idx] = { ...updated[idx], dismissed: true, dismissReason: reason };
   state = { ...state, actions: updated };
   broadcast();
   return true;

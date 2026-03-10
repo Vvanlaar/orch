@@ -127,6 +127,27 @@
     border-radius: 3px;
   }
 
+  :global(.card > h2) {
+    cursor: pointer;
+    user-select: none;
+  }
+
+  :global(.card > h2::before) {
+    content: '▼';
+    display: inline-block;
+    margin-right: 8px;
+    font-size: 9px;
+    transition: transform 0.15s;
+  }
+
+  :global(.card.collapsed > h2::before) {
+    transform: rotate(-90deg);
+  }
+
+  :global(.card.collapsed .card-body) {
+    display: none;
+  }
+
   :global(h2) {
     font-size: 13px;
     font-weight: 600;

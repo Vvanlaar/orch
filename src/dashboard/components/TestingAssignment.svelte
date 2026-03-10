@@ -101,10 +101,24 @@
       loadOrgRepos();
     }
   });
+
+  const CARD_ID = 'testing';
+  const COLLAPSED_KEY = 'orch.dashboard.cards.collapsed';
+  function getCollapsedCards(): string[] {
+    return readPreference(COLLAPSED_KEY, [] as string[], (v): v is string[] => Array.isArray(v));
+  }
+  let cardCollapsed = $state(getCollapsedCards().includes(CARD_ID));
+  function toggleCard() {
+    cardCollapsed = !cardCollapsed;
+    const current = getCollapsedCards();
+    const next = cardCollapsed ? [...new Set([...current, CARD_ID])] : current.filter(id => id !== CARD_ID);
+    writePreference(COLLAPSED_KEY, next);
+  }
 </script>
 
-<div class="card">
-  <h2>Testing Assignment</h2>
+<div class="card" class:collapsed={cardCollapsed}>
+  <h2 onclick={toggleCard}>Testing Assignment</h2>
+  <div class="card-body">
   <div class="sprint-header">
     <span>{sprintName}</span>
     <span>
@@ -267,6 +281,7 @@
       <button class="action-btn secondary" onclick={deselectAllTeam}>None</button>
       <button class="action-btn" onclick={handleOpenTerminal}>Open Terminal</button>
     </div>
+  </div>
   </div>
 </div>
 

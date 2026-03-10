@@ -293,10 +293,25 @@
     if (t.includes('task')) return '#58a6ff';
     return '#8b949e';
   }
+
+  // --- Collapsible card ---
+  const CARD_ID = 'work-items';
+  const COLLAPSED_KEY = 'orch.dashboard.cards.collapsed';
+  function getCollapsedCards(): string[] {
+    return readPreference(COLLAPSED_KEY, [] as string[], (v): v is string[] => Array.isArray(v));
+  }
+  let cardCollapsed = $state(getCollapsedCards().includes(CARD_ID));
+  function toggleCard() {
+    cardCollapsed = !cardCollapsed;
+    const current = getCollapsedCards();
+    const next = cardCollapsed ? [...new Set([...current, CARD_ID])] : current.filter(id => id !== CARD_ID);
+    writePreference(COLLAPSED_KEY, next);
+  }
 </script>
 
-<div class="card" style="margin-bottom: 20px;">
-  <h2>{isPRMode ? 'Pull Requests' : 'Work Items'}</h2>
+<div class="card" class:collapsed={cardCollapsed} style="margin-bottom: 20px;">
+  <h2 onclick={toggleCard}>{isPRMode ? 'Pull Requests' : 'Work Items'}</h2>
+  <div class="card-body">
   <div class="filters" style="margin-bottom: 4px;">
     <button
       class="filter-btn pr-accent"
@@ -621,6 +636,7 @@
       {/if}
     </div>
   {/if}
+  </div>
 </div>
 
 <style>

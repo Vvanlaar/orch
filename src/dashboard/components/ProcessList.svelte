@@ -10,6 +10,7 @@
   } from '../stores/processes.svelte';
   import { getSearchQuery, matchesSearch } from '../stores/search.svelte';
   import { showToast, showConfirm } from '../stores/toast.svelte';
+  import { readPreference, writePreference } from '../lib/preferences';
 
   let allProcesses = $derived(getProcesses());
   let loading = $derived(isLoading());
@@ -45,17 +46,31 @@
       showToast('Failed to kill processes', 'error');
     }
   }
+
+  const CARD_ID = 'processes';
+  const COLLAPSED_KEY = 'orch.dashboard.cards.collapsed';
+  function getCollapsedCards(): string[] {
+    return readPreference(COLLAPSED_KEY, [] as string[], (v): v is string[] => Array.isArray(v));
+  }
+  let cardCollapsed = $state(getCollapsedCards().includes(CARD_ID));
+  function toggleCard() {
+    cardCollapsed = !cardCollapsed;
+    const current = getCollapsedCards();
+    const next = cardCollapsed ? [...new Set([...current, CARD_ID])] : current.filter(id => id !== CARD_ID);
+    writePreference(COLLAPSED_KEY, next);
+  }
 </script>
 
-<div class="card">
-  <h2 class="process-header">
+<div class="card" class:collapsed={cardCollapsed}>
+  <h2 class="process-header" onclick={toggleCard}>
     <span>Processes</span>
-    <div class="process-actions">
+    <div class="process-actions" onclick={e => e.stopPropagation()}>
       <button class="action-btn secondary" onclick={fetchProcesses}>Refresh</button>
       <button class="action-btn kill-old" onclick={handleKillOld}>Kill Old (2h+)</button>
       <button class="action-btn kill-all" onclick={handleKillAll}>Kill All</button>
     </div>
   </h2>
+  <div class="card-body">
   <div class="card-list" style="max-height:300px;">
     {#if loading}
       <div class="empty">Loading...</div>
@@ -81,6 +96,7 @@
         </div>
       {/each}
     {/if}
+  </div>
   </div>
 </div>
 

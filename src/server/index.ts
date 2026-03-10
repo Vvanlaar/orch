@@ -31,6 +31,7 @@ import type { TerminalId } from '../core/types.js';
 import { getCurrentAdoUser, getMyAdoWorkItems, getMyGitHubPRs, getMyResolvedWorkItems, getResolvedWithPRComments, getReviewedItemsInSprint, getTeamMembers, getWorkItemsBySprints, type OwnerFilter } from '../core/user-items.js';
 import { startNtfyListener } from '../core/ntfy-listener.js';
 import { acceptAction, dismissAction, getOrchestratorState, runChatQuery, runOrchestrator, setNotificationGetter, setOrchestratorUpdateCallback } from '../core/orchestrator.js';
+import { loadOrchestratorRules, saveOrchestratorRules } from '../core/orch-feedback.js';
 import { adoRouter } from './webhooks/ado.js';
 import { githubRouter } from './webhooks/github.js';
 
@@ -1272,8 +1273,21 @@ app.post('/api/orchestrator/:id/accept', (req, res) => {
 });
 
 app.post('/api/orchestrator/:id/dismiss', (req, res) => {
-  const ok = dismissAction(req.params.id);
+  const reason = req.body?.reason;
+  const ok = dismissAction(req.params.id, reason);
   if (!ok) return res.status(404).json({ error: 'Action not found or already handled' });
+  res.json({ ok: true });
+});
+
+app.get('/api/orchestrator/rules', (_req, res) => {
+  const rules = loadOrchestratorRules();
+  res.json({ rules });
+});
+
+app.post('/api/orchestrator/rules', (req, res) => {
+  const { rules } = req.body;
+  if (typeof rules !== 'string') return res.status(400).json({ error: 'rules string required' });
+  saveOrchestratorRules(rules);
   res.json({ ok: true });
 });
 

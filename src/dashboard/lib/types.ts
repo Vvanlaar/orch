@@ -108,6 +108,7 @@ export interface OrchestratorAction {
   sourceId?: string;
   accepted?: boolean;
   dismissed?: boolean;
+  dismissReason?: string;
   taskId?: number;
 }
 
