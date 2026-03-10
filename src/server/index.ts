@@ -423,12 +423,17 @@ app.post('/api/open-terminal', async (req, res) => {
     res.status(400).json({ error: 'workItemId must be a positive integer' });
     return;
   }
-  const basePath = segments[0] === '.workspaces'
+  let basePath = segments[0] === '.workspaces'
     ? path.join(WORKSPACES_DIR, ...segments.slice(1))
     : path.resolve(config.repos.baseDir, repoName);
   if (!existsSync(basePath)) {
-    res.status(404).json({ error: `Repo not found: ${basePath}` });
-    return;
+    const cloned = autoClone(repoName, 'github');
+    if (cloned) {
+      basePath = cloned.repoPath;
+    } else {
+      res.status(404).json({ error: `Repo not found: ${basePath}` });
+      return;
+    }
   }
   const workspacePath = resolveWorkspacePath(basePath, workItemId);
   const title = workItemId ? `#${workItemId} ${repoName}` : repoName;
@@ -475,6 +480,51 @@ function resolveFromRepositoryField(repositories: string[] | undefined): { repoP
         const repoPath = resolveLocalRepo(local);
         if (repoPath) return { repoPath, repoName: remote };
       }
+    }
+  }
+  return null;
+}
+
+/** Auto-clone a repo if not found locally. Returns clone path or null. */
+function autoClone(
+  repoIdentifier: string,
+  source: 'github' | 'ado',
+  project?: string,
+): { repoPath: string; repoName: string } | null {
+  const shortName = repoIdentifier.split('/').pop()!;
+  const existingClonePath = path.join(WORKSPACES_DIR, 'clones', shortName);
+  if (existsSync(path.join(existingClonePath, '.git'))) {
+    return { repoPath: existingClonePath, repoName: repoIdentifier };
+  }
+
+  let cloneUrl: string;
+  if (source === 'github') {
+    const fullName = repoIdentifier.includes('/')
+      ? repoIdentifier
+      : `${config.github.org}/${repoIdentifier}`;
+    cloneUrl = `https://github.com/${fullName}.git`;
+  } else {
+    cloneUrl = `https://dev.azure.com/${config.ado.organization}/${project || shortName}/_git/${shortName}`;
+  }
+
+  console.log(`[auto-clone] Cloning ${cloneUrl} -> .workspaces/clones/${shortName}`);
+  const clonedPath = cloneRepo(cloneUrl, shortName);
+  if (!clonedPath) return null;
+  console.log(`[auto-clone] Success: ${clonedPath}`);
+  return { repoPath: clonedPath, repoName: repoIdentifier };
+}
+
+function autoCloneFromRepositories(
+  repositories: string[] | undefined,
+  project?: string,
+): { repoPath: string; repoName: string } | null {
+  if (!repositories?.length) return null;
+  for (const repo of repositories) {
+    const gh = autoClone(repo, 'github');
+    if (gh) return gh;
+    if (project) {
+      const ado = autoClone(repo, 'ado', project);
+      if (ado) return ado;
     }
   }
   return null;
@@ -968,7 +1018,7 @@ app.get('/api/claude/usage', async (_req, res) => {
 // Trigger actions from dashboard
 app.post('/api/actions/review-pr', (req, res) => {
   const { repo, prNumber, source, title, url, branch, baseBranch } = req.body;
-  const resolved = resolveRepoPath(repo);
+  const resolved = resolveRepoPath(repo) ?? autoClone(repo, source || 'github');
 
   if (!resolved) {
     res.status(400).json({ error: `No local mapping for repo: ${repo}` });
@@ -1019,6 +1069,11 @@ app.post('/api/actions/analyze-workitem', (req, res) => {
   }
 
   if (!repoPath) {
+    const cloned = autoCloneFromRepositories(repositories, project);
+    if (cloned) { repoPath = cloned.repoPath; repoName = cloned.repoName; }
+  }
+
+  if (!repoPath) {
     res.status(400).json({ error: 'No repo found for this work item. Set the Repository field in ADO or clone the repo.' });
     return;
   }
@@ -1038,7 +1093,7 @@ app.post('/api/actions/analyze-workitem', (req, res) => {
 
 app.post('/api/actions/fix-pr-comments', async (req, res) => {
   const { repo, prNumber, source, title, url, branch, baseBranch } = req.body;
-  const resolved = resolveRepoPath(repo);
+  const resolved = resolveRepoPath(repo) ?? autoClone(repo, source || 'github');
 
   if (!resolved) {
     res.status(400).json({ error: `No local mapping for repo: ${repo}` });
@@ -1171,6 +1226,13 @@ app.post('/api/actions/test-workitem', (req, res) => {
     }
   }
 
+  // Auto-clone fallback before remote-only mode
+  if (!repoPath) {
+    const cloned = autoCloneFromRepositories(repositories, project)
+      ?? (ghRepoRef ? autoClone(ghRepoRef, 'github') : null);
+    if (cloned) { repoPath = cloned.repoPath; repoName = cloned.repoName; }
+  }
+
   // Remote-only fallback: no local repo - use base dir and work from PR URL or ADO info only
   if (!repoPath) {
     if (!existsSync(config.repos.baseDir)) {
@@ -1246,6 +1308,14 @@ app.post('/api/actions/review-resolution', (req, res) => {
         }
       }
     }
+  }
+
+  if (!repoPath) {
+    const cloned = autoCloneFromRepositories(repositories, project)
+      ?? (githubPrUrl?.match(/github\.com\/([^/]+\/[^/]+)\/pull/)?.[1]
+          ? autoClone(githubPrUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull/)![1], 'github')
+          : null);
+    if (cloned) { repoPath = cloned.repoPath; repoName = cloned.repoName; }
   }
 
   if (!repoPath) {
