@@ -194,7 +194,7 @@
             </button>
           </div>
           <div class="creds-list">
-            {#each ['ADO_PAT', 'ADO_ORG', 'ADO_PROJECT', 'ADO_TEAM', 'GITHUB_TOKEN'] as key}
+            {#each ['GITHUB_TOKEN', 'ADO_PAT', 'ADO_ORG', 'ADO_PROJECT', 'ADO_TEAM'] as key}
               <label class="cred-field">
                 <span class="cred-label">{key}</span>
                 <input

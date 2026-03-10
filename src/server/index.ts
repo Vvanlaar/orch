@@ -735,7 +735,7 @@ function writeEnvFile(existingLines: string[], vars: Record<string, string>) {
   writeFileSync(envPath, lines.join('\n'));
 }
 
-const credentialKeys = ['ADO_PAT', 'ADO_ORG', 'ADO_PROJECT', 'ADO_TEAM', 'GITHUB_TOKEN'] as const;
+const credentialKeys = ['GITHUB_TOKEN', 'ADO_PAT', 'ADO_ORG', 'ADO_PROJECT', 'ADO_TEAM'] as const;
 
 const configUpdaters: Record<string, (val: string) => void> = {
   ADO_PAT: (v) => { config.ado.pat = v; },
