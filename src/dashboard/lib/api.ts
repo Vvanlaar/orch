@@ -123,8 +123,9 @@ export async function saveCredentials(creds: Record<string, string>): Promise<vo
 }
 
 // GitHub org repos
-export async function fetchOrgRepos(): Promise<GitHubRepo[]> {
-  const res = await fetch('/api/github/org-repos');
+export async function fetchOrgRepos(refresh = false): Promise<GitHubRepo[]> {
+  const url = refresh ? '/api/github/org-repos?refresh=true' : '/api/github/org-repos';
+  const res = await fetch(url);
   if (!res.ok) throw new Error('Failed to fetch org repos');
   return res.json();
 }

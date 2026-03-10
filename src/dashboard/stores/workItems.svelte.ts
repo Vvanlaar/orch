@@ -99,9 +99,10 @@ export function getWorkItemFromCache(id: number): WorkItem | undefined {
   return workItemCache.get(id);
 }
 
-export async function fetchPRs() {
+export async function fetchPRs(refresh = false) {
   try {
-    const res = await fetch('/api/my/prs');
+    const url = refresh ? '/api/my/prs?refresh=true' : '/api/my/prs';
+    const res = await fetch(url);
     prs = await res.json();
     // Update cache
     prs.forEach((pr) => prCache.set(`${pr.repo}#${pr.number}`, pr));
@@ -149,9 +150,10 @@ export function getResolvedWithComments() {
   return resolvedWithComments;
 }
 
-export async function fetchResolvedWithComments() {
+export async function fetchResolvedWithComments(refresh = false) {
   try {
-    const res = await fetch('/api/my/resolved-with-comments');
+    const url = refresh ? '/api/my/resolved-with-comments?refresh=true' : '/api/my/resolved-with-comments';
+    const res = await fetch(url);
     resolvedWithComments = await res.json();
     resolvedWithComments.forEach((wi) => workItemCache.set(wi.id, wi));
   } catch (err) {

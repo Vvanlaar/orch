@@ -18,11 +18,11 @@
   import OrchestratorChat from './components/OrchestratorChat.svelte';
   import ToastContainer from './components/ToastContainer.svelte';
 
-  function refreshAll() {
-    fetchPRs();
+  function refreshAll(refresh = false) {
+    fetchPRs(refresh);
     fetchWorkItems();
     fetchResolvedByMe();
-    fetchResolvedWithComments();
+    fetchResolvedWithComments(refresh);
     fetchTasks();
     fetchClaudeUsage();
     fetchReviewedItems();
@@ -35,8 +35,8 @@
   onMount(() => {
     connect();
     refreshAll();
-    // Refresh every 2 minutes
-    const interval = setInterval(refreshAll, 120000);
+    // Refresh every 2 minutes (uses cache)
+    const interval = setInterval(() => refreshAll(), 120000);
     return () => clearInterval(interval);
   });
 </script>

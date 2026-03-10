@@ -652,10 +652,19 @@ app.get('/api/repos', (_req, res) => {
   res.json({ repos, mapping });
 });
 
-// GitHub org repos - hardcoded to bluebillywig org
-app.get('/api/github/org-repos', async (_req, res) => {
+// GitHub org repos - hardcoded to bluebillywig org (10min cache)
+let orgReposCache: { data: any; expiry: number } | null = null;
+const ORG_REPOS_TTL = 10 * 60 * 1000;
+
+app.get('/api/github/org-repos', async (req, res) => {
   if (!config.github.token) {
     res.status(400).json({ error: 'GITHUB_TOKEN not configured' });
+    return;
+  }
+  const refresh = req.query.refresh === 'true';
+  const now = Date.now();
+  if (!refresh && orgReposCache && now < orgReposCache.expiry) {
+    res.json(orgReposCache.data);
     return;
   }
   try {
@@ -680,6 +689,7 @@ app.get('/api/github/org-repos', async (_req, res) => {
       description: r.description || undefined,
       isLocal: localNames.has(r.name),
     }));
+    orgReposCache = { data: repos, expiry: Date.now() + ORG_REPOS_TTL };
     res.json(repos);
   } catch (err: any) {
     const msg = err?.response?.data?.message || err?.message || String(err);
@@ -934,8 +944,9 @@ app.get('/api/workitems', async (req, res) => {
   res.json(items);
 });
 
-app.get('/api/my/prs', async (_req, res) => {
-  const prs = await getMyGitHubPRs();
+app.get('/api/my/prs', async (req, res) => {
+  const refresh = req.query.refresh === 'true';
+  const prs = await getMyGitHubPRs(refresh);
   res.json(prs);
 });
 
@@ -949,8 +960,9 @@ app.get('/api/my/resolved-workitems', async (_req, res) => {
   res.json(items);
 });
 
-app.get('/api/my/resolved-with-comments', async (_req, res) => {
-  const items = await getResolvedWithPRComments();
+app.get('/api/my/resolved-with-comments', async (req, res) => {
+  const refresh = req.query.refresh === 'true';
+  const items = await getResolvedWithPRComments(refresh);
   res.json(items);
 });
 

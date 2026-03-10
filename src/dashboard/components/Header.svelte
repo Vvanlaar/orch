@@ -11,7 +11,7 @@
   import { onMount } from 'svelte';
 
   interface Props {
-    refreshAll: () => void;
+    refreshAll: (refresh?: boolean) => void;
   }
 
   let { refreshAll }: Props = $props();
@@ -229,7 +229,7 @@
         <span class="notif-badge-count">{notifState.unreadCount > 99 ? '99+' : notifState.unreadCount}</span>
       {/if}
     </button>
-    <button class="refresh-btn" onclick={refreshAll}>Refresh</button>
+    <button class="refresh-btn" onclick={() => refreshAll(true)}>Refresh</button>
     <div class="status">
       <div class="status-dot" class:disconnected={!connectionState.connected}></div>
       <span>{connectionState.connected ? 'Connected' : 'Disconnected'}</span>

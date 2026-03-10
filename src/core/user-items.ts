@@ -88,10 +88,19 @@ async function searchGitHubPRs(query: string): Promise<any[]> {
   return data.items || [];
 }
 
-export async function getMyGitHubPRs(): Promise<GitHubPR[]> {
+// Cache for getMyGitHubPRs (5min TTL)
+let myPRsCache: { items: GitHubPR[]; expiry: number } | null = null;
+const MY_PRS_TTL = 5 * 60 * 1000;
+
+export async function getMyGitHubPRs(refresh = false): Promise<GitHubPR[]> {
   if (!config.github.token) {
     console.log('[UserItems] No GITHUB_TOKEN configured');
     return [];
+  }
+
+  const now = Date.now();
+  if (!refresh && myPRsCache && now < myPRsCache.expiry) {
+    return myPRsCache.items;
   }
 
   try {
@@ -113,6 +122,7 @@ export async function getMyGitHubPRs(): Promise<GitHubPR[]> {
     }
 
     prs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    myPRsCache = { items: prs, expiry: Date.now() + MY_PRS_TTL };
     console.log(`[UserItems] Found ${prs.length} GitHub PRs`);
     return prs;
   } catch (err) {
@@ -266,7 +276,7 @@ export async function getMyResolvedWorkItems(): Promise<AdoWorkItem[]> {
   return fetchAdoWorkItemsByQuery(query, 'Fetching resolved-by-me work items');
 }
 
-// Cache for PR comment lookups (2min TTL)
+// Cache for PR comment lookups (5min TTL)
 let prCommentsCache: { items: (AdoWorkItem & { commentCount: number })[]; expiry: number } | null = null;
 let cachedGitHubUsername: string | null = null;
 
@@ -277,11 +287,13 @@ async function getGitHubUsername(): Promise<string> {
   return cachedGitHubUsername;
 }
 
-export async function getResolvedWithPRComments(): Promise<(AdoWorkItem & { commentCount: number })[]> {
+const PR_COMMENTS_TTL = 5 * 60 * 1000;
+
+export async function getResolvedWithPRComments(refresh = false): Promise<(AdoWorkItem & { commentCount: number })[]> {
   if (!config.github.token) return [];
 
   const now = Date.now();
-  if (prCommentsCache && now < prCommentsCache.expiry) {
+  if (!refresh && prCommentsCache && now < prCommentsCache.expiry) {
     return prCommentsCache.items;
   }
 
@@ -341,7 +353,7 @@ export async function getResolvedWithPRComments(): Promise<(AdoWorkItem & { comm
       }
     }
 
-    prCommentsCache = { items: results, expiry: now + 2 * 60 * 1000 };
+    prCommentsCache = { items: results, expiry: now + PR_COMMENTS_TTL };
     console.log(`[UserItems] Found ${results.length} resolved items with PR comments`);
     return results;
   } catch (err) {
