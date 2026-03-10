@@ -4,7 +4,7 @@ Orchestrates Claude Code processes for automated PR reviews, comment fixes, and 
 
 ## Workflow
 
-After each code change, use the code-simplifier and review skills. Fix any errors and then commit.
+After each code change, use the code-simplifier and review skills. Fix any errors, then always commit and push.
 
 ## Commands
 - `npm run dev` - Server + dashboard (hot reload)
