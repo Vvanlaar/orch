@@ -348,8 +348,12 @@ export async function getResolvedWithPRComments(refresh = false): Promise<(AdoWo
         if (unresolvedUnreplied.length > 0) {
           results.push({ ...wi, commentCount: unresolvedUnreplied.length });
         }
-      } catch (err) {
-        console.error(`[UserItems] Error checking PR comments for ${owner}/${repo}#${prNum}:`, err);
+      } catch (err: any) {
+        // Silently skip repos that are inaccessible (404/NOT_FOUND)
+        const is404 = err?.status === 404 || err?.errors?.[0]?.type === 'NOT_FOUND';
+        if (!is404) {
+          console.error(`[UserItems] Error checking PR comments for ${owner}/${repo}#${prNum}:`, err);
+        }
       }
     }
 

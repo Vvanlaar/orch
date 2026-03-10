@@ -23,6 +23,18 @@ const octokit = new Octokit({ auth: config.github.token });
 // Track processed items to avoid duplicates
 const processed = new Set<string>();
 
+// Track repos that return 404 (inaccessible/deleted/renamed) to avoid repeated errors
+const inaccessibleRepos = new Set<string>();
+
+function handleRepoNotFound(err: any, repoFullName: string): boolean {
+  if (err?.status === 404) {
+    inaccessibleRepos.add(repoFullName);
+    console.warn(`[Poller] Repo ${repoFullName} returned 404 — skipping future polls`);
+    return true;
+  }
+  return false;
+}
+
 function getProcessedKey(source: string, type: string, id: string | number, updatedAt?: string): string {
   return `${source}:${type}:${id}:${updatedAt || ''}`;
 }
@@ -78,6 +90,8 @@ async function getAuthenticatedUsername(): Promise<string | null> {
 }
 
 async function pollMyPRReviewComments(repoFullName: string): Promise<void> {
+  if (inaccessibleRepos.has(repoFullName)) return;
+
   const [owner, repo] = repoFullName.split('/');
   const repoPath = resolveRepoPath(repoFullName);
   if (!repoPath) return;
@@ -145,12 +159,16 @@ async function pollMyPRReviewComments(repoFullName: string): Promise<void> {
       console.log(`[Poller] Created pr-comment-fix ${suggestionMode ? 'suggestion' : 'task'} for ${repoFullName}#${pr.number} (${unresolvedComments.length} comments)`);
       triggerUpdate();
     }
-  } catch (err) {
-    console.error(`[Poller] Error polling review comments for ${repoFullName}:`, err);
+  } catch (err: any) {
+    if (!handleRepoNotFound(err, repoFullName)) {
+      console.error(`[Poller] Error polling review comments for ${repoFullName}:`, err);
+    }
   }
 }
 
 async function pollGitHubRepo(repoFullName: string): Promise<void> {
+  if (inaccessibleRepos.has(repoFullName)) return;
+
   const [owner, repo] = repoFullName.split('/');
   const repoPath = resolveRepoPath(repoFullName);
   if (!repoPath) return;
@@ -186,7 +204,8 @@ async function pollGitHubRepo(repoFullName: string): Promise<void> {
       console.log(`[Poller] Created PR review ${suggestionMode ? 'suggestion' : 'task'} for ${repoFullName}#${pr.number}`);
       triggerUpdate();
     }
-  } catch (err) {
+  } catch (err: any) {
+    if (handleRepoNotFound(err, repoFullName)) return;
     console.error(`[Poller] Error polling PRs for ${repoFullName}:`, err);
   }
 
@@ -222,7 +241,8 @@ async function pollGitHubRepo(repoFullName: string): Promise<void> {
       console.log(`[Poller] Created issue-fix ${suggestionMode ? 'suggestion' : 'task'} for ${repoFullName}#${issue.number}`);
       triggerUpdate();
     }
-  } catch (err) {
+  } catch (err: any) {
+    if (handleRepoNotFound(err, repoFullName)) return;
     console.error(`[Poller] Error polling issues for ${repoFullName}:`, err);
   }
 }
@@ -307,6 +327,7 @@ export function stopPoller(): void {
   if (pollInterval) {
     clearInterval(pollInterval);
     pollInterval = null;
+    inaccessibleRepos.clear();
     console.log('[Poller] Stopped');
   }
 }
