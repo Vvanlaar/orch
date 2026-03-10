@@ -1,7 +1,7 @@
 import { existsSync } from 'fs';
 import path from 'path';
-import { Octokit } from 'octokit';
 import { config, WORKSPACES_DIR } from './config.js';
+import { createIssueComment, createReviewCommentReply } from './github-api.js';
 import {
   getPendingTasks,
   getRunningCount,
@@ -34,8 +34,6 @@ import {
   removeWorktree,
 } from './git-ops.js';
 import type { Task } from './types.js';
-
-const octokit = new Octokit({ auth: config.github.token });
 
 let onTaskUpdate: (() => void) | null = null;
 let onOutputChunk: ((taskId: number, chunk: string) => void) | null = null;
@@ -93,12 +91,7 @@ claudeEmitter.on('pid', (taskId: number, pid: number) => {
 
 async function postGitHubPrComment(repo: string, prNumber: number, body: string): Promise<void> {
   const [owner, repoName] = repo.split('/');
-  await octokit.rest.issues.createComment({
-    owner,
-    repo: repoName,
-    issue_number: prNumber,
-    body,
-  });
+  await createIssueComment(owner, repoName, prNumber, body);
 }
 
 async function postAdoPrComment(repo: string, prNumber: number, body: string): Promise<void> {
@@ -146,13 +139,7 @@ async function replyToReviewComment(
   body: string
 ): Promise<void> {
   const [owner, repoName] = repo.split('/');
-  await octokit.rest.pulls.createReplyForReviewComment({
-    owner,
-    repo: repoName,
-    pull_number: prNumber,
-    comment_id: commentId,
-    body,
-  });
+  await createReviewCommentReply(owner, repoName, prNumber, commentId, body);
 }
 
 async function processPrCommentFix(task: Task): Promise<void> {

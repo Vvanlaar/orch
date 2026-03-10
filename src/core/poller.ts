@@ -1,5 +1,5 @@
-import { Octokit } from 'octokit';
 import { config } from './config.js';
+import { getAuthenticatedUser, listPulls, listPullReviewComments, listIssuesForRepo } from './github-api.js';
 import { createTask, createSuggestion, getAllTasks } from './task-queue.js';
 import { triggerUpdate } from './task-processor.js';
 import { sendNtfySuggestion } from './ntfy-sender.js';
@@ -17,8 +17,6 @@ function createTaskOrSuggestion(type: Parameters<typeof createTask>[0], repo: st
   }
   return createTask(type, repo, repoPath, context);
 }
-
-const octokit = new Octokit({ auth: config.github.token });
 
 // Track processed items to avoid duplicates
 const processed = new Set<string>();
@@ -81,7 +79,7 @@ let cachedUsername: string | null = null;
 async function getAuthenticatedUsername(): Promise<string | null> {
   if (cachedUsername) return cachedUsername;
   try {
-    const { data: user } = await octokit.rest.users.getAuthenticated();
+    const user = await getAuthenticatedUser();
     cachedUsername = user.login;
     return cachedUsername;
   } catch {
@@ -101,24 +99,13 @@ async function pollMyPRReviewComments(repoFullName: string): Promise<void> {
 
   try {
     // Fetch PRs authored by authenticated user
-    const { data: prs } = await octokit.rest.pulls.list({
-      owner,
-      repo,
-      state: 'open',
-      sort: 'updated',
-      direction: 'desc',
-      per_page: 10,
-    });
+    const prs = await listPulls(owner, repo, { state: 'open', sort: 'updated', direction: 'desc', per_page: 10 });
 
     const myPrs = prs.filter(pr => pr.user?.login === username);
 
     for (const pr of myPrs) {
       // Fetch review comments for this PR
-      const { data: comments } = await octokit.rest.pulls.listReviewComments({
-        owner,
-        repo,
-        pull_number: pr.number,
-      });
+      const comments = await listPullReviewComments(owner, repo, pr.number);
 
       // Filter to unresolved comments (not by the PR author themselves)
       const unresolvedComments = comments.filter(c =>
@@ -175,14 +162,7 @@ async function pollGitHubRepo(repoFullName: string): Promise<void> {
 
   // Poll open PRs
   try {
-    const { data: prs } = await octokit.rest.pulls.list({
-      owner,
-      repo,
-      state: 'open',
-      sort: 'updated',
-      direction: 'desc',
-      per_page: 10,
-    });
+    const prs = await listPulls(owner, repo, { state: 'open', sort: 'updated', direction: 'desc', per_page: 10 });
 
     for (const pr of prs) {
       const key = getProcessedKey('github', 'pr', pr.number, pr.updated_at);
@@ -211,14 +191,7 @@ async function pollGitHubRepo(repoFullName: string): Promise<void> {
 
   // Poll open issues
   try {
-    const { data: issues } = await octokit.rest.issues.listForRepo({
-      owner,
-      repo,
-      state: 'open',
-      sort: 'updated',
-      direction: 'desc',
-      per_page: 10,
-    });
+    const issues = await listIssuesForRepo(owner, repo, { state: 'open', sort: 'updated', direction: 'desc', per_page: 10 });
 
     for (const issue of issues) {
       // Skip PRs (they show up in issues API too)

@@ -1,7 +1,5 @@
-import { Octokit } from 'octokit';
 import { config } from './config.js';
-
-const octokit = new Octokit({ auth: config.github.token });
+import { getAuthenticatedUser, searchIssues, graphql } from './github-api.js';
 
 export interface GitHubPR {
   number: number;
@@ -80,12 +78,7 @@ function mapPrToGitHubPR(pr: any, role: 'author' | 'reviewer'): GitHubPR {
 }
 
 async function searchGitHubPRs(query: string): Promise<any[]> {
-  const res = await fetch(
-    `https://api.github.com/search/issues?q=${query}&sort=updated&order=desc&per_page=20`,
-    { headers: { Authorization: `token ${config.github.token}`, Accept: 'application/vnd.github.v3+json' } }
-  );
-  const data = await res.json();
-  return data.items || [];
+  return searchIssues(query);
 }
 
 // Cache for getMyGitHubPRs (5min TTL)
@@ -104,7 +97,7 @@ export async function getMyGitHubPRs(refresh = false): Promise<GitHubPR[]> {
   }
 
   try {
-    const { data: user } = await octokit.rest.users.getAuthenticated();
+    const user = await getAuthenticatedUser();
     console.log(`[UserItems] Fetching PRs for GitHub user: ${user.login}`);
 
     const [authored, reviewing] = await Promise.all([
@@ -282,7 +275,7 @@ let cachedGitHubUsername: string | null = null;
 
 async function getGitHubUsername(): Promise<string> {
   if (cachedGitHubUsername) return cachedGitHubUsername;
-  const { data: user } = await octokit.rest.users.getAuthenticated();
+  const user = await getAuthenticatedUser();
   cachedGitHubUsername = user.login;
   return cachedGitHubUsername;
 }
@@ -311,7 +304,7 @@ export async function getResolvedWithPRComments(refresh = false): Promise<(AdoWo
       const [, owner, repo, prNum] = match;
 
       try {
-        const { repository } = await octokit.graphql<{
+        const { repository } = await graphql<{
           repository: {
             pullRequest: {
               reviewThreads: {

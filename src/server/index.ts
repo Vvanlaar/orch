@@ -25,7 +25,7 @@ import {
 } from '../core/settings.js';
 import { startPoller } from '../core/poller.js';
 import { getEffectiveRepoMapping, getScannedRepos } from '../core/repo-scanner.js';
-import { Octokit } from 'octokit';
+import { getAuthenticatedUser, getPull, listPullReviewComments, listOrgRepos } from '../core/github-api.js';
 import { approveSuggestion, completeTask, createTask, deleteTask, dismissSuggestion, failTask, getAllTasks, getAllTasksWithOutput, getTask, getTasksWithPids, retryTask, updateTaskRepoPath } from '../core/task-queue.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
 import type { TerminalId } from '../core/types.js';
@@ -668,12 +668,7 @@ app.get('/api/github/org-repos', async (req, res) => {
     return;
   }
   try {
-    const octokit = new Octokit({ auth: config.github.token });
-    const { data } = await octokit.rest.repos.listForOrg({
-      org: config.github.org || 'bluebillywig',
-      per_page: 100,
-      sort: 'updated',
-    });
+    const data = await listOrgRepos(config.github.org || 'bluebillywig', { per_page: 100, sort: 'updated' });
     const localRepos = getScannedRepos();
     const localNames = new Set(localRepos.map(r => r.localName));
     // Also match bare names for .workspaces/clones/ entries
@@ -1135,8 +1130,6 @@ app.post('/api/actions/fix-pr-comments', async (req, res) => {
     return;
   }
 
-  const { Octokit } = await import('octokit');
-  const octokit = new Octokit({ auth: config.github.token });
   const [owner, repoName] = repo.split('/');
 
   let headBranch = branch;
@@ -1144,7 +1137,7 @@ app.post('/api/actions/fix-pr-comments', async (req, res) => {
 
   if (!headBranch) {
     try {
-      const { data: prData } = await octokit.rest.pulls.get({ owner, repo: repoName, pull_number: prNumber });
+      const prData = await getPull(owner, repoName, prNumber);
       headBranch = prData.head.ref;
       baseBranchRef = prData.base.ref;
       console.log(`[fix-pr-comments] Fetched branch info: ${headBranch} -> ${baseBranchRef}`);
@@ -1156,12 +1149,8 @@ app.post('/api/actions/fix-pr-comments', async (req, res) => {
   }
 
   try {
-    const { data: user } = await octokit.rest.users.getAuthenticated();
-    const { data: comments } = await octokit.rest.pulls.listReviewComments({
-      owner,
-      repo: repoName,
-      pull_number: prNumber,
-    });
+    const user = await getAuthenticatedUser();
+    const comments = await listPullReviewComments(owner, repoName, prNumber);
 
     const unresolvedComments = comments.filter(c =>
       c.user?.login !== user.login && !c.in_reply_to_id

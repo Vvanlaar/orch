@@ -1,10 +1,8 @@
 import { execFileSync, execSync } from 'child_process';
 import { mkdirSync } from 'fs';
 import path from 'path';
-import { Octokit } from 'octokit';
 import { config, WORKSPACES_DIR } from './config.js';
-
-const octokit = new Octokit({ auth: config.github.token });
+import { createPull } from './github-api.js';
 
 export interface GitStatus {
   hasChanges: boolean;
@@ -166,14 +164,7 @@ export async function createGitHubPR(
 ): Promise<string | null> {
   try {
     const [owner, repoName] = repo.split('/');
-    const { data: pr } = await octokit.rest.pulls.create({
-      owner,
-      repo: repoName,
-      head,
-      base,
-      title,
-      body,
-    });
+    const pr = await createPull(owner, repoName, head, base, title, body);
     return pr.html_url;
   } catch (err) {
     console.error('[GitOps] Failed to create GitHub PR:', err);
