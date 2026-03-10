@@ -129,11 +129,14 @@
     return `${pr.repo}#${pr.number}`;
   }
 
-  function isResolvedWithPR(wi: WorkItem): boolean {
+  function isResolvedOrReviewed(wi: WorkItem): boolean {
     const state = wi.state.toLowerCase();
-    const isResolved = state === 'resolved' || state === 'reviewed';
+    return state === 'resolved' || state === 'reviewed';
+  }
+
+  function isResolvedWithPR(wi: WorkItem): boolean {
     const hasPr = !!(wi.githubPrUrl || wi.resolution?.includes('github.com'));
-    return isResolved && hasPr;
+    return isResolvedOrReviewed(wi) && hasPr;
   }
 
   let prCommentItems = $derived(getResolvedWithComments());
@@ -430,6 +433,9 @@
                 {#if currentOwner !== 'my' && wi.assignedTo}
                   <span class="badge" style="background:#8b949e20;color:#8b949e;">{wi.assignedTo}</span>
                 {/if}
+                {#if wi.resolvedBy && currentOwner !== 'resolved-by-me'}
+                  <span class="badge" style="background:#a371f720;color:#a371f7;">Resolved: {wi.resolvedBy}</span>
+                {/if}
                 {#if wi.repositories?.length}
                   {#each wi.repositories as repo}
                     <span class="badge" style="background:#da3b0120;color:#da3b01;">{repo}</span>
@@ -443,6 +449,8 @@
             <div class="list-row-actions">
               <button class="action-btn secondary" title="Investigate with Claude" onclick={() => handleInvestigate(wi)}>Inv</button>
               {#if isResolvedWithPR(wi)}
+                <button class="action-btn" onclick={() => handleReviewResolution(wi.id)}>Review PR</button>
+              {:else if isResolvedOrReviewed(wi)}
                 <button class="action-btn" onclick={() => handleReviewResolution(wi.id)}>Review</button>
               {:else}
                 <button class="action-btn" onclick={() => handleAnalyzeWorkItem(wi.id)}>
@@ -581,6 +589,9 @@
                         {#if currentOwner !== 'my' && wi.assignedTo}
                           <span class="badge" style="background:#8b949e20;color:#8b949e;">{wi.assignedTo}</span>
                         {/if}
+                        {#if wi.resolvedBy && currentOwner !== 'resolved-by-me'}
+                          <span class="badge" style="background:#a371f720;color:#a371f7;">Resolved: {wi.resolvedBy}</span>
+                        {/if}
                         {#if hasPr}
                           <span class="badge" style="background:#3fb95020;color:#3fb950;">PR</span>
                         {/if}
@@ -595,6 +606,8 @@
                       <div class="kanban-actions">
                         <div class="kanban-action-primary">
                           {#if isResolvedWithPR(wi)}
+                            <button class="action-btn" onclick={() => handleReviewResolution(wi.id)}>Review PR</button>
+                          {:else if isResolvedOrReviewed(wi)}
                             <button class="action-btn" onclick={() => handleReviewResolution(wi.id)}>Review Resolution</button>
                           {:else}
                             <button class="action-btn" onclick={() => handleAnalyzeWorkItem(wi.id)}>
