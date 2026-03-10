@@ -1,4 +1,4 @@
 {
-  "preferredTerminal": "git-bash",
+  "preferredTerminal": "auto",
   "terminalInteractiveSession": true
 }
