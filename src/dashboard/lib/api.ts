@@ -162,6 +162,49 @@ export async function openTerminalForRepo(repoName: string, workItemId?: number)
   }
 }
 
+// GitHub OAuth Device Flow
+export interface AuthStatus {
+  authenticated: boolean;
+  clientIdConfigured: boolean;
+}
+
+export interface DeviceFlowResponse {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+  interval: number;
+}
+
+export interface PollResponse {
+  status: 'pending' | 'slow_down' | 'expired' | 'denied' | 'complete' | 'error';
+  error?: string;
+}
+
+export async function getAuthStatus(): Promise<AuthStatus> {
+  const res = await fetch('/api/auth/github/status');
+  if (!res.ok) throw new Error('Failed to get auth status');
+  return res.json();
+}
+
+export async function startDeviceFlow(): Promise<DeviceFlowResponse> {
+  const res = await fetch('/api/auth/github/device', { method: 'POST' });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to start device flow');
+  return data;
+}
+
+export async function pollDeviceFlow(deviceCode: string): Promise<PollResponse> {
+  const res = await fetch('/api/auth/github/poll', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ device_code: deviceCode }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Poll failed');
+  return data;
+}
+
 export async function testWorkitem(wi: WorkItem, selectedRepo?: string): Promise<{ taskId: number; message: string }> {
   const res = await fetch('/api/actions/test-workitem', {
     method: 'POST',
