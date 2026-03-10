@@ -106,6 +106,7 @@ export interface OrchestratorAction {
   reasoning: string;
   sourceType: 'ado-workitem' | 'github-pr' | 'pr-comments' | 'testing' | 'notification';
   sourceId?: string;
+  sourceUrl?: string;
   accepted?: boolean;
   dismissed?: boolean;
   dismissReason?: string;
@@ -120,6 +121,7 @@ export interface ChatMessage {
 
 export interface OrchestratorState {
   status: OrchestratorStatus;
+  runId?: number;
   actions: OrchestratorAction[];
   completedAt?: string;
   error?: string;
