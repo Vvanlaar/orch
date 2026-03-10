@@ -8,5 +8,10 @@
       "Bash(npm config:*)",
       "mcp__svelte__svelte-autofixer"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "svelte",
+    "azure-devops"
+  ]
 }

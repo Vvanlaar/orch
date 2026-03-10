@@ -5,3 +5,4 @@ dist/
 orch-tasks.json
 desktop/build/
 desktop/artifacts/
+.workspaces/
