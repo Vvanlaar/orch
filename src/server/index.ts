@@ -18,6 +18,7 @@ import {
   getKnownTerminals,
   getTerminalInteractiveSession,
   getTerminalPreference,
+  isMacPlatform,
   isWindowsPlatform,
   setTerminalInteractiveSession,
   setTerminalPreference,
@@ -273,10 +274,11 @@ async function tryTerminalFallbacks(
   tryTerminal: (terminal: string) => Promise<boolean>,
   windowsFallbacks: string[],
   linuxFallbacks: string[],
+  macFallbacks?: string[],
   sessionId?: string,
 ): Promise<ShellResult> {
   const preferred = getTerminalPreference();
-  const fallbacks = isWindowsPlatform() ? windowsFallbacks : linuxFallbacks;
+  const fallbacks = isWindowsPlatform() ? windowsFallbacks : isMacPlatform() ? (macFallbacks ?? linuxFallbacks) : linuxFallbacks;
 
   if (preferred === 'auto') {
     for (const terminal of fallbacks) {
@@ -285,7 +287,7 @@ async function tryTerminalFallbacks(
         return { success: true, terminal, hint };
       }
     }
-    const msg = isWindowsPlatform() ? 'Failed to open terminal' : 'Failed to open terminal. Install gnome-terminal or xterm.';
+    const msg = isWindowsPlatform() ? 'Failed to open terminal' : 'Failed to open terminal. Install a supported terminal.';
     return { success: false, error: msg };
   }
 
@@ -333,7 +335,18 @@ async function openShellAtPath(shellPath: string, title: string): Promise<ShellR
       }
     }
     return new Promise(resolve => {
+      const escapedPath = shellPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
       const cmds: Record<string, string> = {
+        'terminal-app': `osascript -e 'tell application "Terminal" to do script "cd ${escapedPath}"'`,
+        'iterm2': [
+          'osascript',
+          `-e 'tell application "iTerm2"'`,
+          `-e 'create window with default profile'`,
+          `-e 'tell current session of current window'`,
+          `-e 'write text "cd ${escapedPath}"'`,
+          `-e 'end tell'`,
+          `-e 'end tell'`,
+        ].join(' '),
         'gnome-terminal': `gnome-terminal --title="${title}" --working-directory="${shellPath}"`,
         'xterm': `xterm -T "${title}" -e "cd '${shellPath}' && exec bash"`,
       };
@@ -342,7 +355,7 @@ async function openShellAtPath(shellPath: string, title: string): Promise<ShellR
     });
   };
 
-  return tryTerminalFallbacks(tryTerminal, ['wt', 'git-bash', 'cmd'], ['gnome-terminal', 'xterm', 'tmux'], sessionId);
+  return tryTerminalFallbacks(tryTerminal, ['wt', 'git-bash', 'cmd'], ['gnome-terminal', 'xterm', 'tmux'], ['iterm2', 'terminal-app', 'tmux'], sessionId);
 }
 
 async function openShellWithCommand(cmd: string, title: string): Promise<ShellResult> {
@@ -374,6 +387,16 @@ async function openShellWithCommand(cmd: string, title: string): Promise<ShellRe
     }
     return new Promise(resolve => {
       const cmds: Record<string, string> = {
+        'terminal-app': `osascript -e 'tell application "Terminal" to do script "bash ${unixPath}"'`,
+        'iterm2': [
+          'osascript',
+          `-e 'tell application "iTerm2"'`,
+          `-e 'create window with default profile'`,
+          `-e 'tell current session of current window'`,
+          `-e 'write text "bash ${unixPath}"'`,
+          `-e 'end tell'`,
+          `-e 'end tell'`,
+        ].join(' '),
         'gnome-terminal': `gnome-terminal --title="${title}" -- bash "${unixPath}"`,
         'xterm': `xterm -T "${title}" -e "bash '${unixPath}'"`,
       };
@@ -381,7 +404,7 @@ async function openShellWithCommand(cmd: string, title: string): Promise<ShellRe
     });
   };
 
-  const result = await tryTerminalFallbacks(tryTerminal, ['wt', 'git-bash', 'cmd'], ['gnome-terminal', 'xterm']);
+  const result = await tryTerminalFallbacks(tryTerminal, ['wt', 'git-bash', 'cmd'], ['gnome-terminal', 'xterm'], ['iterm2', 'terminal-app']);
   if (!result.success) {
     try { unlinkSync(tmpFile); } catch {}
   }
