@@ -6,6 +6,25 @@ import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+// macOS/Linux: Electron doesn't inherit shell PATH — fix it before spawning child processes
+if (process.platform !== 'win32') {
+  const shellPaths = [
+    '/usr/local/bin', '/opt/homebrew/bin', '/opt/homebrew/sbin',
+    join(homedir(), '.local', 'bin'), join(homedir(), '.npm-global', 'bin'),
+    join(homedir(), '.nvm', 'versions', 'node'),
+  ];
+  const current = process.env.PATH || '';
+  const missing = shellPaths.filter(p => !current.includes(p) && existsSync(p));
+  if (missing.length) process.env.PATH = [...missing, current].join(':');
+
+  // Also try sourcing the real PATH from user's shell
+  try {
+    const { execSync } = await import('child_process');
+    const shellPath = execSync('bash -ilc "echo $PATH"', { encoding: 'utf-8', timeout: 3000 }).trim();
+    if (shellPath) process.env.PATH = shellPath;
+  } catch { /* fallback to static paths */ }
+}
+
 // Configure paths for desktop mode
 process.env.DASHBOARD_DIR = join(__dirname, 'dashboard');
 process.env.DESKTOP_MODE = 'true';

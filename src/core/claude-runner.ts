@@ -38,14 +38,21 @@ export async function runClaude(task: Task, prompt: string, options: RunOptions 
       timeout: config.claude.timeout,
     });
 
-    // Send prompt via stdin
+    let stdout = '';
+    let stderr = '';
+    let resolved = false;
+    const fail = (error: string) => {
+      if (resolved) return;
+      resolved = true;
+      resolve({ success: false, output: stdout, error });
+    };
+
+    // Handle stdin errors (EPIPE if process exits before write completes)
     if (proc.stdin) {
+      proc.stdin.on('error', (err) => fail(`stdin: ${err.message}`));
       proc.stdin.write(prompt);
       proc.stdin.end();
     }
-
-    let stdout = '';
-    let stderr = '';
 
     proc.stdout.on('data', (data) => {
       stdout += data.toString();
@@ -56,6 +63,8 @@ export async function runClaude(task: Task, prompt: string, options: RunOptions 
     });
 
     proc.on('close', (code) => {
+      if (resolved) return;
+      resolved = true;
       if (code === 0) {
         resolve({ success: true, output: stdout });
       } else {
@@ -63,9 +72,7 @@ export async function runClaude(task: Task, prompt: string, options: RunOptions 
       }
     });
 
-    proc.on('error', (err) => {
-      resolve({ success: false, output: '', error: err.message });
-    });
+    proc.on('error', (err) => fail(err.message));
   });
 }
 
@@ -102,14 +109,22 @@ export async function runClaudeStreaming(
       claudeEmitter.emit('pid', taskId, proc.pid);
     }
 
-    // Send prompt via stdin
+    let stdout = '';
+    let stderr = '';
+    let resolved = false;
+    const fail = (error: string) => {
+      if (resolved) return;
+      resolved = true;
+      runningProcesses.delete(taskId);
+      resolve({ success: false, output: stdout, error });
+    };
+
+    // Handle stdin errors (EPIPE if process exits before write completes)
     if (proc.stdin) {
+      proc.stdin.on('error', (err) => fail(`stdin: ${err.message}`));
       proc.stdin.write(prompt);
       proc.stdin.end();
     }
-
-    let stdout = '';
-    let stderr = '';
 
     proc.stdout.on('data', (data) => {
       const chunk = data.toString();
@@ -124,6 +139,8 @@ export async function runClaudeStreaming(
     });
 
     proc.on('close', (code) => {
+      if (resolved) return;
+      resolved = true;
       runningProcesses.delete(taskId);
       if (code === 0) {
         resolve({ success: true, output: stdout });
@@ -132,10 +149,7 @@ export async function runClaudeStreaming(
       }
     });
 
-    proc.on('error', (err) => {
-      runningProcesses.delete(taskId);
-      resolve({ success: false, output: '', error: err.message });
-    });
+    proc.on('error', (err) => fail(err.message));
   });
 }
 
