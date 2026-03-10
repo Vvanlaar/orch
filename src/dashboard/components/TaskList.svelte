@@ -27,17 +27,19 @@
 
 <div class="card tasks" class:collapsed={cardCollapsed}>
   <h2 onclick={toggleCard}>Orch Tasks</h2>
-  <div class="card-body">
-    <div class="card-list">
-      {#if tasks.length === 0}
-        <div class="empty">No tasks yet</div>
-      {:else}
-        {#each tasks as task (task.id)}
-          <TaskItem {task} />
-        {/each}
-      {/if}
+  {#if !cardCollapsed}
+    <div class="card-body">
+      <div class="card-list">
+        {#if tasks.length === 0}
+          <div class="empty">No tasks yet</div>
+        {:else}
+          {#each tasks as task (task.id)}
+            <TaskItem {task} />
+          {/each}
+        {/if}
+      </div>
     </div>
-  </div>
+  {/if}
 </div>
 
 <style>

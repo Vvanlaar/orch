@@ -144,8 +144,8 @@
     transform: rotate(-90deg);
   }
 
-  :global(.card.collapsed .card-body) {
-    display: none;
+  :global(.card.collapsed > h2) {
+    border-bottom: none;
   }
 
   :global(h2) {

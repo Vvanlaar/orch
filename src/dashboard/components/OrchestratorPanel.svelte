@@ -81,6 +81,7 @@
       </button>
     </span>
   </h2>
+  {#if !cardCollapsed}
   <div class="card-body">
   {#if state.dataSummary && (state.status === 'analyzing' || state.status === 'ready')}
     <div class="data-summary">
@@ -181,6 +182,7 @@
     {/if}
   {/if}
   </div>
+  {/if}
 </div>
 
 <style>

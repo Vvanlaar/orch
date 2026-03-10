@@ -118,6 +118,7 @@
 
 <div class="card" class:collapsed={cardCollapsed}>
   <h2 onclick={toggleCard}>Testing Assignment</h2>
+  {#if !cardCollapsed}
   <div class="card-body">
   <div class="sprint-header">
     <span>{sprintName}</span>
@@ -283,6 +284,7 @@
     </div>
   </div>
   </div>
+  {/if}
 </div>
 
 <style>

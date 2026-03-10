@@ -70,6 +70,7 @@
       <button class="action-btn kill-all" onclick={handleKillAll}>Kill All</button>
     </div>
   </h2>
+  {#if !cardCollapsed}
   <div class="card-body">
   <div class="card-list" style="max-height:300px;">
     {#if loading}
@@ -98,6 +99,7 @@
     {/if}
   </div>
   </div>
+  {/if}
 </div>
 
 <style>

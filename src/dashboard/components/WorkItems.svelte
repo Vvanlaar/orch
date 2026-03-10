@@ -311,6 +311,7 @@
 
 <div class="card" class:collapsed={cardCollapsed} style="margin-bottom: 20px;">
   <h2 onclick={toggleCard}>{isPRMode ? 'Pull Requests' : 'Work Items'}</h2>
+  {#if !cardCollapsed}
   <div class="card-body">
   <div class="filters" style="margin-bottom: 4px;">
     <button
@@ -637,6 +638,7 @@
     </div>
   {/if}
   </div>
+  {/if}
 </div>
 
 <style>
