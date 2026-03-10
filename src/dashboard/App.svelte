@@ -343,6 +343,16 @@
     color: #58a6ff;
   }
 
+  :global(.filter-btn.pr-accent.active) {
+    background: #22163c;
+    border-color: #553d87;
+    color: #a371f7;
+  }
+
+  :global(.filter-btn.pr-accent:hover) {
+    border-color: #a371f7;
+  }
+
   /* --- Progress --- */
   :global(progress) {
     appearance: none;

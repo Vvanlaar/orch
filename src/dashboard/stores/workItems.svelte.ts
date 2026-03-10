@@ -1,4 +1,4 @@
-import type { PR, WorkItem, FilterType, OwnerFilter } from '../lib/types';
+import type { PR, WorkItem, FilterType, OwnerFilter, WorkItemMode } from '../lib/types';
 import { readPreference, writePreference } from '../lib/preferences';
 
 // State
@@ -9,6 +9,7 @@ let resolvedWithComments = $state<WorkItem[]>([]);
 
 const FILTER_STORAGE_KEY = 'orch.dashboard.workitems.filter';
 const OWNER_FILTER_STORAGE_KEY = 'orch.dashboard.workitems.owner-filter';
+const MODE_STORAGE_KEY = 'orch.dashboard.workitems.mode';
 const FILTERS: readonly FilterType[] = ['all', 'new', 'active', 'resolved', 'reviewed', 'resolved-by-me'];
 const OWNER_FILTERS: readonly OwnerFilter[] = ['my', 'unassigned', 'all'];
 
@@ -20,7 +21,22 @@ function isOwnerFilter(value: unknown): value is OwnerFilter {
   return typeof value === 'string' && OWNER_FILTERS.includes(value as OwnerFilter);
 }
 
-let filter = $state<FilterType>(readPreference(FILTER_STORAGE_KEY, 'all', isFilterType));
+function isWorkItemMode(value: unknown): value is WorkItemMode {
+  return value === 'tickets' || value === 'prs';
+}
+
+// Migration: if old filter was 'prs', move to mode
+let _initFilter = readPreference(FILTER_STORAGE_KEY, 'all', (v): v is string => typeof v === 'string');
+let _initMode: WorkItemMode = readPreference(MODE_STORAGE_KEY, 'tickets', isWorkItemMode);
+if (_initFilter === 'prs') {
+  _initMode = 'prs';
+  _initFilter = 'all';
+  writePreference(FILTER_STORAGE_KEY, 'all');
+  writePreference(MODE_STORAGE_KEY, 'prs');
+}
+
+let mode = $state<WorkItemMode>(_initMode);
+let filter = $state<FilterType>(isFilterType(_initFilter) ? _initFilter : 'all');
 let ownerFilter = $state<OwnerFilter>(readPreference(OWNER_FILTER_STORAGE_KEY, 'my', isOwnerFilter));
 
 // Caches for action handlers
@@ -51,11 +67,9 @@ export function getFilteredItems() {
     (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
   );
 
-  const showPRs = filter !== 'resolved-by-me';
   return {
-    prs: showPRs ? prs : [],
-    workItems: filteredWorkItems,
-    filter,
+    prs: mode === 'prs' ? prs : [],
+    workItems: mode === 'prs' ? [] : filteredWorkItems,
   };
 }
 
@@ -66,6 +80,15 @@ export function setFilter(newFilter: FilterType) {
 
 export function getFilter() {
   return filter;
+}
+
+export function getMode() {
+  return mode;
+}
+
+export function setMode(newMode: WorkItemMode) {
+  mode = newMode;
+  writePreference(MODE_STORAGE_KEY, mode);
 }
 
 export function getPRFromCache(key: string): PR | undefined {
