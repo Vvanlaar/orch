@@ -1,5 +1,5 @@
 import { execFileSync, execSync } from 'child_process';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync } from 'fs';
 import path from 'path';
 import { config, WORKSPACES_DIR } from './config.js';
 import { createPull } from './github-api.js';
@@ -146,6 +146,39 @@ function initSubmodules(cwd: string): void {
   }
 }
 
+/** Link or install node_modules in a worktree.
+ *  Junction from sourceRepo when lockfiles match, else `npm ci --prefer-offline`. */
+function linkOrInstallNodeModules(worktreePath: string, sourceRepoPath: string): void {
+  const sourceModules = path.join(sourceRepoPath, 'node_modules');
+  const targetModules = path.join(worktreePath, 'node_modules');
+  if (!existsSync(sourceModules)) return; // source has no node_modules, skip
+
+  const sourceLock = path.join(sourceRepoPath, 'package-lock.json');
+  const targetLock = path.join(worktreePath, 'package-lock.json');
+  if (!existsSync(targetLock)) return; // no package-lock in worktree, skip
+
+  try {
+    const same = existsSync(sourceLock) &&
+      readFileSync(sourceLock, 'utf-8') === readFileSync(targetLock, 'utf-8');
+
+    if (same && !existsSync(targetModules)) {
+      // Junction (Windows) or symlink (Unix) — instant, zero disk cost
+      const isWin = process.platform === 'win32';
+      if (isWin) {
+        execSync(`cmd /c mklink /J "${targetModules}" "${sourceModules}"`, { stdio: 'pipe' });
+      } else {
+        execSync(`ln -s "${sourceModules}" "${targetModules}"`, { stdio: 'pipe' });
+      }
+      console.log(`[GitOps] Linked node_modules from ${sourceRepoPath}`);
+    } else if (!same) {
+      console.log(`[GitOps] Lockfile differs, running npm ci`);
+      execSync('npm ci --prefer-offline', { cwd: worktreePath, stdio: 'pipe', timeout: 120000 });
+    }
+  } catch (err) {
+    console.error('[GitOps] Failed to link/install node_modules:', err);
+  }
+}
+
 export function discardChanges(repoPath: string): void {
   try {
     execSync('git checkout -- .', { cwd: repoPath, stdio: 'pipe' });
@@ -185,6 +218,7 @@ export function createWorktree(repoPath: string, branchName: string, baseBranch?
     execSync('git fetch origin', { cwd: repoPath, stdio: 'pipe' });
     execSync(`git worktree add "${worktreePath}" -b "${branchName}" "origin/${base}"`, { cwd: repoPath, stdio: 'pipe' });
     initSubmodules(worktreePath);
+    linkOrInstallNodeModules(worktreePath, repoPath);
     return worktreePath;
   } catch (err) {
     console.error('[GitOps] Failed to create worktree:', err);
@@ -213,6 +247,7 @@ export function checkoutPRInWorktree(repoPath: string, prNumber: number, branch?
       } catch { /* branch may be from a fork — upstream not critical for checkout use */ }
     }
 
+    linkOrInstallNodeModules(worktreePath, repoPath);
     return worktreePath;
   } catch (err) {
     console.error('[GitOps] Failed to checkout PR in worktree:', err);
