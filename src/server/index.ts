@@ -657,10 +657,6 @@ let orgReposCache: { data: any; expiry: number } | null = null;
 const ORG_REPOS_TTL = 10 * 60 * 1000;
 
 app.get('/api/github/org-repos', async (req, res) => {
-  if (!config.github.token) {
-    res.status(400).json({ error: 'GITHUB_TOKEN not configured' });
-    return;
-  }
   const refresh = req.query.refresh === 'true';
   const now = Date.now();
   if (!refresh && orgReposCache && now < orgReposCache.expiry) {

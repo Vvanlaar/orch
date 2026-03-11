@@ -62,7 +62,11 @@ async function withFallback<T>(
   octokitFn: (octokit: Octokit) => Promise<T>,
   ghCliFn: () => T,
 ): Promise<T> {
-  if (preferGhCli) {
+  if (preferGhCli || !config.github.token) {
+    if (!checkGhCliAvailable()) {
+      throw new Error('No GitHub credentials: set GITHUB_TOKEN or authenticate gh CLI');
+    }
+    if (!preferGhCli) preferGhCli = true;
     return ghCliFn();
   }
 
