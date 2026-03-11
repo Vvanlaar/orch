@@ -200,16 +200,19 @@ export function checkoutPRInWorktree(repoPath: string, prNumber: number, branch?
     // Reuse existing worktree
     if (existsSync(path.join(worktreePath, '.git'))) return worktreePath;
 
-    execFileSync('git', ['fetch', 'origin'], { cwd: repoPath, stdio: 'pipe' });
-
-    if (!branch) {
-      branch = execFileSync('gh', ['pr', 'view', String(prNumber), '--json', 'headRefName', '-q', '.headRefName'], {
-        cwd: repoPath, encoding: 'utf-8',
-      }).trim();
-    }
+    // Fetch the PR head ref (handles fork branches that aren't on origin)
+    execFileSync('git', ['fetch', 'origin', `pull/${prNumber}/head:pr-${prNumber}`], { cwd: repoPath, stdio: 'pipe' });
 
     mkdirSync(path.dirname(worktreePath), { recursive: true });
-    execFileSync('git', ['worktree', 'add', worktreePath, '-B', branch, `origin/${branch}`], { cwd: repoPath, stdio: 'pipe' });
+    execFileSync('git', ['worktree', 'add', worktreePath, `pr-${prNumber}`], { cwd: repoPath, stdio: 'pipe' });
+
+    // Set upstream so pushes target the correct remote branch
+    if (branch) {
+      try {
+        execFileSync('git', ['branch', '--set-upstream-to', `origin/${branch}`, `pr-${prNumber}`], { cwd: repoPath, stdio: 'pipe' });
+      } catch { /* branch may be from a fork — upstream not critical for checkout use */ }
+    }
+
     return worktreePath;
   } catch (err) {
     console.error('[GitOps] Failed to checkout PR in worktree:', err);

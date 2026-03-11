@@ -215,8 +215,12 @@ async function processPrCommentFix(task: Task): Promise<void> {
         throw new Error('Failed to commit changes');
       }
 
-      if (!pushBranch(worktreePath, targetBranch)) {
-        throw new Error('Failed to push changes');
+      // Push HEAD to the remote PR branch (local branch is pr-N, not targetBranch)
+      const { execSync } = await import('child_process');
+      try {
+        execSync(`git push origin HEAD:${targetBranch}`, { cwd: worktreePath, stdio: 'pipe' });
+      } catch (pushErr) {
+        throw new Error(`Failed to push changes: ${pushErr}`);
       }
     }
 
