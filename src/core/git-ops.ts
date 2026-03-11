@@ -247,6 +247,7 @@ export function checkoutPRInWorktree(repoPath: string, prNumber: number, branch?
       } catch { /* branch may be from a fork — upstream not critical for checkout use */ }
     }
 
+    initSubmodules(worktreePath);
     linkOrInstallNodeModules(worktreePath, repoPath);
     return worktreePath;
   } catch (err) {
