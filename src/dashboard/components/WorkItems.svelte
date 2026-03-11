@@ -103,12 +103,28 @@
     }
   }
 
+  function parseGithubPrUrl(url: string): { repo: string; prNumber: number } | null {
+    const m = url.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
+    return m ? { repo: m[1], prNumber: Number(m[2]) } : null;
+  }
+
   async function handleCheckoutWorktree(key: string) {
     const pr = getPRFromCache(key);
     if (!pr) return showToast('PR not found', 'warning');
     try {
       await checkoutPRWorktree(pr);
       showToast(`Worktree opened for PR #${pr.number}`, 'success');
+    } catch (err: any) {
+      showToast('Worktree checkout failed: ' + err.message, 'error');
+    }
+  }
+
+  async function handleCheckoutWorktreeFromUrl(url: string) {
+    const parsed = parseGithubPrUrl(url);
+    if (!parsed) return showToast('Could not parse PR URL', 'warning');
+    try {
+      await checkoutPRWorktree({ repo: parsed.repo, number: parsed.prNumber } as any);
+      showToast(`Worktree opened for PR #${parsed.prNumber}`, 'success');
     } catch (err: any) {
       showToast('Worktree checkout failed: ' + err.message, 'error');
     }
@@ -480,6 +496,7 @@
                 Notes{#if hasNote(wi.id)}<span class="note-dot"></span>{/if}
               </button>
               {#if wi.githubPrUrl}
+                <button class="action-btn secondary" title="Checkout PR in worktree" onclick={() => handleCheckoutWorktreeFromUrl(wi.githubPrUrl!)}>WT</button>
                 <a href={wi.githubPrUrl} target="_blank" class="action-btn secondary">PR</a>
               {/if}
             </div>
@@ -640,6 +657,7 @@
                             </button>
                           {/if}
                           {#if wi.githubPrUrl}
+                            <button class="action-btn secondary" title="Checkout PR in worktree" onclick={() => handleCheckoutWorktreeFromUrl(wi.githubPrUrl!)}>WT</button>
                             <a href={wi.githubPrUrl} target="_blank" class="action-btn secondary">PR</a>
                           {/if}
                           <button class="action-btn secondary notes-btn" class:has-note={hasNote(wi.id)} title="Toggle notes" onclick={() => toggleNotes(wi.id)}>
