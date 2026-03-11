@@ -10,6 +10,7 @@ export interface PR {
   branch?: string;
   baseBranch?: string;
   commentCount?: number;
+  mergeable?: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
   adoTicketId?: number;
   adoTicketUrl?: string;
 }

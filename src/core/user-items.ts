@@ -13,6 +13,7 @@ export interface GitHubPR {
   updatedAt: string;
   role: 'author' | 'reviewer' | 'mentioned';
   commentCount?: number;
+  mergeable?: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
   adoTicketId?: number;
   adoTicketUrl?: string;
 }
@@ -83,6 +84,37 @@ async function searchGitHubPRs(query: string): Promise<any[]> {
   return searchIssues(query);
 }
 
+async function enrichMergeStatus(prs: GitHubPR[]): Promise<void> {
+  if (prs.length === 0) return;
+
+  // Group PRs by repo for batched GraphQL queries
+  const byRepo = new Map<string, GitHubPR[]>();
+  for (const pr of prs) {
+    const list = byRepo.get(pr.repo);
+    if (list) list.push(pr);
+    else byRepo.set(pr.repo, [pr]);
+  }
+
+  await Promise.all([...byRepo.entries()].map(async ([repo, repoPrs]) => {
+    const [owner, name] = repo.split('/');
+    const prFields = repoPrs.map((pr, i) => `pr${i}: pullRequest(number: ${pr.number}) { mergeable }`).join('\n');
+
+    try {
+      const result = await graphql<{ repository: Record<string, { mergeable: string }> }>(
+        `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ${prFields} } }`,
+        { owner, name },
+      );
+      for (let i = 0; i < repoPrs.length; i++) {
+        const status = result.repository[`pr${i}`]?.mergeable;
+        if (status) repoPrs[i].mergeable = status as GitHubPR['mergeable'];
+      }
+    } catch (err: any) {
+      const is404 = err?.status === 404 || err?.errors?.[0]?.type === 'NOT_FOUND';
+      if (!is404) console.error(`[UserItems] Error fetching merge status for ${repo}:`, err);
+    }
+  }));
+}
+
 // Cache for getMyGitHubPRs (5min TTL)
 let myPRsCache: { items: GitHubPR[]; expiry: number } | null = null;
 const MY_PRS_TTL = 5 * 60 * 1000;
@@ -117,6 +149,10 @@ export async function getMyGitHubPRs(refresh = false): Promise<GitHubPR[]> {
     }
 
     prs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+
+    // Batch-fetch merge status via GraphQL
+    await enrichMergeStatus(prs);
+
     myPRsCache = { items: prs, expiry: Date.now() + MY_PRS_TTL };
     console.log(`[UserItems] Found ${prs.length} GitHub PRs`);
     return prs;

@@ -36,7 +36,7 @@
 
   type ViewMode = 'list' | 'kanban';
   type KanbanColumnKey = 'todo' | 'inprogress' | 'resolved' | 'pr-comments' | 'reviewed' | 'other';
-  type PRKanbanColumnKey = 'draft' | 'needs-review' | 'open' | 'has-comments';
+  type PRKanbanColumnKey = 'draft' | 'needs-review' | 'merge-conflicts' | 'open' | 'has-comments';
 
   const viewModes: { key: ViewMode; label: string }[] = [
     { key: 'list', label: 'List' },
@@ -55,8 +55,9 @@
   const prKanbanColumns: { key: PRKanbanColumnKey; label: string }[] = [
     { key: 'draft', label: 'Draft' },
     { key: 'needs-review', label: 'Needs Your Review' },
-    { key: 'open', label: 'Open' },
+    { key: 'merge-conflicts', label: 'Merge Conflicts' },
     { key: 'has-comments', label: 'Has Comments' },
+    { key: 'open', label: 'Open' },
   ];
 
   let rawItems = $derived(getFilteredItems());
@@ -242,6 +243,7 @@
   function getPRKanbanColumn(pr: PR): PRKanbanColumnKey {
     if (pr.draft) return 'draft';
     if (pr.role === 'reviewer') return 'needs-review';
+    if (pr.mergeable === 'CONFLICTING') return 'merge-conflicts';
     if (pr.commentCount) return 'has-comments';
     return 'open';
   }
