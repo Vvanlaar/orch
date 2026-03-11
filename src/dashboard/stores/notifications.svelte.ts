@@ -58,7 +58,10 @@ export async function fetchNotifications() {
   try {
     const res = await fetch('/api/notifications');
     if (!res.ok) return;
-    const data: Notification[] = await res.json();
+    const raw: Notification[] = await res.json();
+    // Deduplicate API response by id
+    const seen = new Set<string>();
+    const data = raw.filter(n => { if (seen.has(n.id)) return false; seen.add(n.id); return true; });
     const ids = new Set(data.map(n => n.id));
     const wsOnly = notifications.filter(n => !ids.has(n.id));
     notifications = [...wsOnly, ...data];

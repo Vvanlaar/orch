@@ -108,7 +108,14 @@ export async function fetchReviewedItems() {
 export async function fetchTeamMembers() {
   try {
     const res = await fetch('/api/team/members');
-    teamMembers = await res.json();
+    const raw = await res.json();
+    // Deduplicate by email to prevent Svelte each_key_duplicate
+    const seen = new Set<string>();
+    teamMembers = raw.filter((m: typeof teamMembers[0]) => {
+      if (seen.has(m.email)) return false;
+      seen.add(m.email);
+      return true;
+    });
     const validEmails = new Set(teamMembers.map((member) => member.email));
     const prunedSelection = new Set(
       Array.from(selectedTeamMembers).filter((email) => validEmails.has(email))

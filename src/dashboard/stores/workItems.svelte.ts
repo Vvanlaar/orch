@@ -103,8 +103,15 @@ export async function fetchPRs(refresh = false) {
   try {
     const url = refresh ? '/api/my/prs?refresh=true' : '/api/my/prs';
     const res = await fetch(url);
-    prs = await res.json();
-    // Update cache
+    const data: PR[] = await res.json();
+    // Deduplicate by repo#number to prevent Svelte each_key_duplicate
+    const seen = new Set<string>();
+    prs = data.filter((pr) => {
+      const key = `${pr.repo}#${pr.number}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
     prs.forEach((pr) => prCache.set(`${pr.repo}#${pr.number}`, pr));
   } catch (err) {
     console.error('Failed to fetch PRs:', err);
@@ -122,11 +129,19 @@ export async function setOwnerFilter(f: OwnerFilter) {
   await fetchWorkItems();
 }
 
+function deduplicateWorkItems(items: WorkItem[]): WorkItem[] {
+  const seen = new Set<number>();
+  return items.filter((wi) => {
+    if (seen.has(wi.id)) return false;
+    seen.add(wi.id);
+    return true;
+  });
+}
+
 export async function fetchWorkItems() {
   try {
     const res = await fetch(`/api/workitems?owner=${ownerFilter}`);
-    workItems = await res.json();
-    // Update cache
+    workItems = deduplicateWorkItems(await res.json());
     workItems.forEach((wi) => workItemCache.set(wi.id, wi));
   } catch (err) {
     console.error('Failed to fetch work items:', err);
@@ -137,8 +152,7 @@ export async function fetchWorkItems() {
 export async function fetchResolvedByMe() {
   try {
     const res = await fetch('/api/my/resolved-workitems');
-    resolvedByMe = await res.json();
-    // Update cache
+    resolvedByMe = deduplicateWorkItems(await res.json());
     resolvedByMe.forEach((wi) => workItemCache.set(wi.id, wi));
   } catch (err) {
     console.error('Failed to fetch resolved-by-me items:', err);
@@ -154,7 +168,7 @@ export async function fetchResolvedWithComments(refresh = false) {
   try {
     const url = refresh ? '/api/my/resolved-with-comments?refresh=true' : '/api/my/resolved-with-comments';
     const res = await fetch(url);
-    resolvedWithComments = await res.json();
+    resolvedWithComments = deduplicateWorkItems(await res.json());
     resolvedWithComments.forEach((wi) => workItemCache.set(wi.id, wi));
   } catch (err) {
     console.error('Failed to fetch resolved-with-comments:', err);
