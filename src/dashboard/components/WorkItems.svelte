@@ -111,31 +111,36 @@
     collapsedGroups = new Set(collapsedGroups);
   }
 
-  let groupedWorkItems = $derived.by((): ParentGroup[] => {
+  function parentUrl(wi: WorkItem): string | null {
+    return wi.parentId
+      ? `https://dev.azure.com/${wi.project}/_workitems/edit/${wi.parentId}`
+      : null;
+  }
+
+  function groupItemsByParent(workItems: WorkItem[]): ParentGroup[] {
     const groups = new Map<string, ParentGroup>();
-    for (const wi of items.workItems) {
+    for (const wi of workItems) {
       const key = wi.parentId ? String(wi.parentId) : NO_PARENT_KEY;
       let group = groups.get(key);
       if (!group) {
         group = {
           parentId: wi.parentId ?? null,
           parentTitle: wi.parentTitle || 'No Parent',
-          parentUrl: wi.parentId
-            ? `https://dev.azure.com/${wi.project}/_workitems/edit/${wi.parentId}`
-            : null,
+          parentUrl: parentUrl(wi),
           items: [],
         };
         groups.set(key, group);
       }
       group.items.push(wi);
     }
-    // Sort: groups with parent first (by parentTitle), "No Parent" last
     return [...groups.values()].sort((a, b) => {
       if (!a.parentId && b.parentId) return 1;
       if (a.parentId && !b.parentId) return -1;
       return a.parentTitle.localeCompare(b.parentTitle);
     });
-  });
+  }
+
+  let groupedWorkItems = $derived(groupItemsByParent(items.workItems));
 
   async function handleReviewPR(key: string) {
     const pr = getPRFromCache(key);
@@ -433,7 +438,7 @@
   {/if}
   <div class="board-controls">
     <div class="view-note">
-      {#if !isPRMode && viewMode === 'list'}
+      {#if !isPRMode}
         <button
           class="group-toggle"
           class:active={groupByParent}
@@ -541,7 +546,7 @@
                   <span class="badge" style="background:#3fb95020;color:#3fb950;">PR</span>
                 {/if}
                 {#if showParentBadge && wi.parentId && wi.parentTitle}
-                  <a href="https://dev.azure.com/{wi.project}/_workitems/edit/{wi.parentId}" target="_blank" class="badge badge-link" style="background:#8b949e15;color:#8b949e;">↑ {wi.parentTitle}</a>
+                  <a href={parentUrl(wi)} target="_blank" class="badge badge-link" style="background:#8b949e15;color:#8b949e;">↑ {wi.parentTitle}</a>
                 {/if}
               </div>
             </div>
@@ -683,6 +688,80 @@
         {#if items.workItems.length === 0}
           <div class="empty">No items match filter</div>
         {:else}
+          {#snippet kanbanCard(wi: WorkItem)}
+            {@const hasPr = !!(wi.githubPrUrl || wi.resolution?.includes('github.com'))}
+            <div class="kanban-card" style="border-left-color: {typeBorderColor(wi.type)};">
+              <div class="kanban-card-top">
+                <a href={wi.url} target="_blank" class="ticket-link">#{wi.id} · {wi.project}</a>
+                <span>{formatTime(wi.updatedAt)}</span>
+              </div>
+              <div class="kanban-title">{wi.title}</div>
+              <div class="kanban-badges">
+                <span class="badge type {typeClass(wi.type)}">{wi.type}</span>
+                <span class="badge state {stateClass(wi.state)}">{wi.state}</span>
+                {#if wi.commentCount}
+                  <span class="badge" style="background:#f0883e20;color:#f0883e;">{wi.commentCount} cmts</span>
+                {/if}
+                {#if currentOwner !== 'my' && wi.assignedTo}
+                  <span class="badge" style="background:#8b949e20;color:#8b949e;">{wi.assignedTo}</span>
+                {/if}
+                {#if wi.resolvedBy && currentOwner !== 'resolved-by-me'}
+                  <span class="badge" style="background:#a371f720;color:#a371f7;">Resolved: {wi.resolvedBy}</span>
+                {/if}
+                {#if hasPr}
+                  <span class="badge" style="background:#3fb95020;color:#3fb950;">PR</span>
+                {/if}
+                {#if wi.parentId && wi.parentTitle}
+                  <a href={parentUrl(wi)} target="_blank" class="badge badge-link" style="background:#8b949e15;color:#8b949e;">↑ {wi.parentTitle}</a>
+                {/if}
+              </div>
+              {#if wi.repositories?.length}
+                <div class="kanban-repos">
+                  {#each wi.repositories as repo}
+                    <span class="badge" style="background:#da3b0120;color:#da3b01;">{repo}</span>
+                  {/each}
+                </div>
+              {/if}
+              <div class="kanban-actions">
+                <div class="kanban-action-primary">
+                  {#if isResolvedWithPR(wi)}
+                    <button class="action-btn" onclick={() => handleReviewResolution(wi.id)}>Review PR</button>
+                  {:else if isResolvedOrReviewed(wi)}
+                    <button class="action-btn" onclick={() => handleReviewResolution(wi.id)}>Review Resolution</button>
+                  {:else}
+                    <button class="action-btn" onclick={() => handleAnalyzeWorkItem(wi.id)}>
+                      {wi.type.toLowerCase().includes('bug') ? 'Fix Bug' : 'Implement'}
+                    </button>
+                  {/if}
+                </div>
+                <div class="kanban-action-toolbar">
+                  <button class="action-btn secondary" title="Investigate with Claude" onclick={() => handleInvestigate(wi)}>Inv</button>
+                  {#if wi.repositories?.length}
+                    <button class="action-btn secondary" title="Open terminal" onclick={() => handleOpenTerminal(wi.repositories![0], wi.id)}>
+                      &lt;/&gt;
+                    </button>
+                  {/if}
+                  {#if wi.githubPrUrl}
+                    <button class="action-btn secondary" title="Checkout PR in worktree" onclick={() => handleCheckoutWorktreeFromUrl(wi.githubPrUrl!)}>WT</button>
+                    <a href={wi.githubPrUrl} target="_blank" class="action-btn secondary">PR</a>
+                  {/if}
+                  <button class="action-btn secondary notes-btn" class:has-note={hasNote(wi.id)} title="Toggle notes" onclick={() => toggleNotes(wi.id)}>
+                    Notes{#if hasNote(wi.id)}<span class="note-dot"></span>{/if}
+                  </button>
+                </div>
+              </div>
+              {#if expandedNotes.has(wi.id)}
+                <div class="note-area">
+                  <textarea
+                    class="note-textarea"
+                    placeholder="Add notes..."
+                    value={noteTexts.get(wi.id) || ''}
+                    oninput={(e) => updateNote(wi.id, (e.target as HTMLTextAreaElement).value)}
+                  ></textarea>
+                </div>
+              {/if}
+            </div>
+          {/snippet}
           <div class="kanban-board" style="grid-template-columns: {kanbanColumns.map(c => isColumnCollapsed(c.key) ? '36px' : 'minmax(200px, 1fr)').join(' ')};">
             {#each kanbanColumns as column}
               {@const columnItems = getKanbanItems(column.key)}
@@ -701,80 +780,31 @@
                   {#if columnItems.length === 0}
                     <div class="kanban-empty">No items</div>
                   {/if}
-                  {#each columnItems as wi (wi.id)}
-                    {@const hasPr = !!(wi.githubPrUrl || wi.resolution?.includes('github.com'))}
-                    <div class="kanban-card" style="border-left-color: {typeBorderColor(wi.type)};">
-                      <div class="kanban-card-top">
-                        <a href={wi.url} target="_blank" class="ticket-link">#{wi.id} · {wi.project}</a>
-                        <span>{formatTime(wi.updatedAt)}</span>
-                      </div>
-                      <div class="kanban-title">{wi.title}</div>
-                      <div class="kanban-badges">
-                        <span class="badge type {typeClass(wi.type)}">{wi.type}</span>
-                        <span class="badge state {stateClass(wi.state)}">{wi.state}</span>
-                        {#if wi.commentCount}
-                          <span class="badge" style="background:#f0883e20;color:#f0883e;">{wi.commentCount} cmts</span>
-                        {/if}
-                        {#if currentOwner !== 'my' && wi.assignedTo}
-                          <span class="badge" style="background:#8b949e20;color:#8b949e;">{wi.assignedTo}</span>
-                        {/if}
-                        {#if wi.resolvedBy && currentOwner !== 'resolved-by-me'}
-                          <span class="badge" style="background:#a371f720;color:#a371f7;">Resolved: {wi.resolvedBy}</span>
-                        {/if}
-                        {#if hasPr}
-                          <span class="badge" style="background:#3fb95020;color:#3fb950;">PR</span>
-                        {/if}
-                        {#if wi.parentId && wi.parentTitle}
-                          <a href="https://dev.azure.com/{wi.project}/_workitems/edit/{wi.parentId}" target="_blank" class="badge badge-link" style="background:#8b949e15;color:#8b949e;">↑ {wi.parentTitle}</a>
-                        {/if}
-                      </div>
-                      {#if wi.repositories?.length}
-                        <div class="kanban-repos">
-                          {#each wi.repositories as repo}
-                            <span class="badge" style="background:#da3b0120;color:#da3b01;">{repo}</span>
+                  {#if groupByParent}
+                    {#each groupItemsByParent(columnItems) as group (group.parentId ?? NO_PARENT_KEY)}
+                      {@const groupKey = `kanban-${column.key}-${group.parentId ?? NO_PARENT_KEY}`}
+                      {@const isCollapsed = collapsedGroups.has(groupKey)}
+                      <div class="kanban-parent-group">
+                        <button class="kanban-parent-header" onclick={() => toggleGroup(groupKey)}>
+                          <span class="parent-group-chevron">{isCollapsed ? '▸' : '▾'}</span>
+                          {#if group.parentUrl}
+                            <a href={group.parentUrl} target="_blank" class="parent-group-link" onclick={(e) => e.stopPropagation()}>#{group.parentId}</a>
+                          {/if}
+                          <span class="kanban-parent-title">{group.parentTitle}</span>
+                          <span class="badge">{group.items.length}</span>
+                        </button>
+                        {#if !isCollapsed}
+                          {#each group.items as wi (wi.id)}
+                            {@render kanbanCard(wi)}
                           {/each}
-                        </div>
-                      {/if}
-                      <div class="kanban-actions">
-                        <div class="kanban-action-primary">
-                          {#if isResolvedWithPR(wi)}
-                            <button class="action-btn" onclick={() => handleReviewResolution(wi.id)}>Review PR</button>
-                          {:else if isResolvedOrReviewed(wi)}
-                            <button class="action-btn" onclick={() => handleReviewResolution(wi.id)}>Review Resolution</button>
-                          {:else}
-                            <button class="action-btn" onclick={() => handleAnalyzeWorkItem(wi.id)}>
-                              {wi.type.toLowerCase().includes('bug') ? 'Fix Bug' : 'Implement'}
-                            </button>
-                          {/if}
-                        </div>
-                        <div class="kanban-action-toolbar">
-                          <button class="action-btn secondary" title="Investigate with Claude" onclick={() => handleInvestigate(wi)}>Inv</button>
-                          {#if wi.repositories?.length}
-                            <button class="action-btn secondary" title="Open terminal" onclick={() => handleOpenTerminal(wi.repositories![0], wi.id)}>
-                              &lt;/&gt;
-                            </button>
-                          {/if}
-                          {#if wi.githubPrUrl}
-                            <button class="action-btn secondary" title="Checkout PR in worktree" onclick={() => handleCheckoutWorktreeFromUrl(wi.githubPrUrl!)}>WT</button>
-                            <a href={wi.githubPrUrl} target="_blank" class="action-btn secondary">PR</a>
-                          {/if}
-                          <button class="action-btn secondary notes-btn" class:has-note={hasNote(wi.id)} title="Toggle notes" onclick={() => toggleNotes(wi.id)}>
-                            Notes{#if hasNote(wi.id)}<span class="note-dot"></span>{/if}
-                          </button>
-                        </div>
+                        {/if}
                       </div>
-                      {#if expandedNotes.has(wi.id)}
-                        <div class="note-area">
-                          <textarea
-                            class="note-textarea"
-                            placeholder="Add notes..."
-                            value={noteTexts.get(wi.id) || ''}
-                            oninput={(e) => updateNote(wi.id, (e.target as HTMLTextAreaElement).value)}
-                          ></textarea>
-                        </div>
-                      {/if}
-                    </div>
-                  {/each}
+                    {/each}
+                  {:else}
+                    {#each columnItems as wi (wi.id)}
+                      {@render kanbanCard(wi)}
+                    {/each}
+                  {/if}
                 </div>
               </div>
             {/each}
@@ -1223,6 +1253,40 @@
   }
 
   .parent-group-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .kanban-parent-group {
+    margin-bottom: 4px;
+  }
+
+  .kanban-parent-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 6px 8px;
+    background: #0d1117;
+    border: none;
+    border-radius: 6px;
+    color: #8b949e;
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    margin-bottom: 4px;
+    transition: background 0.1s;
+  }
+
+  .kanban-parent-header:hover {
+    background: #161b22;
+    color: #c9d1d9;
+  }
+
+  .kanban-parent-title {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
