@@ -216,6 +216,12 @@ export function createWorktree(repoPath: string, branchName: string, baseBranch?
     const worktreePath = getWorktreePath(repoPath, branchName);
     const base = baseBranch || getDefaultBranch(repoPath);
     execSync('git fetch origin', { cwd: repoPath, stdio: 'pipe' });
+
+    // Enable long paths on Windows to avoid "Filename too long" errors
+    if (process.platform === 'win32') {
+      try { execSync('git config core.longpaths true', { cwd: repoPath, stdio: 'pipe' }); } catch { /* ignore */ }
+    }
+
     execSync(`git worktree add "${worktreePath}" -b "${branchName}" "origin/${base}"`, { cwd: repoPath, stdio: 'pipe' });
     initSubmodules(worktreePath);
     linkOrInstallNodeModules(worktreePath, repoPath);
@@ -236,6 +242,11 @@ export function checkoutPRInWorktree(repoPath: string, prNumber: number, branch?
 
     // Fetch the PR head ref (handles fork branches that aren't on origin)
     execFileSync('git', ['fetch', 'origin', `pull/${prNumber}/head:pr-${prNumber}`], { cwd: repoPath, stdio: 'pipe' });
+
+    // Enable long paths on Windows to avoid "Filename too long" errors
+    if (process.platform === 'win32') {
+      try { execFileSync('git', ['config', 'core.longpaths', 'true'], { cwd: repoPath, stdio: 'pipe' }); } catch { /* ignore */ }
+    }
 
     mkdirSync(path.dirname(worktreePath), { recursive: true });
     execFileSync('git', ['worktree', 'add', worktreePath, `pr-${prNumber}`], { cwd: repoPath, stdio: 'pipe' });
@@ -271,7 +282,7 @@ export function cloneRepo(cloneUrl: string, targetName: string): string | null {
   try {
     mkdirSync(clonesDir, { recursive: true });
     // Use execFileSync to avoid command injection
-    execFileSync('git', ['clone', '--recurse-submodules', cloneUrl, targetPath], {
+    execFileSync('git', ['clone', '-c', 'core.longpaths=true', '--recurse-submodules', cloneUrl, targetPath], {
       timeout: 120000,
       stdio: 'pipe',
     });
