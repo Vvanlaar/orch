@@ -11,7 +11,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 
 import { killTask } from '../core/claude-runner.js';
 import { config, WORKSPACES_DIR } from '../core/config.js';
-import { cloneRepo } from '../core/git-ops.js';
+import { cloneRepo, checkoutPRInWorktree } from '../core/git-ops.js';
 import {
   detectAvailableTerminals,
   findTerminalPath,
@@ -1063,6 +1063,24 @@ app.post('/api/actions/review-pr', (req, res) => {
   triggerUpdate();
   broadcastTasks();
   res.json({ taskId: task.id, message: 'PR review task created' });
+});
+
+app.post('/api/actions/checkout-pr-worktree', async (req, res) => {
+  const { repo, branch } = req.body as { repo: string; prNumber: number; branch?: string };
+  const prNumber = Number(req.body.prNumber);
+  if (!repo || !prNumber || prNumber < 1 || !Number.isInteger(prNumber)) {
+    res.status(400).json({ error: 'repo and valid prNumber are required' }); return;
+  }
+  try {
+    const resolved = resolveRepoPath(repo) ?? autoClone(repo, 'github');
+    if (!resolved) { res.status(400).json({ error: `No local mapping for repo: ${repo}` }); return; }
+
+    const worktreePath = checkoutPRInWorktree(resolved.repoPath, prNumber, branch);
+    if (!worktreePath) { res.status(500).json({ error: 'Failed to create worktree' }); return; }
+    sendShellResult(res, await openShellAtPath(worktreePath, `PR #${prNumber}`));
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
 });
 
 app.post('/api/actions/analyze-workitem', (req, res) => {

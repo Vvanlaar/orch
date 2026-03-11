@@ -36,6 +36,18 @@ export async function fixPRComments(pr: PR): Promise<{ taskId: number; message: 
   return result;
 }
 
+export async function checkoutPRWorktree(pr: PR): Promise<void> {
+  const res = await fetch('/api/actions/checkout-pr-worktree', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ repo: pr.repo, prNumber: pr.number, branch: pr.branch }),
+  });
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error || 'Failed to checkout PR worktree');
+  }
+}
+
 export async function analyzeWorkItem(wi: WorkItem): Promise<{ taskId: number; message: string }> {
   const res = await fetch('/api/actions/analyze-workitem', {
     method: 'POST',

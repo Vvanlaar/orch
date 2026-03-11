@@ -3,7 +3,7 @@
   import { readPreference, writePreference } from '../lib/preferences';
   import type { PR, WorkItem, FilterType, OwnerFilter } from '../lib/types';
   import { formatTime, stateClass, typeClass, extractAdoTicket } from '../lib/utils';
-  import { reviewPR, fixPRComments, analyzeWorkItem, reviewResolution, openTerminalForRepo, openTerminalWithCommand } from '../lib/api';
+  import { reviewPR, fixPRComments, analyzeWorkItem, reviewResolution, openTerminalForRepo, openTerminalWithCommand, checkoutPRWorktree } from '../lib/api';
   import { showToast } from '../stores/toast.svelte';
   import {
     getFilteredItems,
@@ -100,6 +100,17 @@
       showToast(`Task #${result.taskId} created: ${result.message}`, 'success');
     } catch (err: any) {
       showToast('Failed to create task: ' + err.message, 'error');
+    }
+  }
+
+  async function handleCheckoutWorktree(key: string) {
+    const pr = getPRFromCache(key);
+    if (!pr) return showToast('PR not found', 'warning');
+    try {
+      await checkoutPRWorktree(pr);
+      showToast(`Worktree opened for PR #${pr.number}`, 'success');
+    } catch (err: any) {
+      showToast('Worktree checkout failed: ' + err.message, 'error');
     }
   }
 
@@ -408,6 +419,9 @@
                 </button>
               {/if}
               <button class="action-btn" onclick={() => handleReviewPR(key)}>Review</button>
+              <button class="action-btn secondary" title="Checkout PR in worktree" onclick={() => handleCheckoutWorktree(key)}>
+                WT
+              </button>
               <button class="action-btn secondary" title="Open workspace terminal" onclick={() => handleOpenTerminal(pr.repo.split('/')[1])}>
                 &lt;/&gt;
               </button>
@@ -538,6 +552,9 @@
                           {#if pr.role === 'author'}
                             <button class="action-btn secondary" onclick={() => handleReviewPR(key)}>Review</button>
                           {/if}
+                          <button class="action-btn secondary" title="Checkout PR in worktree" onclick={() => handleCheckoutWorktree(key)}>
+                            WT
+                          </button>
                           <button class="action-btn secondary" title="Open terminal" onclick={() => handleOpenTerminal(pr.repo.split('/')[1])}>
                             &lt;/&gt;
                           </button>

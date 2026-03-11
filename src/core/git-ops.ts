@@ -1,5 +1,5 @@
 import { execFileSync, execSync } from 'child_process';
-import { mkdirSync } from 'fs';
+import { existsSync, mkdirSync } from 'fs';
 import path from 'path';
 import { config, WORKSPACES_DIR } from './config.js';
 import { createPull } from './github-api.js';
@@ -188,6 +188,31 @@ export function createWorktree(repoPath: string, branchName: string, baseBranch?
     return worktreePath;
   } catch (err) {
     console.error('[GitOps] Failed to create worktree:', err);
+    return null;
+  }
+}
+
+export function checkoutPRInWorktree(repoPath: string, prNumber: number, branch?: string): string | null {
+  try {
+    const repoName = path.basename(repoPath);
+    const worktreePath = path.join(WORKSPACES_DIR, 'worktrees', repoName, `pr-${prNumber}`);
+
+    // Reuse existing worktree
+    if (existsSync(path.join(worktreePath, '.git'))) return worktreePath;
+
+    execFileSync('git', ['fetch', 'origin'], { cwd: repoPath, stdio: 'pipe' });
+
+    if (!branch) {
+      branch = execFileSync('gh', ['pr', 'view', String(prNumber), '--json', 'headRefName', '-q', '.headRefName'], {
+        cwd: repoPath, encoding: 'utf-8',
+      }).trim();
+    }
+
+    mkdirSync(path.dirname(worktreePath), { recursive: true });
+    execFileSync('git', ['worktree', 'add', worktreePath, `origin/${branch}`], { cwd: repoPath, stdio: 'pipe' });
+    return worktreePath;
+  } catch (err) {
+    console.error('[GitOps] Failed to checkout PR in worktree:', err);
     return null;
   }
 }
