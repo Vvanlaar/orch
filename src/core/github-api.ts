@@ -2,9 +2,12 @@ import { execFileSync } from 'child_process';
 import { Octokit } from 'octokit';
 import { config } from './config.js';
 
-// Sticky preference: once gh CLI works, keep using it
-let preferGhCli = false;
-// Lazy one-time check for gh CLI availability
+type Method = 'pat' | 'gh';
+
+/** Per-operation memory of which method works */
+const methodPrefs = new Map<string, Method>();
+
+/** Lazy one-time check for gh CLI availability */
 let ghCliAvailable: boolean | null = null;
 
 function isPermissionError(err: any): boolean {
@@ -12,6 +15,11 @@ function isPermissionError(err: any): boolean {
   if (status === 401 || status === 403) return true;
   const msg = String(err?.message || err?.response?.data?.message || '');
   return msg.includes('Resource not accessible by integration') || msg.includes('insufficient');
+}
+
+function isGhCliError(err: any): boolean {
+  const msg = String(err?.message || err?.stderr || '');
+  return msg.includes('gh auth') || msg.includes('not logged') || msg.includes('HTTP 4');
 }
 
 function checkGhCliAvailable(): boolean {
@@ -58,30 +66,69 @@ function ghGraphql(query: string, variables?: Record<string, any>): any {
   return result.trim() ? JSON.parse(result) : undefined;
 }
 
+async function tryPat<T>(op: string, octokitFn: (octokit: Octokit) => Promise<T>): Promise<T> {
+  const octokit = new Octokit({ auth: config.github.token });
+  const result = await octokitFn(octokit);
+  if (!methodPrefs.has(op)) {
+    methodPrefs.set(op, 'pat');
+    console.log(`[GitHubAPI] ${op}: PAT works, remembering`);
+  }
+  return result;
+}
+
+function tryGhCli<T>(op: string, ghCliFn: () => T): T {
+  if (!checkGhCliAvailable()) {
+    throw new Error('gh CLI not available or not authenticated');
+  }
+  const result = ghCliFn();
+  if (!methodPrefs.has(op)) {
+    methodPrefs.set(op, 'gh');
+    console.log(`[GitHubAPI] ${op}: gh CLI works, remembering`);
+  }
+  return result;
+}
+
+/**
+ * Try preferred method first (per-operation memory), fall back to the other.
+ * Both directions: PAT→gh and gh→PAT.
+ */
 async function withFallback<T>(
   octokitFn: (octokit: Octokit) => Promise<T>,
   ghCliFn: () => T,
+  op = 'unknown',
 ): Promise<T> {
-  if (preferGhCli || !config.github.token) {
-    if (!checkGhCliAvailable()) {
-      throw new Error('No GitHub credentials: set GITHUB_TOKEN or authenticate gh CLI');
+  const hasPat = !!config.github.token;
+  const pref = methodPrefs.get(op);
+
+  // Determine order: remembered pref > has PAT > gh CLI
+  const tryPatFirst = pref === 'pat' || (pref == null && hasPat);
+
+  if (tryPatFirst) {
+    try {
+      return await tryPat(op, octokitFn);
+    } catch (err: any) {
+      if (!isPermissionError(err)) throw err;
+      console.warn(`[GitHubAPI] ${op}: PAT failed (${err.status || err.message}), trying gh CLI`);
+      try {
+        methodPrefs.delete(op); // clear stale pref
+        return tryGhCli(op, ghCliFn);
+      } catch (ghErr: any) {
+        throw err; // throw original PAT error if gh also fails
+      }
     }
-    if (!preferGhCli) preferGhCli = true;
-    return ghCliFn();
-  }
-
-  const octokit = new Octokit({ auth: config.github.token });
-  try {
-    return await octokitFn(octokit);
-  } catch (err: any) {
-    if (!isPermissionError(err)) throw err;
-
-    console.warn(`[GitHubAPI] PAT permission error: ${err.message || err.status}`);
-    if (!checkGhCliAvailable()) throw err;
-
-    console.log('[GitHubAPI] Switched to gh CLI fallback');
-    preferGhCli = true;
-    return ghCliFn();
+  } else {
+    try {
+      return tryGhCli(op, ghCliFn);
+    } catch (ghErr: any) {
+      if (!hasPat || !isGhCliError(ghErr)) throw ghErr;
+      console.warn(`[GitHubAPI] ${op}: gh CLI failed, trying PAT`);
+      try {
+        methodPrefs.delete(op);
+        return await tryPat(op, octokitFn);
+      } catch (patErr: any) {
+        throw ghErr; // throw original gh error if PAT also fails
+      }
+    }
   }
 }
 
@@ -97,6 +144,7 @@ export async function getAuthenticatedUser(): Promise<{ login: string }> {
       const data = ghApi('/user');
       return { login: data.login };
     },
+    'getUser',
   );
 }
 
@@ -126,6 +174,7 @@ export async function listPulls(
       });
       return ghApi(`/repos/${owner}/${repo}/pulls?${params}`);
     },
+    'listPulls',
   );
 }
 
@@ -140,6 +189,7 @@ export async function getPull(
       return data;
     },
     () => ghApi(`/repos/${owner}/${repo}/pulls/${pullNumber}`),
+    'getPull',
   );
 }
 
@@ -158,6 +208,7 @@ export async function listPullReviewComments(
       return data;
     },
     () => ghApi(`/repos/${owner}/${repo}/pulls/${pullNumber}/comments`),
+    'listPRComments',
   );
 }
 
@@ -187,6 +238,7 @@ export async function listIssuesForRepo(
       });
       return ghApi(`/repos/${owner}/${repo}/issues?${params}`);
     },
+    'listIssues',
   );
 }
 
@@ -201,6 +253,7 @@ export async function searchIssues(query: string): Promise<any[]> {
       const data = ghApi(`/search/issues?${params}`);
       return data.items || [];
     },
+    'searchIssues',
   );
 }
 
@@ -213,6 +266,7 @@ export async function graphql<T = any>(query: string, variables?: Record<string,
       const result = ghGraphql(query, variables);
       return result?.data ?? result;
     },
+    'graphql',
   );
 }
 
@@ -236,6 +290,7 @@ export async function listOrgRepos(
       });
       return ghApi(`/orgs/${org}/repos?${params}`);
     },
+    'listOrgRepos',
   );
 }
 
@@ -253,6 +308,7 @@ export async function createPull(
       return data;
     },
     () => ghApi(`/repos/${owner}/${repo}/pulls`, 'POST', { head, base, title, body }),
+    'createPull',
   );
 }
 
@@ -273,6 +329,7 @@ export async function createIssueComment(
       return data;
     },
     () => ghApi(`/repos/${owner}/${repo}/issues/${issueNumber}/comments`, 'POST', { body }),
+    'createIssueComment',
   );
 }
 
@@ -295,5 +352,6 @@ export async function createReviewCommentReply(
       return data;
     },
     () => ghApi(`/repos/${owner}/${repo}/pulls/${pullNumber}/comments/${commentId}/replies`, 'POST', { body }),
+    'createReviewReply',
   );
 }
