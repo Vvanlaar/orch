@@ -53,12 +53,22 @@ function markProcessed(key: string): void {
 }
 
 // Load already-processed tasks on startup
+/** Map task types back to poller key types for dedup consistency */
+const taskTypeToPollerType: Record<string, string> = {
+  'pr-review': 'pr',
+  'issue-fix': 'issue',
+  'pr-comment-fix': 'review-comment',
+};
+
 function initProcessedFromDb(): void {
   const tasks = getAllTasks(500);
   for (const task of tasks) {
     const id = task.context.prNumber || task.context.issueNumber || task.context.workItemId;
     if (id) {
-      const key = getProcessedKey(task.context.source, task.type, id);
+      const pollerType = taskTypeToPollerType[task.type] || task.type;
+      // Add key WITHOUT updatedAt — poller keys with updatedAt will still be unique,
+      // but we also add the base key so first-poll dedup works on restart
+      const key = getProcessedKey(task.context.source, pollerType, id);
       processed.add(key);
     }
   }
@@ -118,7 +128,7 @@ async function pollMyPRReviewComments(repoFullName: string): Promise<void> {
       const latestComment = unresolvedComments.reduce((a, b) =>
         new Date(a.updated_at) > new Date(b.updated_at) ? a : b
       );
-      const key = getProcessedKey('github', 'review-comment', `${pr.number}`, latestComment.updated_at);
+      const key = getProcessedKey('github', 'review-comment', `${pr.number}`);
       if (isProcessed(key)) continue;
 
       const reviewComments = unresolvedComments.map(c => ({
@@ -165,7 +175,7 @@ async function pollGitHubRepo(repoFullName: string): Promise<void> {
     const prs = await listPulls(owner, repo, { state: 'open', sort: 'updated', direction: 'desc', per_page: 10 });
 
     for (const pr of prs) {
-      const key = getProcessedKey('github', 'pr', pr.number, pr.updated_at);
+      const key = getProcessedKey('github', 'pr', pr.number);
       if (isProcessed(key)) continue;
 
       const context: TaskContext = {
@@ -197,7 +207,7 @@ async function pollGitHubRepo(repoFullName: string): Promise<void> {
       // Skip PRs (they show up in issues API too)
       if (issue.pull_request) continue;
 
-      const key = getProcessedKey('github', 'issue', issue.number, issue.updated_at);
+      const key = getProcessedKey('github', 'issue', issue.number);
       if (isProcessed(key)) continue;
 
       const context: TaskContext = {
