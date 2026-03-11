@@ -380,6 +380,7 @@ export function buildPrReviewPrompt(context: Task['context']): string {
 Title: ${context.title}
 Description: ${context.body || 'No description provided'}
 Branch: ${context.branch} -> ${context.baseBranch}
+${buildPrUrlHint(context)}
 
 Use git diff to see the changes, then focus on:
 1. Code quality issues
@@ -459,6 +460,7 @@ export function buildPipelineFixPrompt(context: Task['context']): string {
 ${context.title}
 ${context.body || ''}
 Branch: ${context.branch || 'unknown'}
+${buildPrUrlHint(context)}
 
 Instructions:
 1. Analyze the error to understand what failed
@@ -539,6 +541,7 @@ ${c.diffHunk ? `\`\`\`diff\n${c.diffHunk}\n\`\`\`` : ''}
 
 ## PR: ${context.title || 'PR #' + context.prNumber}
 Branch: ${context.branch || 'unknown'}
+${buildPrUrlHint(context)}
 
 ## Review Comments to Address
 ${commentBlocks}
@@ -591,6 +594,12 @@ Respond in JSON format ONLY (no markdown fences, no explanation):
 ]
 
 Use the 0-based index matching the comment order above. If a comment wasn't addressed, set resolution to "Not addressed in this change".`;
+}
+
+function buildPrUrlHint(context: Task['context']): string {
+  if (!context.prNumber) return '';
+  const url = context.prUrl || context.url || '';
+  return `\nPR: ${url || `#${context.prNumber}`}\nUse \`gh pr view ${context.prNumber}\` and \`gh pr diff ${context.prNumber}\` to review the changes.`;
 }
 
 function buildPrInfoSection(context: Task['context']): string {

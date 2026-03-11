@@ -209,7 +209,7 @@ export function checkoutPRInWorktree(repoPath: string, prNumber: number, branch?
     }
 
     mkdirSync(path.dirname(worktreePath), { recursive: true });
-    execFileSync('git', ['worktree', 'add', worktreePath, `origin/${branch}`], { cwd: repoPath, stdio: 'pipe' });
+    execFileSync('git', ['worktree', 'add', worktreePath, '-B', branch, `origin/${branch}`], { cwd: repoPath, stdio: 'pipe' });
     return worktreePath;
   } catch (err) {
     console.error('[GitOps] Failed to checkout PR in worktree:', err);
