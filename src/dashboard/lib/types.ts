@@ -31,6 +31,8 @@ export interface WorkItem {
   reviewedBy?: string;
   repositories?: string[];
   commentCount?: number;
+  parentId?: number;
+  parentTitle?: string;
 }
 
 export interface Task {

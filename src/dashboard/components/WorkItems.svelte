@@ -81,6 +81,62 @@
     )
   );
 
+  // --- Group by parent ---
+  const GROUP_BY_PARENT_KEY = 'orch.dashboard.workitems.group-by-parent';
+  let groupByParent = $state<boolean>(
+    readPreference(GROUP_BY_PARENT_KEY, false, (v): v is boolean => typeof v === 'boolean')
+  );
+
+  function toggleGroupByParent() {
+    groupByParent = !groupByParent;
+    writePreference(GROUP_BY_PARENT_KEY, groupByParent);
+  }
+
+  interface ParentGroup {
+    parentId: number | null;
+    parentTitle: string;
+    parentUrl: string | null;
+    items: WorkItem[];
+  }
+
+  const NO_PARENT_KEY = '__none__';
+  let collapsedGroups = $state(new Set<string>());
+
+  function toggleGroup(key: string) {
+    if (collapsedGroups.has(key)) {
+      collapsedGroups.delete(key);
+    } else {
+      collapsedGroups.add(key);
+    }
+    collapsedGroups = new Set(collapsedGroups);
+  }
+
+  let groupedWorkItems = $derived.by((): ParentGroup[] => {
+    const groups = new Map<string, ParentGroup>();
+    for (const wi of items.workItems) {
+      const key = wi.parentId ? String(wi.parentId) : NO_PARENT_KEY;
+      let group = groups.get(key);
+      if (!group) {
+        group = {
+          parentId: wi.parentId ?? null,
+          parentTitle: wi.parentTitle || 'No Parent',
+          parentUrl: wi.parentId
+            ? `https://dev.azure.com/${wi.project}/_workitems/edit/${wi.parentId}`
+            : null,
+          items: [],
+        };
+        groups.set(key, group);
+      }
+      group.items.push(wi);
+    }
+    // Sort: groups with parent first (by parentTitle), "No Parent" last
+    return [...groups.values()].sort((a, b) => {
+      if (!a.parentId && b.parentId) return 1;
+      if (a.parentId && !b.parentId) return -1;
+      return a.parentTitle.localeCompare(b.parentTitle);
+    });
+  });
+
   async function handleReviewPR(key: string) {
     const pr = getPRFromCache(key);
     if (!pr) return showToast('PR not found', 'warning');
@@ -376,7 +432,17 @@
     </div>
   {/if}
   <div class="board-controls">
-    <div class="view-note"></div>
+    <div class="view-note">
+      {#if !isPRMode && viewMode === 'list'}
+        <button
+          class="group-toggle"
+          class:active={groupByParent}
+          onclick={toggleGroupByParent}
+        >
+          Group by Parent
+        </button>
+      {/if}
+    </div>
     <div class="view-switch" role="tablist" aria-label="Work item views">
       {#each viewModes as mode}
         <button
@@ -445,7 +511,7 @@
           </div>
         {/each}
 
-        {#each items.workItems as wi (wi.id)}
+        {#snippet workItemRow(wi: WorkItem, showParentBadge: boolean)}
           {@const hasPr = !!(wi.githubPrUrl || wi.resolution?.includes('github.com'))}
           <div class="list-row" style="border-left-color: {typeBorderColor(wi.type)};">
             <div class="list-row-content">
@@ -473,6 +539,9 @@
                 {/if}
                 {#if hasPr}
                   <span class="badge" style="background:#3fb95020;color:#3fb950;">PR</span>
+                {/if}
+                {#if showParentBadge && wi.parentId && wi.parentTitle}
+                  <a href="https://dev.azure.com/{wi.project}/_workitems/edit/{wi.parentId}" target="_blank" class="badge badge-link" style="background:#8b949e15;color:#8b949e;">↑ {wi.parentTitle}</a>
                 {/if}
               </div>
             </div>
@@ -511,7 +580,33 @@
               ></textarea>
             </div>
           {/if}
-        {/each}
+        {/snippet}
+
+        {#if groupByParent && !isPRMode}
+          {#each groupedWorkItems as group (group.parentId ?? NO_PARENT_KEY)}
+            {@const groupKey = String(group.parentId ?? NO_PARENT_KEY)}
+            {@const isCollapsed = collapsedGroups.has(groupKey)}
+            <div class="parent-group">
+              <button class="parent-group-header" onclick={() => toggleGroup(groupKey)}>
+                <span class="parent-group-chevron" class:collapsed={isCollapsed}>{isCollapsed ? '▸' : '▾'}</span>
+                {#if group.parentUrl}
+                  <a href={group.parentUrl} target="_blank" class="parent-group-link" onclick={(e) => e.stopPropagation()}>#{group.parentId}</a>
+                {/if}
+                <span class="parent-group-title">{group.parentTitle}</span>
+                <span class="badge">{group.items.length}</span>
+              </button>
+              {#if !isCollapsed}
+                {#each group.items as wi (wi.id)}
+                  {@render workItemRow(wi, false)}
+                {/each}
+              {/if}
+            </div>
+          {/each}
+        {:else}
+          {#each items.workItems as wi (wi.id)}
+            {@render workItemRow(wi, true)}
+          {/each}
+        {/if}
       {/if}
     </div>
   {:else}
@@ -628,6 +723,9 @@
                         {/if}
                         {#if hasPr}
                           <span class="badge" style="background:#3fb95020;color:#3fb950;">PR</span>
+                        {/if}
+                        {#if wi.parentId && wi.parentTitle}
+                          <a href="https://dev.azure.com/{wi.project}/_workitems/edit/{wi.parentId}" target="_blank" class="badge badge-link" style="background:#8b949e15;color:#8b949e;">↑ {wi.parentTitle}</a>
                         {/if}
                       </div>
                       {#if wi.repositories?.length}
@@ -1055,5 +1153,79 @@
     background: #353d47;
     align-self: center;
     margin: 0 2px;
+  }
+
+  .group-toggle {
+    background: transparent;
+    border: 1px solid #353d47;
+    border-radius: 6px;
+    color: #8b949e;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.15s;
+  }
+
+  .group-toggle:hover {
+    color: #c9d1d9;
+    border-color: #58a6ff;
+  }
+
+  .group-toggle.active {
+    color: #58a6ff;
+    background: #122a4a;
+    border-color: #1f4a85;
+  }
+
+  .parent-group {
+    border-bottom: 1px solid #2a313b;
+  }
+
+  .parent-group-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 18px;
+    background: #0d1117;
+    border: none;
+    border-bottom: 1px solid #21262d;
+    color: #c9d1d9;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.1s;
+  }
+
+  .parent-group-header:hover {
+    background: #161b22;
+  }
+
+  .parent-group-chevron {
+    color: #6e7681;
+    font-size: 11px;
+    width: 12px;
+    flex-shrink: 0;
+  }
+
+  .parent-group-link {
+    color: #58a6ff;
+    text-decoration: none;
+    font-size: 11px;
+    flex-shrink: 0;
+  }
+
+  .parent-group-link:hover {
+    text-decoration: underline;
+  }
+
+  .parent-group-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
   }
 </style>

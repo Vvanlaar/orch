@@ -35,6 +35,8 @@ export interface AdoWorkItem {
   testNotes?: string;
   body?: string;
   repositories?: string[];
+  parentId?: number;
+  parentTitle?: string;
 }
 
 export interface TeamMember {
@@ -150,6 +152,13 @@ function checkAdoConfig(...extraFields: (keyof typeof config.ado)[]): boolean {
   return true;
 }
 
+function extractParentId(relations?: any[]): number | undefined {
+  const parent = relations?.find(r => r.rel === 'System.LinkTypes.Hierarchy-Reverse');
+  if (!parent) return undefined;
+  const match = parent.url?.match(/workItems\/(\d+)$/);
+  return match ? parseInt(match[1], 10) : undefined;
+}
+
 function extractGitHubPrUrl(fields: Record<string, any>, relations?: any[]): string {
   // Check relations first (ADO Development links)
   if (relations) {
@@ -213,6 +222,7 @@ function mapWorkItemToAdoItem(wi: any): AdoWorkItem {
     repositories: fields['Custom.Repository']
       ? fields['Custom.Repository'].split(';').map((s: string) => s.trim()).filter(Boolean)
       : [],
+    parentId: extractParentId(wi.relations),
   };
 }
 
@@ -250,7 +260,31 @@ async function fetchAdoWorkItemsByQuery(wiqlQuery: string, logPrefix: string, li
     }
 
     const detailsData = await detailsRes.json();
-    const items = (detailsData.value || []).map(mapWorkItemToAdoItem);
+    const items: AdoWorkItem[] = (detailsData.value || []).map(mapWorkItemToAdoItem);
+
+    // Batch-fetch parent titles
+    const parentIds = [...new Set(items.map(i => i.parentId).filter((id): id is number => !!id))];
+    if (parentIds.length > 0) {
+      try {
+        const parentUrl = `https://dev.azure.com/${config.ado.organization}/_apis/wit/workitems?ids=${parentIds.join(',')}&fields=System.Title,System.WorkItemType&api-version=7.1`;
+        const parentRes = await fetch(parentUrl, { headers: { Authorization: `Basic ${auth}` } });
+        if (parentRes.ok) {
+          const parentData = await parentRes.json();
+          const titleMap = new Map<number, string>();
+          for (const wi of parentData.value || []) {
+            const title = wi.fields?.['System.Title'];
+            const type = wi.fields?.['System.WorkItemType'];
+            if (title) titleMap.set(wi.id, type ? `${type}: ${title}` : title);
+          }
+          for (const item of items) {
+            if (item.parentId) item.parentTitle = titleMap.get(item.parentId);
+          }
+        }
+      } catch (err) {
+        console.error('[UserItems] Error fetching parent titles:', err);
+      }
+    }
+
     console.log(`[UserItems] Found ${items.length} ADO work items`);
     return items;
   } catch (err) {
