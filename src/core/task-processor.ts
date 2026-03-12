@@ -332,16 +332,16 @@ async function processPrCommentFix(task: Task): Promise<void> {
     completeTask(task.id, resultSummary);
     log.info(`Task #${task.id} Completed successfully`);
     triggerLearningExtraction(task);
+    removeWorktree(task.repoPath, worktreePath);
     notifyUpdate();
 
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     failTask(task.id, error);
     log.error(`Task #${task.id} Error: ${error}`);
-    discardChanges(worktreePath);
+    // Keep worktree on failure so user can inspect via terminal button (retry reuses it)
+    log.warn(`Task #${task.id} Worktree preserved at ${worktreePath}`);
     notifyUpdate();
-  } finally {
-    removeWorktree(task.repoPath, worktreePath);
   }
 }
 
