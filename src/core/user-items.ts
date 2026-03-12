@@ -100,10 +100,10 @@ async function enrichMergeStatus(prs: GitHubPR[]): Promise<void> {
 
   await Promise.all([...byRepo.entries()].map(async ([repo, repoPrs]) => {
     const [owner, name] = repo.split('/');
-    const prFields = repoPrs.map((pr, i) => `pr${i}: pullRequest(number: ${pr.number}) { mergeable reviewThreads(first: 100) { nodes { isResolved } } }`).join('\n');
+    const prFields = repoPrs.map((pr, i) => `pr${i}: pullRequest(number: ${pr.number}) { mergeable reviewThreads(first: 100) { nodes { isResolved comments(first: 1) { nodes { body } } } } }`).join('\n');
 
     try {
-      const result = await graphql<{ repository: Record<string, { mergeable: string; reviewThreads?: { nodes: { isResolved: boolean }[] } }> }>(
+      const result = await graphql<{ repository: Record<string, { mergeable: string; reviewThreads?: { nodes: { isResolved: boolean; comments?: { nodes: { body: string }[] } }[] } }> }>(
         `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ${prFields} } }`,
         { owner, name },
       );
@@ -111,7 +111,9 @@ async function enrichMergeStatus(prs: GitHubPR[]): Promise<void> {
         const prData = result.repository[`pr${i}`];
         if (prData?.mergeable) repoPrs[i].mergeable = prData.mergeable as GitHubPR['mergeable'];
         const threads = prData?.reviewThreads?.nodes || [];
-        repoPrs[i].commentCount = threads.filter(t => !t.isResolved).length;
+        repoPrs[i].commentCount = threads.filter(t =>
+          !t.isResolved && !(t.comments?.nodes?.[0]?.body || '').startsWith('Pull request overview')
+        ).length;
       }
     } catch (err: any) {
       const is404 = err?.status === 404 || err?.errors?.[0]?.type === 'NOT_FOUND';
