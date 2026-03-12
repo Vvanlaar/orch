@@ -305,12 +305,13 @@ async function tryTerminalFallbacks(
   return { success: false, error: `Failed to open ${preferred} terminal` };
 }
 
-function resolveWorkspacePath(repoPath: string, ticketId?: number): string {
-  if (!ticketId) return repoPath;
+function resolveWorkspacePath(repoPath: string, worktreePrefix?: string | number): string {
+  if (!worktreePrefix) return repoPath;
   const repoName = path.basename(repoPath);
   const worktreeBase = path.join(WORKSPACES_DIR, 'worktrees', repoName);
   if (!existsSync(worktreeBase)) return repoPath;
-  const match = readdirSync(worktreeBase).find(e => e.startsWith(String(ticketId)));
+  const prefix = String(worktreePrefix);
+  const match = readdirSync(worktreeBase).find(e => e.startsWith(prefix));
   return match ? path.join(worktreeBase, match) : repoPath;
 }
 
@@ -426,7 +427,7 @@ function sendShellResult(res: express.Response, result: Awaited<ReturnType<typeo
   }
 }
 
-// Open terminal in task's repo directory
+// Open terminal in task's repo directory (resolves worktree for PR/ticket tasks)
 app.post('/api/tasks/:id/terminal', asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id as string);
   const task = getTask(id);
@@ -434,7 +435,9 @@ app.post('/api/tasks/:id/terminal', asyncHandler(async (req, res) => {
     res.status(404).json({ error: 'Task not found' });
     return;
   }
-  sendShellResult(res, await openShellAtPath(task.repoPath, `Task #${id}: ${task.repo}`));
+  const prefix = task.context.prNumber ? `pr-${task.context.prNumber}` : task.context.workItemId;
+  const shellPath = resolveWorkspacePath(task.repoPath, prefix);
+  sendShellResult(res, await openShellAtPath(shellPath, `Task #${id}: ${task.repo}`));
 }));
 
 app.post('/api/open-terminal', asyncHandler(async (req, res) => {
