@@ -13,13 +13,17 @@
   import { fetchCurrentUser } from './stores/currentUser.svelte';
   import { fetchNotifications } from './stores/notifications.svelte';
   import { fetchOrchestratorState } from './stores/orchestrator.svelte';
+  import { readPreference, writePreference } from './lib/preferences';
   import NotificationSidebar from './components/NotificationSidebar.svelte';
   import OrchestratorPanel from './components/OrchestratorPanel.svelte';
   import OrchestratorChat from './components/OrchestratorChat.svelte';
   import ToastContainer from './components/ToastContainer.svelte';
   import VideoscanPage from './components/VideoscanPage.svelte';
 
-  let currentPage = $state<'dashboard' | 'videoscan'>('dashboard');
+  let currentPage = $state<'dashboard' | 'videoscan'>(
+    readPreference('currentPage', 'dashboard', (v): v is 'dashboard' | 'videoscan' =>
+      v === 'dashboard' || v === 'videoscan')
+  );
 
   function refreshAll(refresh = false) {
     fetchPRs(refresh);
@@ -45,7 +49,7 @@
 </script>
 
 <div class="container">
-  <Header {refreshAll} {currentPage} onNavigate={(page) => currentPage = page} />
+  <Header {refreshAll} {currentPage} onNavigate={(page) => { currentPage = page; writePreference('currentPage', page); }} />
   {#if currentPage === 'videoscan'}
     <VideoscanPage />
   {:else}
