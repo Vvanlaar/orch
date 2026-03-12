@@ -596,6 +596,14 @@ Respond in JSON format ONLY (no markdown fences, no explanation):
 Use the 0-based index matching the comment order above. If a comment wasn't addressed, set resolution to "Not addressed in this change".`;
 }
 
+export function buildMergeConflictPrompt(baseBranch: string): string {
+  return `The PR branch has merge conflicts with ${baseBranch}.
+Resolve all merge conflicts in the working directory.
+Look for files with conflict markers (<<<<<<< ======= >>>>>>>) and resolve them.
+After resolving, stage the resolved files with git add.
+Do NOT commit — just resolve and stage.`;
+}
+
 function buildPrUrlHint(context: Task['context']): string {
   if (!context.prNumber) return '';
   const url = context.prUrl || context.url || '';

@@ -1,7 +1,7 @@
 import { existsSync } from 'fs';
 import path from 'path';
 import { config, WORKSPACES_DIR } from './config.js';
-import { createIssueComment, createReviewCommentReply } from './github-api.js';
+import { createIssueComment, createReviewCommentReply, getReviewThreads, resolveReviewThread } from './github-api.js';
 import {
   getPendingTasks,
   getRunningCount,
@@ -16,7 +16,7 @@ import {
   getTask,
 } from './task-queue.js';
 import { extractLesson, storeLearning, updateSkillIfRelevant } from './learnings.js';
-import { runClaude, runClaudeStreaming, runClaudeInTerminal, claudeEmitter, steerTask, buildPromptForTask, buildPrCommentFixPrompt, buildCodeSimplifierPrompt, buildSelfReviewPrompt, buildCommentResolutionPrompt } from './claude-runner.js';
+import { runClaude, runClaudeStreaming, runClaudeInTerminal, claudeEmitter, steerTask, buildPromptForTask, buildPrCommentFixPrompt, buildCodeSimplifierPrompt, buildSelfReviewPrompt, buildCommentResolutionPrompt, buildMergeConflictPrompt } from './claude-runner.js';
 import { getTerminalInteractiveSession } from './settings.js';
 import {
   cloneRepo,
@@ -177,6 +177,33 @@ async function processPrCommentFix(task: Task): Promise<void> {
   }
 
   try {
+    // Step 0: Merge base branch to fix conflicts
+    const baseBranch = task.context.baseBranch;
+    if (baseBranch) {
+      const { execSync } = await import('child_process');
+      execSync(`git fetch origin ${baseBranch}`, { cwd: worktreePath, stdio: 'pipe' });
+      try {
+        execSync(`git merge origin/${baseBranch} --no-edit`, { cwd: worktreePath, stdio: 'pipe' });
+        console.log(`[Task #${task.id}] Step 0: Merged ${baseBranch} (no conflicts)`);
+      } catch {
+        console.log(`[Task #${task.id}] Step 0: Merge conflicts detected, letting Claude resolve`);
+        const mergePrompt = buildMergeConflictPrompt(baseBranch);
+        const mergeResult = await runClaude(task, mergePrompt, { allowEdits: true, workingDir: worktreePath });
+        if (mergeResult.success) {
+          try {
+            execSync('git commit --no-edit', { cwd: worktreePath, stdio: 'pipe' });
+            console.log(`[Task #${task.id}] Step 0: Merge conflicts resolved and committed`);
+          } catch {
+            console.warn(`[Task #${task.id}] Merge commit failed, aborting merge`);
+            try { execSync('git merge --abort', { cwd: worktreePath, stdio: 'pipe' }); } catch {}
+          }
+        } else {
+          console.warn(`[Task #${task.id}] Merge conflict resolution failed, aborting merge`);
+          try { execSync('git merge --abort', { cwd: worktreePath, stdio: 'pipe' }); } catch {}
+        }
+      }
+    }
+
     // Step 1: Fix review comments
     console.log(`[Task #${task.id}] Step 1: Fixing ${comments.length} review comments`);
     const fixPrompt = buildPrCommentFixPrompt(task.context);
@@ -252,6 +279,28 @@ async function processPrCommentFix(task: Task): Promise<void> {
         await replyToReviewComment(task.repo, task.context.prNumber!, comment.id, replyBody);
       } catch (err) {
         console.error(`[Task #${task.id}] Failed to reply to comment ${comment.id}:`, err);
+      }
+    }
+
+    // Step 7: Resolve review threads on GitHub
+    if (task.context.source === 'github') {
+      console.log(`[Task #${task.id}] Step 7: Resolving review threads`);
+      try {
+        const [owner, repoName] = task.repo.split('/');
+        const threads = await getReviewThreads(owner, repoName, prNumber);
+        const marker = `Auto-fixed by Orch task #${task.id}`;
+        let resolved = 0;
+        for (const thread of threads) {
+          if (!thread.isResolved && thread.lastCommentBody.includes(marker)) {
+            await resolveReviewThread(thread.id);
+            resolved++;
+          }
+        }
+        if (resolved > 0) {
+          console.log(`[Task #${task.id}] Resolved ${resolved} review thread(s)`);
+        }
+      } catch (err) {
+        console.error(`[Task #${task.id}] Failed to resolve threads:`, err);
       }
     }
 

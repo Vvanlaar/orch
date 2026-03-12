@@ -355,3 +355,52 @@ export async function createReviewCommentReply(
     'createReviewReply',
   );
 }
+
+export interface ReviewThread {
+  id: string; // GraphQL node ID
+  isResolved: boolean;
+  lastCommentBody: string;
+}
+
+export async function getReviewThreads(
+  owner: string,
+  repo: string,
+  prNumber: number,
+): Promise<ReviewThread[]> {
+  const query = `
+    query($owner: String!, $repo: String!, $prNumber: Int!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $prNumber) {
+          reviewThreads(first: 100) {
+            nodes {
+              id
+              isResolved
+              comments(last: 1) {
+                nodes { body }
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+  const result = await graphql<any>(query, { owner, repo, prNumber });
+  const threads = result?.repository?.pullRequest?.reviewThreads?.nodes || [];
+  return threads.map((t: any) => ({
+    id: t.id,
+    isResolved: t.isResolved,
+    lastCommentBody: t.comments?.nodes?.[0]?.body || '',
+  }));
+}
+
+export async function resolveReviewThread(threadId: string): Promise<boolean> {
+  const mutation = `
+    mutation($threadId: ID!) {
+      resolveReviewThread(input: { threadId: $threadId }) {
+        thread { isResolved }
+      }
+    }
+  `;
+  const result = await graphql<any>(mutation, { threadId });
+  return result?.resolveReviewThread?.thread?.isResolved ?? false;
+}
