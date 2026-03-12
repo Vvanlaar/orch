@@ -315,6 +315,32 @@ const DETECTORS = {
   },
 };
 
+// ── Tier priority (1 = highest) ─────────────────────────────────────
+const DETECTOR_TIER = {
+  // Tier 1: Enterprise / OVP
+  "Blue Billywig": 1, Brightcove: 1, "JW Player": 1, Kaltura: 1,
+  Wistia: 1, Vidyard: 1, Flowplayer: 1, Panopto: 1, PingVP: 1,
+  // Tier 2: Major platforms
+  YouTube: 2, Vimeo: 2, DailyMotion: 2, TikTok: 2, Instagram: 2,
+  "Facebook Video": 2, "X (Twitter)": 2, LinkedIn: 2, Twitch: 2,
+  "Spotify (podcast)": 2, Loom: 2,
+  // Tier 3: CDN / Infrastructure
+  "Cloudflare Stream": 3, "bunny.net Stream": 3, Mux: 3,
+  // Tier 4: Other platforms
+  Streamable: 4, Rumble: 4, PeerTube: 4, Odysee: 4, Reddit: 4,
+  Bilibili: 4, "VK Video": 4, SproutVideo: 4, Cincopa: 4,
+  "23 Video": 4, Mediasite: 4, ThePlatform: 4,
+  // Tier 5: Generic
+  "Video.js": 5, "HTML5 native": 5,
+};
+
+/** Keep only the highest-priority tier of players found on a page. */
+function filterToHighestTier(players) {
+  if (players.length <= 1) return players;
+  const minTier = Math.min(...players.map((p) => DETECTOR_TIER[p.player] ?? 5));
+  return players.filter((p) => (DETECTOR_TIER[p.player] ?? 5) === minTier);
+}
+
 // ── Crawler ─────────────────────────────────────────────────────────
 
 function normalizeUrl(url, base) {
@@ -875,7 +901,7 @@ function detectPlayers(html, networkRequests) {
     }
   }
 
-  return found;
+  return filterToHighestTier(found);
 }
 
 // ── Report ──────────────────────────────────────────────────────────
