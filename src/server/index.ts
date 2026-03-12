@@ -28,6 +28,7 @@ import { getEffectiveRepoMapping, getScannedRepos } from '../core/repo-scanner.j
 import { getAuthenticatedUser, getPull, listPullReviewComments, listOrgRepos } from '../core/github-api.js';
 import { approveSuggestion, completeTask, createTask, deleteTask, dismissSuggestion, failTask, getAllTasks, getAllTasksWithOutput, getTask, getTasksWithPids, retryTask, updateTaskRepoPath } from '../core/task-queue.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
+import { getVideoscanDir, listScans } from '../core/videoscan-runner.js';
 import type { TerminalId } from '../core/types.js';
 import { getCurrentAdoUser, getMyAdoWorkItems, getMyGitHubPRs, getMyResolvedWorkItems, getResolvedWithPRComments, getReviewedItemsInSprint, getTeamMembers, getWorkItemsBySprints, type OwnerFilter } from '../core/user-items.js';
 import { startNtfyListener } from '../core/ntfy-listener.js';
@@ -1388,6 +1389,88 @@ app.post('/api/actions/review-resolution', (req, res) => {
   triggerUpdate();
   broadcastTasks();
   res.json({ taskId: task.id, message: 'Resolution review task created' });
+});
+
+// --- Videoscan API ---
+
+app.post('/api/actions/start-videoscan', (req, res) => {
+  const { url, maxPages, concurrency } = req.body;
+  if (!url || typeof url !== 'string') {
+    res.status(400).json({ error: 'url required' });
+    return;
+  }
+  try { new URL(url); } catch { res.status(400).json({ error: 'Invalid URL' }); return; }
+
+  const task = createTask('videoscan', url, getVideoscanDir(), {
+    source: 'github', // placeholder — videoscan has no source
+    event: 'videoscan',
+    title: `Videoscan: ${new URL(url).hostname}`,
+    scanUrl: url,
+    maxPages: maxPages || 50,
+    concurrency: concurrency || 6,
+  });
+  triggerUpdate();
+  broadcastTasks();
+  res.json({ taskId: task.id, message: `Videoscan task #${task.id} created` });
+});
+
+app.post('/api/actions/resume-videoscan', (req, res) => {
+  const { filename, maxPages, concurrency } = req.body;
+  if (!filename || typeof filename !== 'string') {
+    res.status(400).json({ error: 'filename required' });
+    return;
+  }
+  // Prevent path traversal
+  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+    res.status(400).json({ error: 'Invalid filename' });
+    return;
+  }
+  const resumePath = join(getVideoscanDir(), filename);
+  if (!existsSync(resumePath)) {
+    res.status(404).json({ error: 'Scan file not found' });
+    return;
+  }
+  let scanData: { domain?: string };
+  try { scanData = JSON.parse(readFileSync(resumePath, 'utf-8')); } catch { res.status(400).json({ error: 'Invalid JSON file' }); return; }
+  const domain = scanData.domain || 'unknown';
+  const scanUrl = `https://www.${domain}`;
+
+  const task = createTask('videoscan', scanUrl, getVideoscanDir(), {
+    source: 'github',
+    event: 'videoscan-resume',
+    title: `Resume videoscan: ${domain}`,
+    scanUrl,
+    maxPages: maxPages || 200,
+    concurrency: concurrency || 6,
+    resumeFile: resumePath,
+  });
+  triggerUpdate();
+  broadcastTasks();
+  res.json({ taskId: task.id, message: `Resume task #${task.id} created` });
+});
+
+app.get('/api/videoscans', (_req, res) => {
+  res.json(listScans());
+});
+
+app.get('/api/videoscans/files/:filename', (req, res) => {
+  const { filename } = req.params;
+  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+    res.status(400).json({ error: 'Invalid filename' });
+    return;
+  }
+  const filePath = join(getVideoscanDir(), filename);
+  if (!existsSync(filePath)) {
+    res.status(404).json({ error: 'File not found' });
+    return;
+  }
+  if (filename.endsWith('.html')) {
+    res.type('html').sendFile(filePath);
+  } else if (filename.endsWith('.json')) {
+    res.type('json').sendFile(filePath);
+  } else {
+    res.status(400).json({ error: 'Unsupported file type' });
+  }
 });
 
 // --- Orchestrator API ---

@@ -1,0 +1,838 @@
+#!/usr/bin/env node
+import { chromium } from "playwright";
+import chalk from "chalk";
+import { readFileSync, writeFileSync, existsSync } from "fs";
+
+// ── Video Player Detectors ──────────────────────────────────────────
+// Each detector checks page HTML + network requests for a specific player.
+// Returns { found: boolean, details: string[] }
+
+const DETECTORS = {
+  // ── Enterprise / OVP ────────────────────────────────────────────
+  "Blue Billywig": {
+    patterns: [
+      /bbvms\.com/i,
+      /bluebillywig\.com/i,
+      /\.bbvms\./i,
+      /bb-player/i,
+      /data-bb-/i,
+    ],
+    scripts: [/bbvms\.com/i, /bluebillywig/i],
+  },
+  Brightcove: {
+    patterns: [
+      /players\.brightcove\.net/i,
+      /brightcove\.com/i,
+      /bcove\.video/i,
+      /brightcove-player/i,
+      /data-account.*data-player/i,
+      /data-video-id/i,
+    ],
+    scripts: [/players\.brightcove\.net/i, /brightcove\.com/i],
+  },
+  "JW Player": {
+    patterns: [
+      /jwplatform\.com/i,
+      /jwplayer\.com/i,
+      /jwpcdn\.com/i,
+      /jwplayer\(/i,
+      /jw-video-player/i,
+      /cdn\.jwplayer\.com\/libraries/i,
+      /cdn\.jwplayer\.com\/v2\/playlists/i,
+      /class="jwplayer/i,
+    ],
+    scripts: [/jwplatform\.com/i, /jwplayer\.com/i, /jwpcdn\.com/i, /cdn\.jwplayer\.com/i],
+  },
+  Kaltura: {
+    patterns: [
+      /kaltura\.com/i,
+      /cdnapisec\.kaltura/i,
+      /kWidget/i,
+      /kaltura-player/i,
+    ],
+    scripts: [/kaltura\.com/i],
+  },
+  Wistia: {
+    patterns: [
+      /wistia\.com/i,
+      /wistia\.net/i,
+      /fast\.wistia\./i,
+      /wistia-popover/i,
+      /wistia_embed/i,
+      /data-wistia-id/i,
+      /fast\.wistia\.net\/assets\/external\/E-v1\.js/i,
+    ],
+    scripts: [/wistia\.com/i, /wistia\.net/i, /fast\.wistia\.net/i],
+  },
+  Vidyard: {
+    patterns: [
+      /play\.vidyard\.com/i,
+      /share\.vidyard\.com/i,
+      /vidyard-player/i,
+      /vyContext/i,
+    ],
+    scripts: [/vidyard\.com/i],
+  },
+  Flowplayer: {
+    patterns: [/flowplayer\.com/i, /flowplayer\.org/i, /flowplayer\(/i],
+    scripts: [/flowplayer/i],
+  },
+  Panopto: {
+    patterns: [
+      /panopto\.com/i,
+      /panopto\.eu/i,
+      /\/Panopto\/Pages\/Embed\.aspx/i,
+      /\/Panopto\/Pages\/Viewer\.aspx/i,
+      /data-panopto-id/i,
+    ],
+    scripts: [/panopto/i],
+  },
+  PingVP: {
+    patterns: [
+      /pingvp\.com/i,
+      /pingVpVideoContainer/i,
+      /pingVpReset/i,
+    ],
+    scripts: [/pingvp\.com/i],
+  },
+
+  // ── Major platforms ─────────────────────────────────────────────
+  YouTube: {
+    patterns: [
+      /youtube\.com\/embed/i,
+      /youtube-nocookie\.com\/embed/i,
+      /youtu\.be\//i,
+      /ytimg\.com/i,
+      /youtube\.com\/iframe_api/i,
+      /yt-video/i,
+      /class="youtube/i,
+      /data-youtube-id/i,
+      /data-youtube-video-id/i,
+      /youtube-player/i,
+    ],
+    scripts: [/youtube\.com/i, /ytimg\.com/i],
+  },
+  Vimeo: {
+    patterns: [
+      /player\.vimeo\.com/i,
+      /vimeo\.com\/video/i,
+      /vimeo\.com\/\d+/i,
+      /vimeocdn\.com/i,
+      /data-vimeo-id/i,
+      /data-vimeo-url/i,
+      /vimeo-player/i,
+    ],
+    scripts: [/player\.vimeo\.com/i, /vimeocdn\.com/i],
+  },
+  DailyMotion: {
+    patterns: [
+      /dailymotion\.com\/embed/i,
+      /dailymotion\.com\/player/i,
+      /dailymotion\.com\/video/i,
+      /geo\.dailymotion\.com/i,
+      /dailymotion-player/i,
+    ],
+    scripts: [/dailymotion\.com/i, /dmcdn\.net/i],
+  },
+  TikTok: {
+    patterns: [
+      /tiktok\.com\/embed/i,
+      /tiktok\.com\/player\/v1/i,
+      /tiktok-embed/i,
+      /data-video-id.*tiktok/i,
+    ],
+    scripts: [/tiktok\.com\/embed\.js/i, /tiktok\.com/i],
+  },
+  Instagram: {
+    patterns: [
+      /instagram\.com\/embed/i,
+      /instagram\.com\/p\//i,
+      /instagram\.com\/reel/i,
+      /cdninstagram\.com/i,
+      /instgrm\.Embeds/i,
+      /instagram-media/i,
+      /data-instgrm-permalink/i,
+      /data-instgrm-version/i,
+    ],
+    scripts: [/instagram\.com\/embed\.js/i, /instagram\.com\/embed/i, /cdninstagram\.com/i],
+  },
+  "Facebook Video": {
+    patterns: [
+      /facebook\.com\/plugins\/video\.php/i,
+      /facebook\.com\/watch/i,
+      /class="fb-video/i,
+      /data-href.*facebook\.com/i,
+    ],
+    scripts: [/connect\.facebook\.net\/.+\/sdk\.js/i],
+  },
+  "X (Twitter)": {
+    patterns: [
+      /platform\.twitter\.com\/widgets/i,
+      /twitter-tweet/i,
+      /twitter-timeline/i,
+      /x\.com\/\w+\/status\/\d+/i,
+      /twitter\.com\/\w+\/status\/\d+/i,
+    ],
+    scripts: [/platform\.twitter\.com\/widgets\.js/i],
+  },
+  LinkedIn: {
+    patterns: [
+      /linkedin\.com\/embed\/feed\/update/i,
+      /linkedin\.com\/posts\//i,
+    ],
+    scripts: [],
+  },
+  Twitch: {
+    patterns: [
+      /player\.twitch\.tv/i,
+      /twitch\.tv\/embed/i,
+      /data-twitch-channel/i,
+      /twitch-embed/i,
+    ],
+    scripts: [/twitch\.tv/i],
+  },
+  "Spotify (podcast)": {
+    patterns: [
+      /open\.spotify\.com\/embed/i,
+      /spotify\.com\/episode/i,
+      /spotify\.com\/show/i,
+    ],
+    scripts: [/spotify\.com/i],
+  },
+  Loom: {
+    patterns: [
+      /loom\.com\/embed/i,
+      /loom\.com\/share/i,
+      /useloom\.com/i,
+    ],
+    scripts: [/loom\.com/i],
+  },
+
+  // ── CDN / Infrastructure players ────────────────────────────────
+  "Cloudflare Stream": {
+    patterns: [
+      /iframe\.videodelivery\.net/i,
+      /videodelivery\.net/i,
+      /data-cf-stream/i,
+    ],
+    scripts: [/videodelivery\.net/i],
+  },
+  "bunny.net Stream": {
+    patterns: [
+      /iframe\.mediadelivery\.net\/embed/i,
+      /player\.mediadelivery\.net/i,
+    ],
+    scripts: [/mediadelivery\.net/i],
+  },
+  Mux: {
+    patterns: [
+      /stream\.mux\.com/i,
+      /<mux-player/i,
+      /mux-player/i,
+    ],
+    scripts: [/stream\.mux\.com/i, /mux\.com/i],
+  },
+
+  // ── Other platforms ─────────────────────────────────────────────
+  Streamable: {
+    patterns: [
+      /streamable\.com\/e\//i,
+      /streamable\.com\/o\//i,
+      /streamable-embed/i,
+    ],
+    scripts: [/streamable\.com/i],
+  },
+  Rumble: {
+    patterns: [
+      /rumble\.com\/embed/i,
+      /rumble\.com\/v[\w-]+/i,
+    ],
+    scripts: [/rumble\.com/i],
+  },
+  PeerTube: {
+    patterns: [
+      /\/videos\/embed\/[0-9a-f]{8}-/i,
+      /\/videos\/watch\/[0-9a-f]{8}-/i,
+    ],
+    scripts: [/@peertube\/embed-api/i],
+  },
+  Odysee: {
+    patterns: [
+      /odysee\.com\/\$\/embed/i,
+      /odysee\.com\/@/i,
+    ],
+    scripts: [/odysee\.com/i, /odycdn\.com/i],
+  },
+  Reddit: {
+    patterns: [
+      /embed\.reddit\.com/i,
+      /redditmedia\.com/i,
+      /reddit-embed/i,
+    ],
+    scripts: [/embed\.reddit\.com\/widgets\.js/i],
+  },
+  Bilibili: {
+    patterns: [
+      /player\.bilibili\.com\/player\.html/i,
+      /bilibili\.com\/video\/BV/i,
+    ],
+    scripts: [/bilibili\.com/i],
+  },
+  "VK Video": {
+    patterns: [
+      /vk\.com\/video_ext\.php/i,
+      /vk\.com\/video/i,
+    ],
+    scripts: [/vk\.com/i],
+  },
+  SproutVideo: {
+    patterns: [/sproutvideo\.com/i, /videos\.sproutvideo/i],
+    scripts: [/sproutvideo\.com/i],
+  },
+  "Video.js": {
+    patterns: [/video\.js/i, /videojs/i, /vjs-/i, /video-js/i],
+    scripts: [/videojs/i, /video\.js/i, /vjs/i],
+  },
+  "HTML5 native": {
+    patterns: [/<video[\s>]/i, /<source[^>]+type="video/i],
+    scripts: [],
+  },
+  Cincopa: {
+    patterns: [/cincopa\.com/i],
+    scripts: [/cincopa\.com/i],
+  },
+  "23 Video": {
+    patterns: [/23video\.com/i],
+    scripts: [/23video\.com/i],
+  },
+  Mediasite: {
+    patterns: [/mediasite/i],
+    scripts: [/mediasite/i],
+  },
+  ThePlatform: {
+    patterns: [/theplatform\.com/i, /media\.theplatform/i],
+    scripts: [/theplatform\.com/i],
+  },
+};
+
+// ── Crawler ─────────────────────────────────────────────────────────
+
+function normalizeUrl(url, base) {
+  try {
+    const u = new URL(url, base);
+    u.hash = "";
+    // Remove trailing slash for consistency (except root)
+    if (u.pathname !== "/" && u.pathname.endsWith("/")) {
+      u.pathname = u.pathname.slice(0, -1);
+    }
+    return u.href;
+  } catch {
+    return null;
+  }
+}
+
+function isSameDomain(url, domain) {
+  try {
+    const u = new URL(url);
+    return (
+      u.hostname === domain || u.hostname === `www.${domain}` || `www.${u.hostname}` === domain
+    );
+  } catch {
+    return false;
+  }
+}
+
+function shouldSkipUrl(url) {
+  const skip = [
+    /\.(pdf|zip|png|jpg|jpeg|gif|svg|webp|mp4|mp3|wav|doc|docx|xls|xlsx|ppt|pptx|css|js)(\?|$)/i,
+    /mailto:/i,
+    /tel:/i,
+    /javascript:/i,
+    /#$/,
+    /\?.*page=\d+/i, // pagination - skip for now
+  ];
+  return skip.some((r) => r.test(url));
+}
+
+// Pages with these path segments are more likely to have video content.
+// We prioritize them in the crawl queue so they get scanned first.
+const VIDEO_LIKELY_PATHS = [
+  /video/i, /media/i, /blog/i, /nieuws/i, /news/i, /podcast/i,
+  /over-/i, /about/i, /campagne/i, /campaign/i, /verhaal/i, /story/i,
+  /werkenbij/i, /careers/i, /evenement/i, /event/i, /webinar/i,
+  /academy/i, /training/i, /demo/i, /tutorial/i, /case/i,
+];
+
+function prioritizeUrls(urls) {
+  const high = [];
+  const normal = [];
+  for (const url of urls) {
+    if (VIDEO_LIKELY_PATHS.some((p) => p.test(url))) {
+      high.push(url);
+    } else {
+      normal.push(url);
+    }
+  }
+  return [...high, ...normal];
+}
+
+async function acceptCookies(page) {
+  const selectors = [
+    "#onetrust-accept-btn-handler",
+    "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
+    'button:has-text("Accepteren")',
+    'button:has-text("Alle cookies accepteren")',
+    'button:has-text("Alle cookies")',
+    'button:has-text("Akkoord")',
+    'button:has-text("Accept all")',
+    'button:has-text("Accept")',
+    ".cc-accept",
+    "#accept-cookies",
+    '[data-action="accept"]',
+  ];
+  for (const sel of selectors) {
+    try {
+      const btn = await page.$(sel);
+      if (btn && await btn.isVisible()) {
+        await btn.click();
+        await page.waitForTimeout(1500);
+        return true;
+      }
+    } catch {}
+  }
+  return false;
+}
+
+async function scrollPage(page) {
+  await page.evaluate(async () => {
+    const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+    const height = document.body.scrollHeight;
+    for (let y = 0; y < height; y += 400) {
+      window.scrollTo(0, y);
+      await delay(100);
+    }
+    window.scrollTo(0, 0);
+  });
+}
+
+// Wait for dynamically loaded media elements using MutationObserver.
+// Returns list of new script srcs and iframe srcs added during observation.
+async function waitForDynamicMedia(page, timeoutMs = 5000) {
+  return page.evaluate((timeout) => {
+    return new Promise((resolve) => {
+      const found = { scripts: [], iframes: [], hasVideo: false, hasAudio: false };
+      const observer = new MutationObserver((mutations) => {
+        for (const m of mutations) {
+          for (const node of m.addedNodes) {
+            if (node.nodeType !== 1) continue;
+            const tag = node.tagName;
+            if (tag === "SCRIPT" && node.src) found.scripts.push(node.src);
+            if (tag === "IFRAME" && node.src) found.iframes.push(node.src);
+            if (tag === "VIDEO") found.hasVideo = true;
+            if (tag === "AUDIO") found.hasAudio = true;
+            // Also check children of added nodes (e.g. a div containing an iframe)
+            for (const child of node.querySelectorAll?.("script[src], iframe[src], video, audio") || []) {
+              if (child.tagName === "SCRIPT" && child.src) found.scripts.push(child.src);
+              if (child.tagName === "IFRAME" && child.src) found.iframes.push(child.src);
+              if (child.tagName === "VIDEO") found.hasVideo = true;
+              if (child.tagName === "AUDIO") found.hasAudio = true;
+            }
+          }
+        }
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      setTimeout(() => {
+        observer.disconnect();
+        resolve(found);
+      }, timeout);
+    });
+  }, timeoutMs);
+}
+
+async function scanOnePage(context, url, timeout) {
+  const page = await context.newPage();
+  const networkRequests = [];
+
+  page.on("request", (req) => {
+    networkRequests.push(req.url());
+  });
+
+  await page.goto(url, { waitUntil: "networkidle", timeout });
+
+  // Scroll to trigger lazy-loaded video embeds
+  await scrollPage(page);
+
+  // Wait for dynamically injected media elements (scripts, iframes, video/audio)
+  const dynamicMedia = await waitForDynamicMedia(page, 5000);
+
+  for (const src of [...dynamicMedia.scripts, ...dynamicMedia.iframes]) {
+    networkRequests.push(src);
+  }
+
+  // Re-grab HTML after dynamic content has loaded
+  const html = await page.content();
+  const detected = detectPlayers(html, networkRequests);
+
+  // Extract links for further crawling
+  const links = await page.evaluate(() =>
+    Array.from(document.querySelectorAll("a[href]"), (a) => a.href)
+  );
+
+  await page.close();
+  return { detected, links };
+}
+
+const DEFAULT_CONCURRENCY = 6;
+
+async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile = null, concurrency = DEFAULT_CONCURRENCY } = {}) {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    viewport: { width: 1920, height: 1080 },
+  });
+
+  const baseUrl = new URL(startUrl);
+  const domain = baseUrl.hostname.replace(/^www\./, "");
+  let visited = new Set();
+  let queue = [normalizeUrl(startUrl, startUrl)];
+  let results = [];
+  let cookiesAccepted = false;
+
+  // Resume from previous scan state
+  if (resumeFile) {
+    const prev = JSON.parse(readFileSync(resumeFile, "utf-8"));
+
+    if (prev._state?.visited?.length) {
+      visited = new Set(prev._state.visited);
+    } else {
+      const allUrls = new Set();
+      for (const d of prev.details || []) allUrls.add(d.url);
+      for (const [, data] of Object.entries(prev.playerSummary || {})) {
+        for (const p of data.pages || []) allUrls.add(p);
+      }
+      visited = allUrls;
+    }
+
+    queue = prev._state?.queue?.length ? prev._state.queue : [normalizeUrl(startUrl, startUrl)];
+
+    results = (prev.details || []).map((d) => ({
+      url: d.url,
+      players: d.players.map((p) => ({ player: p.name, evidence: p.evidence })),
+    }));
+    for (const v of visited) {
+      if (!results.find((r) => r.url === v)) {
+        results.push({ url: v, players: [] });
+      }
+    }
+
+    console.log(chalk.yellow(`\nResuming scan of ${domain}`));
+    console.log(chalk.yellow(`Previously scanned: ${visited.size} pages, Queue: ${queue.length} URLs`));
+  } else {
+    console.log(chalk.blue(`\nStarting scan of ${domain}`));
+  }
+  console.log(chalk.gray(`Max pages: ${maxPages}, Timeout per page: ${timeout}ms, Concurrency: ${concurrency}\n`));
+
+  // Accept cookies on first page before parallel scanning
+  {
+    const firstUrl = queue.shift();
+    if (firstUrl && !visited.has(firstUrl)) {
+      visited.add(firstUrl);
+      process.stdout.write(
+        chalk.gray(`[${visited.size}/${maxPages}] `) + chalk.white(truncate(firstUrl, 80)) + " "
+      );
+      try {
+        const page = await context.newPage();
+        const networkRequests = [];
+        page.on("request", (req) => networkRequests.push(req.url()));
+        await page.goto(firstUrl, { waitUntil: "networkidle", timeout });
+
+        cookiesAccepted = await acceptCookies(page);
+        if (cookiesAccepted) {
+          await page.goto(firstUrl, { waitUntil: "networkidle", timeout });
+        }
+
+        await scrollPage(page);
+        const dynamicMedia = await waitForDynamicMedia(page, 5000);
+        for (const src of [...dynamicMedia.scripts, ...dynamicMedia.iframes]) {
+          networkRequests.push(src);
+        }
+        const html = await page.content();
+        const detected = detectPlayers(html, networkRequests);
+
+        if (detected.length > 0) {
+          console.log(chalk.green(`  [${detected.map((d) => d.player).join(", ")}]`));
+        } else {
+          console.log(chalk.gray("  -"));
+        }
+        results.push({ url: firstUrl, players: detected });
+
+        const links = await page.evaluate(() =>
+          Array.from(document.querySelectorAll("a[href]"), (a) => a.href)
+        );
+        const newLinks = [];
+        for (const link of links) {
+          const norm = normalizeUrl(link, firstUrl);
+          if (norm && !visited.has(norm) && !queue.includes(norm) && isSameDomain(norm, domain) && !shouldSkipUrl(norm)) {
+            newLinks.push(norm);
+          }
+        }
+        queue.push(...prioritizeUrls(newLinks));
+        await page.close();
+      } catch (err) {
+        console.log(chalk.red(`  ERROR: ${err.message.slice(0, 60)}`));
+        results.push({ url: firstUrl, players: [], error: err.message });
+      }
+    }
+  }
+
+  // Parallel crawl loop
+  const queuedSet = new Set(queue);
+  while (queue.length > 0 && visited.size < maxPages) {
+    // Grab a batch of URLs to scan in parallel
+    const batch = [];
+    while (batch.length < concurrency && queue.length > 0 && visited.size + batch.length < maxPages) {
+      const url = queue.shift();
+      if (!url || visited.has(url)) continue;
+      batch.push(url);
+    }
+    if (batch.length === 0) break;
+
+    // Mark all batch URLs as visited before launching (prevents duplicates)
+    for (const url of batch) visited.add(url);
+
+    // Print batch start
+    const batchStart = visited.size - batch.length + 1;
+    for (let i = 0; i < batch.length; i++) {
+      console.log(chalk.gray(`[${batchStart + i}/${maxPages}] `) + chalk.white(truncate(batch[i], 80)) + chalk.gray(" ..."));
+    }
+
+    // Scan all pages in batch concurrently
+    const batchResults = await Promise.allSettled(
+      batch.map((url) => scanOnePage(context, url, timeout))
+    );
+
+    // Process results and collect new links
+    for (let i = 0; i < batch.length; i++) {
+      const url = batch[i];
+      const result = batchResults[i];
+
+      if (result.status === "fulfilled") {
+        const { detected, links } = result.value;
+        if (detected.length > 0) {
+          console.log(chalk.green(`  ✓ ${truncate(url, 65)}  [${detected.map((d) => d.player).join(", ")}]`));
+        }
+        results.push({ url, players: detected });
+
+        // Add discovered links to queue
+        for (const link of links) {
+          const norm = normalizeUrl(link, url);
+          if (norm && !visited.has(norm) && !queuedSet.has(norm) && isSameDomain(norm, domain) && !shouldSkipUrl(norm)) {
+            queuedSet.add(norm);
+            queue.push(norm);
+          }
+        }
+      } else {
+        const errMsg = result.reason?.message || "Unknown error";
+        console.log(chalk.red(`  ✗ ${truncate(url, 65)}  ${errMsg.slice(0, 50)}`));
+        results.push({ url, players: [], error: errMsg });
+      }
+    }
+
+    // Re-prioritize remaining queue after each batch (new video-likely URLs bubble up)
+    queue.splice(0, queue.length, ...prioritizeUrls(queue));
+  }
+
+  await browser.close();
+  return {
+    domain,
+    results,
+    pagesScanned: visited.size,
+    _state: { visited: [...visited], queue },
+  };
+}
+
+function detectPlayers(html, networkRequests) {
+  const found = [];
+
+  for (const [player, config] of Object.entries(DETECTORS)) {
+    const matches = [];
+
+    // Check HTML content
+    for (const pattern of config.patterns) {
+      if (pattern.test(html)) {
+        const match = html.match(pattern);
+        if (match) matches.push(`HTML: ${match[0].slice(0, 80)}`);
+      }
+    }
+
+    // Check network requests
+    for (const scriptPattern of config.scripts) {
+      const matchingReqs = networkRequests.filter((r) => scriptPattern.test(r));
+      if (matchingReqs.length > 0) {
+        matches.push(`Network: ${matchingReqs[0].slice(0, 80)}`);
+      }
+    }
+
+    if (matches.length > 0) {
+      found.push({ player, evidence: matches });
+    }
+  }
+
+  return found;
+}
+
+// ── Report ──────────────────────────────────────────────────────────
+
+function generateReport({ domain, results, pagesScanned, _state }) {
+  const playerSummary = {};
+  const pagesWithPlayers = [];
+  const pagesWithoutPlayers = [];
+
+  for (const { url, players } of results) {
+    if (players.length > 0) {
+      pagesWithPlayers.push({ url, players });
+      for (const { player } of players) {
+        if (!playerSummary[player]) playerSummary[player] = [];
+        playerSummary[player].push(url);
+      }
+    } else {
+      pagesWithoutPlayers.push(url);
+    }
+  }
+
+  const playerNames = Object.keys(playerSummary);
+  const isBBCustomer = playerSummary["Blue Billywig"]?.length > 0;
+
+  console.log("\n" + chalk.bold.blue("═".repeat(70)));
+  console.log(chalk.bold.blue(`  VIDEOSCAN RAPPORT - ${domain}`));
+  console.log(chalk.bold.blue("═".repeat(70)));
+
+  console.log(chalk.bold(`\n  Pagina's gescand:     ${pagesScanned}`));
+  console.log(chalk.bold(`  Pagina's met video:   ${pagesWithPlayers.length}`));
+  console.log(
+    chalk.bold(`  Unieke videoplayers:  ${playerNames.length}`)
+  );
+
+  if (playerNames.length > 0) {
+    console.log(chalk.bold.yellow("\n  ── Gevonden Players ──────────────────────────"));
+    for (const [player, urls] of Object.entries(playerSummary).sort(
+      (a, b) => b[1].length - a[1].length
+    )) {
+      const isBB = player === "Blue Billywig";
+      const color = isBB ? chalk.green : chalk.white;
+      console.log(color(`\n  ${isBB ? "★" : "•"} ${player} (${urls.length} pagina's)`));
+      for (const url of urls.slice(0, 5)) {
+        console.log(chalk.gray(`    → ${truncate(url, 65)}`));
+      }
+      if (urls.length > 5) {
+        console.log(chalk.gray(`    ... en ${urls.length - 5} meer`));
+      }
+    }
+  }
+
+  if (pagesWithPlayers.length > 0) {
+    console.log(chalk.bold.yellow("\n  ── Detail per Pagina ─────────────────────────"));
+    for (const { url, players } of pagesWithPlayers) {
+      console.log(chalk.white(`\n  ${truncate(url, 65)}`));
+      for (const { player, evidence } of players) {
+        const isBB = player === "Blue Billywig";
+        console.log((isBB ? chalk.green : chalk.gray)(`    ${isBB ? "★" : "•"} ${player}`));
+      }
+    }
+  }
+
+  console.log(chalk.bold.blue("\n" + "═".repeat(70)));
+
+  // Save JSON report
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const jsonFile = `videoscan-${domain}-${ts}.json`;
+  const jsonReport = {
+    domain,
+    scanDate: new Date().toISOString(),
+    pagesScanned,
+    pagesWithVideo: pagesWithPlayers.length,
+    uniquePlayers: playerNames.length,
+    playerSummary: Object.fromEntries(
+      Object.entries(playerSummary).map(([p, urls]) => [p, { count: urls.length, pages: urls }])
+    ),
+    details: pagesWithPlayers.map(({ url, players }) => ({
+      url,
+      players: players.map((p) => ({ name: p.player, evidence: p.evidence })),
+    })),
+    _state,
+  };
+  writeFileSync(jsonFile, JSON.stringify(jsonReport, null, 2));
+  console.log(chalk.green(`\n  Rapport opgeslagen: ${jsonFile}`));
+  console.log("");
+}
+
+// ── Main ────────────────────────────────────────────────────────────
+
+function truncate(str, len) {
+  return str.length > len ? str.slice(0, len - 3) + "..." : str;
+}
+
+function printUsage() {
+  console.log(`
+${chalk.bold("BB Videoscan")} - Scan websites voor videoplayer gebruik
+
+${chalk.bold("Gebruik:")}
+  node scan.mjs <url> [opties]
+
+${chalk.bold("Opties:")}
+  --max-pages <n>       Max pagina's te scannen (standaard: 50)
+  --timeout <ms>        Timeout per pagina in ms (standaard: 15000)
+  --concurrency <n>     Pagina's tegelijk scannen (standaard: 6)
+  --resume <json-file>  Hervat scan vanuit eerder resultaat
+
+${chalk.bold("Voorbeelden:")}
+  node scan.mjs https://www.menzis.nl
+  node scan.mjs https://www.menzis.nl --max-pages 100 --concurrency 10
+  node scan.mjs https://www.menzis.nl --resume videoscan-menzis.nl-2026-03-06.json --max-pages 400
+`);
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+
+  if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
+    printUsage();
+    process.exit(0);
+  }
+
+  const resumeIdx = args.indexOf("--resume");
+  let resumeFile = null;
+  let url;
+
+  if (resumeIdx !== -1 && args[resumeIdx + 1]) {
+    resumeFile = args[resumeIdx + 1];
+    if (!existsSync(resumeFile)) {
+      console.error(chalk.red(`Resume bestand niet gevonden: ${resumeFile}`));
+      process.exit(1);
+    }
+    // Get URL from resume file or from args
+    const prevData = JSON.parse(readFileSync(resumeFile, "utf-8"));
+    url = args.find((a) => a.startsWith("http")) || `https://www.${prevData.domain}`;
+  } else {
+    url = args[0];
+    if (!url.startsWith("http")) {
+      console.error(chalk.red("URL moet beginnen met http:// of https://"));
+      process.exit(1);
+    }
+  }
+
+  const maxPages = parseInt(args[args.indexOf("--max-pages") + 1]) || 50;
+  const timeout = parseInt(args[args.indexOf("--timeout") + 1]) || 15000;
+  const concurrency = parseInt(args[args.indexOf("--concurrency") + 1]) || DEFAULT_CONCURRENCY;
+
+  try {
+    const scanResult = await crawlSite(url, { maxPages, timeout, resumeFile, concurrency });
+    generateReport(scanResult);
+  } catch (err) {
+    console.error(chalk.red(`Scan mislukt: ${err.message}`));
+    process.exit(1);
+  }
+}
+
+main();

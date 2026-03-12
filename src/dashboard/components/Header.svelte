@@ -12,9 +12,11 @@
 
   interface Props {
     refreshAll: (refresh?: boolean) => void;
+    currentPage: 'dashboard' | 'videoscan';
+    onNavigate: (page: 'dashboard' | 'videoscan') => void;
   }
 
-  let { refreshAll }: Props = $props();
+  let { refreshAll, currentPage, onNavigate }: Props = $props();
 
   let connectionState = $derived(getConnectionState());
   let usage = $derived(getUsage());
@@ -108,6 +110,10 @@
     oninput={(e) => setSearchQuery((e.currentTarget as HTMLInputElement).value)}
   />
   <div class="header-right">
+    <nav class="nav-tabs">
+      <button class="nav-tab" class:active={currentPage === 'dashboard'} onclick={() => onNavigate('dashboard')}>Dashboard</button>
+      <button class="nav-tab" class:active={currentPage === 'videoscan'} onclick={() => onNavigate('videoscan')}>Videoscan</button>
+    </nav>
     <div class="usage-bars" title={updatedAt}>
       <span>5h</span>
       <progress class="bright" value={usage5h} max="100" title={reset5h}></progress>
@@ -275,6 +281,36 @@
 
   .global-search::placeholder {
     color: #6e7681;
+  }
+
+  .nav-tabs {
+    display: flex;
+    gap: 2px;
+    background: #161b22;
+    border-radius: 6px;
+    padding: 2px;
+  }
+
+  .nav-tab {
+    background: transparent;
+    border: none;
+    color: #8b949e;
+    padding: 4px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 500;
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    transition: all 0.15s;
+  }
+
+  .nav-tab:hover {
+    color: #c9d1d9;
+  }
+
+  .nav-tab.active {
+    background: #2a313b;
+    color: #e6edf3;
   }
 
   .header-right {

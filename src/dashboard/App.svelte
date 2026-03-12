@@ -17,6 +17,9 @@
   import OrchestratorPanel from './components/OrchestratorPanel.svelte';
   import OrchestratorChat from './components/OrchestratorChat.svelte';
   import ToastContainer from './components/ToastContainer.svelte';
+  import VideoscanPage from './components/VideoscanPage.svelte';
+
+  let currentPage = $state<'dashboard' | 'videoscan'>('dashboard');
 
   function refreshAll(refresh = false) {
     fetchPRs(refresh);
@@ -42,18 +45,22 @@
 </script>
 
 <div class="container">
-  <Header {refreshAll} />
-  <WorkItems />
-  <OrchestratorPanel />
-  <div class="bottom-grid">
-    <div class="bottom-left">
-      <TaskList />
-      <ProcessList />
+  <Header {refreshAll} {currentPage} onNavigate={(page) => currentPage = page} />
+  {#if currentPage === 'videoscan'}
+    <VideoscanPage />
+  {:else}
+    <WorkItems />
+    <OrchestratorPanel />
+    <div class="bottom-grid">
+      <div class="bottom-left">
+        <TaskList />
+        <ProcessList />
+      </div>
+      <div class="bottom-right">
+        <TestingAssignment />
+      </div>
     </div>
-    <div class="bottom-right">
-      <TestingAssignment />
-    </div>
-  </div>
+  {/if}
 </div>
 <NotificationSidebar />
 <OrchestratorChat />

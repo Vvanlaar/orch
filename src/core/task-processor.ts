@@ -39,6 +39,7 @@ import {
   checkoutPRInWorktree,
   findRemoteForRepo,
 } from './git-ops.js';
+import { runVideoscan } from './videoscan-runner.js';
 import type { Task } from './types.js';
 
 let onTaskUpdate: (() => void) | null = null;
@@ -345,6 +346,41 @@ async function processPrCommentFix(task: Task): Promise<void> {
   }
 }
 
+async function processVideoscan(task: Task): Promise<void> {
+  const ctx = task.context;
+  if (!ctx.scanUrl) {
+    failTask(task.id, 'No scanUrl in task context');
+    notifyUpdate();
+    return;
+  }
+
+  clearStreamingOutput(task.id);
+  startTask(task.id);
+  notifyUpdate();
+
+  try {
+    const result = await runVideoscan(task.id, {
+      scanUrl: ctx.scanUrl,
+      maxPages: ctx.maxPages,
+      concurrency: ctx.concurrency,
+      resumeFile: ctx.resumeFile,
+    });
+
+    if (result.success) {
+      const parts = [`Scan complete`];
+      if (result.jsonFile) parts.push(`JSON: ${result.jsonFile}`);
+      if (result.htmlFile) parts.push(`Report: ${result.htmlFile}`);
+      completeTask(task.id, parts.join('\n'));
+    } else {
+      failTask(task.id, result.error || 'Videoscan failed');
+    }
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    failTask(task.id, error);
+  }
+  notifyUpdate();
+}
+
 function generateBranchName(task: Task): string {
   const prefix = task.type === 'issue-fix' ? 'bug' : task.type === 'code-gen' ? 'feat' : 'maintenance';
   const id = task.context.workItemId || task.context.issueNumber || task.id;
@@ -476,6 +512,11 @@ async function processTask(task: Task): Promise<void> {
   // Route pr-comment-fix to specialized processor
   if (task.type === 'pr-comment-fix') {
     return processPrCommentFix(task);
+  }
+
+  // Route videoscan to dedicated runner (no Claude needed)
+  if (task.type === 'videoscan') {
+    return processVideoscan(task);
   }
 
   clearStreamingOutput(task.id);

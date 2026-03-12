@@ -9,7 +9,7 @@ export interface Terminal {
   available?: boolean;
 }
 
-export type TaskType = 'pr-review' | 'issue-fix' | 'code-gen' | 'docs' | 'pipeline-fix' | 'resolution-review' | 'pr-comment-fix' | 'testing';
+export type TaskType = 'pr-review' | 'issue-fix' | 'code-gen' | 'docs' | 'pipeline-fix' | 'resolution-review' | 'pr-comment-fix' | 'testing' | 'videoscan';
 
 export interface Task {
   id: number;
@@ -60,6 +60,11 @@ export interface TaskContext {
   ghRepoRef?: string; // "owner/repo" for gh commands
   // Ntfy suggestion workflow
   suggestionNote?: string; // user-appended instructions from ntfy reply
+  // Videoscan
+  scanUrl?: string;
+  maxPages?: number;
+  concurrency?: number;
+  resumeFile?: string; // path to previous scan JSON for resume
 }
 
 export interface Config {
