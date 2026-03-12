@@ -100,10 +100,16 @@ async function enrichMergeStatus(prs: GitHubPR[]): Promise<void> {
 
   await Promise.all([...byRepo.entries()].map(async ([repo, repoPrs]) => {
     const [owner, name] = repo.split('/');
-    const prFields = repoPrs.map((pr, i) => `pr${i}: pullRequest(number: ${pr.number}) { mergeable reviewThreads(first: 100) { nodes { isResolved comments(first: 1) { nodes { body } } } } }`).join('\n');
+    const prFields = repoPrs.map((pr, i) => `pr${i}: pullRequest(number: ${pr.number}) { mergeable reviewThreads(first: 100) { nodes { isResolved isOutdated firstComment: comments(first: 1) { nodes { body } } lastReply: comments(last: 1) { totalCount nodes { author { login } } } } } }`).join('\n');
 
     try {
-      const result = await graphql<{ repository: Record<string, { mergeable: string; reviewThreads?: { nodes: { isResolved: boolean; comments?: { nodes: { body: string }[] } }[] } }> }>(
+      interface ThreadNode {
+        isResolved: boolean;
+        isOutdated: boolean;
+        firstComment?: { nodes: { body: string }[] };
+        lastReply?: { totalCount: number; nodes: { author: { login: string } }[] };
+      }
+      const result = await graphql<{ repository: Record<string, { mergeable: string; reviewThreads?: { nodes: ThreadNode[] } }> }>(
         `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ${prFields} } }`,
         { owner, name },
       );
@@ -111,9 +117,15 @@ async function enrichMergeStatus(prs: GitHubPR[]): Promise<void> {
         const prData = result.repository[`pr${i}`];
         if (prData?.mergeable) repoPrs[i].mergeable = prData.mergeable as GitHubPR['mergeable'];
         const threads = prData?.reviewThreads?.nodes || [];
-        repoPrs[i].commentCount = threads.filter(t =>
-          !t.isResolved && !(t.comments?.nodes?.[0]?.body || '').startsWith('Pull request overview')
-        ).length;
+        repoPrs[i].commentCount = threads.filter(t => {
+          if (t.isResolved || t.isOutdated) return false;
+          if ((t.firstComment?.nodes?.[0]?.body || '').startsWith('Pull request overview')) return false;
+          // Skip threads where PR author already replied
+          const replyCount = t.lastReply?.totalCount || 0;
+          const lastAuthor = t.lastReply?.nodes?.[0]?.author?.login;
+          if (replyCount > 1 && lastAuthor === repoPrs[i].author) return false;
+          return true;
+        }).length;
       }
     } catch (err: any) {
       const is404 = err?.status === 404 || err?.errors?.[0]?.type === 'NOT_FOUND';
