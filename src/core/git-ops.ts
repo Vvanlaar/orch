@@ -179,7 +179,7 @@ function linkOrInstallNodeModules(worktreePath: string, sourceRepoPath: string):
       log.info(`Linked node_modules from ${sourceRepoPath}`);
     } else if (!same) {
       log.info('Lockfile differs, running npm ci');
-      execSync('npm ci --prefer-offline', { cwd: worktreePath, stdio: 'pipe', timeout: 120000 });
+      execSync('npm ci --prefer-offline', { cwd: worktreePath, stdio: 'pipe', timeout: 300000 });
     }
   } catch (err) {
     log.error('Failed to link/install node_modules', err);

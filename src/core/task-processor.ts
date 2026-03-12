@@ -183,10 +183,10 @@ async function processPrCommentFix(task: Task): Promise<void> {
     // Step 0: Merge base branch to fix conflicts
     const baseBranch = task.context.baseBranch;
     if (baseBranch) {
-      const { execSync } = await import('child_process');
-      execSync(`git fetch origin ${baseBranch}`, { cwd: worktreePath, stdio: 'pipe' });
+      const { execFileSync } = await import('child_process');
+      execFileSync('git', ['fetch', 'origin', baseBranch], { cwd: worktreePath, stdio: 'pipe' });
       try {
-        execSync(`git merge origin/${baseBranch} --no-edit`, { cwd: worktreePath, stdio: 'pipe' });
+        execFileSync('git', ['merge', `origin/${baseBranch}`, '--no-edit'], { cwd: worktreePath, stdio: 'pipe' });
         log.info(`Task #${task.id} Step 0: Merged ${baseBranch} (no conflicts)`);
       } catch {
         log.info(`Task #${task.id} Step 0: Merge conflicts detected, letting Claude resolve`);
@@ -194,15 +194,15 @@ async function processPrCommentFix(task: Task): Promise<void> {
         const mergeResult = await runClaude(task, mergePrompt, { allowEdits: true, workingDir: worktreePath });
         if (mergeResult.success) {
           try {
-            execSync('git commit --no-edit', { cwd: worktreePath, stdio: 'pipe' });
+            execFileSync('git', ['commit', '--no-edit'], { cwd: worktreePath, stdio: 'pipe' });
             log.info(`Task #${task.id} Step 0: Merge conflicts resolved and committed`);
           } catch {
             log.warn(`Task #${task.id} Merge commit failed, aborting merge`);
-            try { execSync('git merge --abort', { cwd: worktreePath, stdio: 'pipe' }); } catch {}
+            try { execFileSync('git', ['merge', '--abort'], { cwd: worktreePath, stdio: 'pipe' }); } catch {}
           }
         } else {
           log.warn(`Task #${task.id} Merge conflict resolution failed, aborting merge`);
-          try { execSync('git merge --abort', { cwd: worktreePath, stdio: 'pipe' }); } catch {}
+          try { execFileSync('git', ['merge', '--abort'], { cwd: worktreePath, stdio: 'pipe' }); } catch {}
         }
       }
     }
@@ -245,10 +245,23 @@ async function processPrCommentFix(task: Task): Promise<void> {
         throw new Error('Failed to commit changes');
       }
 
-      // Push HEAD to the remote PR branch (local branch is pr-N, not targetBranch)
-      const { execSync } = await import('child_process');
+      // Pull latest from remote branch then push (avoids non-fast-forward rejection)
+      const { execFileSync } = await import('child_process');
       try {
-        execSync(`git push origin HEAD:${targetBranch}`, { cwd: worktreePath, stdio: 'pipe' });
+        execFileSync('git', ['fetch', 'origin', targetBranch], { cwd: worktreePath, stdio: 'pipe' });
+        try {
+          execFileSync('git', ['rebase', `origin/${targetBranch}`], { cwd: worktreePath, stdio: 'pipe' });
+        } catch {
+          // Rebase conflict — abort and try merge instead
+          try { execFileSync('git', ['rebase', '--abort'], { cwd: worktreePath, stdio: 'pipe' }); } catch {}
+          try {
+            execFileSync('git', ['merge', `origin/${targetBranch}`, '--no-edit'], { cwd: worktreePath, stdio: 'pipe' });
+          } catch (mergeErr) {
+            try { execFileSync('git', ['merge', '--abort'], { cwd: worktreePath, stdio: 'pipe' }); } catch {}
+            throw new Error(`Failed to merge with origin/${targetBranch}: ${mergeErr}`);
+          }
+        }
+        execFileSync('git', ['push', 'origin', `HEAD:${targetBranch}`], { cwd: worktreePath, stdio: 'pipe' });
       } catch (pushErr) {
         throw new Error(`Failed to push changes: ${pushErr}`);
       }
