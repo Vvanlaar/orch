@@ -23,6 +23,8 @@ function createTaskOrSuggestion(type: Parameters<typeof createTask>[0], repo: st
 
 // Track processed items to avoid duplicates
 const processed = new Set<string>();
+// When true, poll marks items as processed without creating tasks (first-run seeding)
+let seedMode = false;
 
 // Track repos that return 404 (inaccessible/deleted/renamed) to avoid repeated errors
 const inaccessibleRepos = new Set<string>();
@@ -63,18 +65,17 @@ const taskTypeToPollerType: Record<string, string> = {
   'pr-comment-fix': 'review-comment',
 };
 
-function initProcessedFromDb(): void {
+function initProcessedFromDb(): number {
   const tasks = getAllTasks(500);
   for (const task of tasks) {
     const id = task.context.prNumber || task.context.issueNumber || task.context.workItemId;
     if (id) {
       const pollerType = taskTypeToPollerType[task.type] || task.type;
-      // Add key WITHOUT updatedAt — poller keys with updatedAt will still be unique,
-      // but we also add the base key so first-poll dedup works on restart
       const key = getProcessedKey(task.context.source, pollerType, id);
       processed.add(key);
     }
   }
+  return tasks.length;
 }
 
 function resolveRepoPath(fullName: string): string | null {
@@ -154,6 +155,10 @@ async function pollMyPRReviewComments(repoFullName: string): Promise<void> {
         reviewComments,
       };
 
+      if (seedMode) {
+        markProcessed(key);
+        continue;
+      }
       createTaskOrSuggestion('pr-comment-fix', repoFullName, repoPath, context);
       markProcessed(key);
       log.info(`Created pr-comment-fix ${suggestionMode ? 'suggestion' : 'task'} for ${repoFullName}#${pr.number} (${unresolvedComments.length} comments)`);
@@ -192,6 +197,10 @@ async function pollGitHubRepo(repoFullName: string): Promise<void> {
         url: pr.html_url,
       };
 
+      if (seedMode) {
+        markProcessed(key);
+        continue;
+      }
       createTaskOrSuggestion('pr-review', repoFullName, repoPath, context);
       markProcessed(key);
       log.info(`Created PR review ${suggestionMode ? 'suggestion' : 'task'} for ${repoFullName}#${pr.number}`);
@@ -212,6 +221,11 @@ async function pollGitHubRepo(repoFullName: string): Promise<void> {
 
       const key = getProcessedKey('github', 'issue', issue.number);
       if (isProcessed(key)) continue;
+
+      if (seedMode) {
+        markProcessed(key);
+        continue;
+      }
 
       const context: TaskContext = {
         source: 'github',
@@ -263,6 +277,10 @@ async function pollAdoRepo(project: string, repoName: string, localPath: string)
       };
 
       const repoFullName = `${project}/${repoName}`;
+      if (seedMode) {
+        markProcessed(key);
+        continue;
+      }
       createTaskOrSuggestion('pr-review', repoFullName, localPath, context);
       markProcessed(key);
       log.info(`Created PR review ${suggestionMode ? 'suggestion' : 'task'} for ${repoFullName}!${pr.pullRequestId}`);
@@ -299,11 +317,21 @@ let pollInterval: NodeJS.Timeout | null = null;
 export function startPoller(intervalMs = 60000): void {
   if (pollInterval) return;
 
-  initProcessedFromDb();
-  log.info(`Started (interval: ${intervalMs / 1000}s)`);
+  const tasksFromDb = initProcessedFromDb();
+  log.info(`Started (interval: ${intervalMs / 1000}s, ${tasksFromDb} tasks from DB)`);
 
-  // Poll immediately, then on interval
-  pollAll().catch(err => log.error('Poll failed', err));
+  // If no tasks in DB, do a silent seed pass first to avoid creating tasks for all existing items
+  const firstPoll = tasksFromDb === 0
+    ? (async () => {
+        seedMode = true;
+        log.info('Seed pass: marking existing items as processed...');
+        await pollAll();
+        seedMode = false;
+        log.info(`Seed complete: ${processed.size} items marked`);
+      })()
+    : pollAll();
+
+  firstPoll.catch(err => log.error('Poll failed', err));
   pollInterval = setInterval(() => {
     pollAll().catch(err => log.error('Poll failed', err));
   }, intervalMs);
