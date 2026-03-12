@@ -2,6 +2,9 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import type { Task } from './types.js';
 import { runClaude } from './claude-runner.js';
+import { createLogger } from './logger.js';
+
+const log = createLogger('learnings');
 
 const LEARNINGS_FILE = '.claude/learnings.md';
 
@@ -73,13 +76,13 @@ export async function extractLesson(
   const result = await runClaude(successfulRetry, prompt, { allowEdits: false });
 
   if (!result.success) {
-    console.error('[learnings] Failed to extract lesson:', result.error);
+    log.error('Failed to extract lesson', result.error);
     return null;
   }
 
   const parsed = parseLessonFromOutput(result.output);
   if (!parsed) {
-    console.error('[learnings] Failed to parse lesson from output');
+    log.error('Failed to parse lesson from output');
     return null;
   }
 
@@ -101,7 +104,7 @@ export function storeLearning(learning: Learning, repoPath: string): void {
     : '# Learnings\n\nAuto-generated lessons from task retries.\n\n';
 
   writeFileSync(filePath, existing + formatLearningEntry(learning) + '\n');
-  console.log(`[learnings] Stored learning in ${filePath}`);
+  log.info(`Stored learning in ${filePath}`);
 }
 
 // Map task types to skill files
@@ -144,12 +147,12 @@ Important: Only suggest updates that are general enough to help future tasks, no
   const result = await runClaude(task, prompt, { allowEdits: false });
 
   if (!result.success) {
-    console.error('[learnings] Failed to analyze skill update:', result.error);
+    log.error('Failed to analyze skill update', result.error);
     return false;
   }
 
   if (result.output.includes('NO_UPDATE_NEEDED')) {
-    console.log(`[learnings] Skill ${skillFile} does not need update`);
+    log.info(`Skill ${skillFile} does not need update`);
     return false;
   }
 
@@ -158,10 +161,10 @@ Important: Only suggest updates that are general enough to help future tasks, no
   const outputTrimmed = result.output.trim();
   if (outputTrimmed.startsWith('#') || outputTrimmed.startsWith('---')) {
     writeFileSync(skillPath, outputTrimmed);
-    console.log(`[learnings] Updated skill file: ${skillPath}`);
+    log.info(`Updated skill file: ${skillPath}`);
     return true;
   }
 
-  console.log(`[learnings] Skipping skill update - response doesn't look like valid skill content`);
+  log.info(`Skipping skill update - response doesn't look like valid skill content`);
   return false;
 }

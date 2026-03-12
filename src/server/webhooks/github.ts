@@ -1,10 +1,13 @@
 import { createHmac, timingSafeEqual } from 'crypto';
 import { Router, type Request, type Response } from 'express';
 import { config } from '../../core/config.js';
+import { createLogger } from '../../core/logger.js';
 import { createTask } from '../../core/task-queue.js';
 import { triggerUpdate } from '../../core/task-processor.js';
 import type { TaskContext } from '../../core/types.js';
 import path from 'path';
+
+const log = createLogger('github-webhook');
 
 export const githubRouter = Router();
 
@@ -33,81 +36,86 @@ function resolveRepoPath(fullName: string): string | null {
 }
 
 githubRouter.post('/', (req: Request, res: Response) => {
-  const signature = req.headers['x-hub-signature-256'] as string | undefined;
-  const event = req.headers['x-github-event'] as string;
-  const payload = JSON.stringify(req.body);
+  try {
+    const signature = req.headers['x-hub-signature-256'] as string | undefined;
+    const event = req.headers['x-github-event'] as string;
+    const payload = JSON.stringify(req.body);
 
-  // Verify signature if secret is configured
-  if (config.github.webhookSecret && !verifySignature(payload, signature)) {
-    res.status(401).json({ error: 'Invalid signature' });
-    return;
-  }
-
-  const body = req.body;
-
-  // Handle PR events
-  if (event === 'pull_request') {
-    const action = body.action;
-    if (action === 'opened' || action === 'synchronize') {
-      const pr = body.pull_request;
-      const repo = body.repository.full_name;
-      const repoPath = resolveRepoPath(repo);
-
-      if (!repoPath) {
-        res.status(400).json({ error: 'Unknown repository' });
-        return;
-      }
-
-      const context: TaskContext = {
-        source: 'github',
-        event: `pull_request.${action}`,
-        prNumber: pr.number,
-        branch: pr.head.ref,
-        baseBranch: pr.base.ref,
-        title: pr.title,
-        body: pr.body,
-        url: pr.html_url,
-      };
-
-      const task = createTask('pr-review', repo, repoPath, context);
-      console.log(`Created PR review task #${task.id} for ${repo}#${pr.number}`);
-      triggerUpdate();
-
-      res.json({ taskId: task.id, message: 'PR review task created' });
+    // Verify signature if secret is configured
+    if (config.github.webhookSecret && !verifySignature(payload, signature)) {
+      res.status(401).json({ error: 'Invalid signature' });
       return;
     }
-  }
 
-  // Handle issue events
-  if (event === 'issues') {
-    const action = body.action;
-    if (action === 'opened') {
-      const issue = body.issue;
-      const repo = body.repository.full_name;
-      const repoPath = resolveRepoPath(repo);
+    const body = req.body;
 
-      if (!repoPath) {
-        res.status(400).json({ error: 'Unknown repository' });
+    // Handle PR events
+    if (event === 'pull_request') {
+      const action = body.action;
+      if (action === 'opened' || action === 'synchronize') {
+        const pr = body.pull_request;
+        const repo = body.repository.full_name;
+        const repoPath = resolveRepoPath(repo);
+
+        if (!repoPath) {
+          res.status(400).json({ error: 'Unknown repository' });
+          return;
+        }
+
+        const context: TaskContext = {
+          source: 'github',
+          event: `pull_request.${action}`,
+          prNumber: pr.number,
+          branch: pr.head.ref,
+          baseBranch: pr.base.ref,
+          title: pr.title,
+          body: pr.body,
+          url: pr.html_url,
+        };
+
+        const task = createTask('pr-review', repo, repoPath, context);
+        log.info(`Created PR review task #${task.id} for ${repo}#${pr.number}`);
+        triggerUpdate();
+
+        res.json({ taskId: task.id, message: 'PR review task created' });
         return;
       }
-
-      const context: TaskContext = {
-        source: 'github',
-        event: 'issues.opened',
-        issueNumber: issue.number,
-        title: issue.title,
-        body: issue.body,
-        url: issue.html_url,
-      };
-
-      const task = createTask('issue-fix', repo, repoPath, context);
-      console.log(`Created issue-fix task #${task.id} for ${repo}#${issue.number}`);
-      triggerUpdate();
-
-      res.json({ taskId: task.id, message: 'Issue fix task created' });
-      return;
     }
-  }
 
-  res.json({ message: 'Event received but not processed' });
+    // Handle issue events
+    if (event === 'issues') {
+      const action = body.action;
+      if (action === 'opened') {
+        const issue = body.issue;
+        const repo = body.repository.full_name;
+        const repoPath = resolveRepoPath(repo);
+
+        if (!repoPath) {
+          res.status(400).json({ error: 'Unknown repository' });
+          return;
+        }
+
+        const context: TaskContext = {
+          source: 'github',
+          event: 'issues.opened',
+          issueNumber: issue.number,
+          title: issue.title,
+          body: issue.body,
+          url: issue.html_url,
+        };
+
+        const task = createTask('issue-fix', repo, repoPath, context);
+        log.info(`Created issue-fix task #${task.id} for ${repo}#${issue.number}`);
+        triggerUpdate();
+
+        res.json({ taskId: task.id, message: 'Issue fix task created' });
+        return;
+      }
+    }
+
+    res.json({ message: 'Event received but not processed' });
+  } catch (err) {
+    log.error('Unhandled error in POST handler', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });

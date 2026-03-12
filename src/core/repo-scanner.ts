@@ -2,6 +2,9 @@ import { readdirSync, existsSync, statSync } from 'fs';
 import { execSync } from 'child_process';
 import { join, resolve } from 'path';
 import { config, WORKSPACES_DIR } from './config.js';
+import { createLogger } from './logger.js';
+
+const log = createLogger('repo-scanner');
 
 export interface RepoInfo {
   localPath: string;
@@ -74,7 +77,7 @@ function scanDirectory(dir: string, namePrefix: string): RepoInfo[] {
     const parsed = remote ? parseRemoteUrl(remote) : { fullName: null, source: 'unknown' as const };
 
     if (remote && parsed.source === 'unknown') {
-      console.log(`[Scanner] Unknown remote format for ${entry}: ${remote}`);
+      log.info(`Unknown remote format for ${entry}: ${remote}`);
     }
 
     repos.push({
@@ -84,7 +87,7 @@ function scanDirectory(dir: string, namePrefix: string): RepoInfo[] {
       source: parsed.source,
     });
     } catch {
-      console.warn(`[Scanner] Failed to scan ${namePrefix ? namePrefix + '/' : ''}${entry}`);
+      log.warn(`Failed to scan ${namePrefix ? namePrefix + '/' : ''}${entry}`);
     }
   }
   return repos;
@@ -94,7 +97,7 @@ export function scanRepos(): RepoInfo[] {
   const baseDir = resolve(config.repos.baseDir);
 
   if (!existsSync(baseDir)) {
-    console.warn(`[Scanner] Base directory not found: ${baseDir}`);
+    log.warn(`Base directory not found: ${baseDir}`);
     return [];
   }
 

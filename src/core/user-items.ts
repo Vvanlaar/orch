@@ -1,5 +1,8 @@
 import { config } from './config.js';
 import { getAuthenticatedUser, searchIssues, graphql } from './github-api.js';
+import { createLogger } from './logger.js';
+
+const log = createLogger('user-items');
 
 export interface GitHubPR {
   number: number;
@@ -110,7 +113,7 @@ async function enrichMergeStatus(prs: GitHubPR[]): Promise<void> {
       }
     } catch (err: any) {
       const is404 = err?.status === 404 || err?.errors?.[0]?.type === 'NOT_FOUND';
-      if (!is404) console.error(`[UserItems] Error fetching merge status for ${repo}:`, err);
+      if (!is404) log.error(`Error fetching merge status for ${repo}`, err);
     }
   }));
 }
@@ -121,7 +124,7 @@ const MY_PRS_TTL = 5 * 60 * 1000;
 
 export async function getMyGitHubPRs(refresh = false): Promise<GitHubPR[]> {
   if (!config.github.token) {
-    console.log('[UserItems] No GITHUB_TOKEN configured');
+    log.info('No GITHUB_TOKEN configured');
     return [];
   }
 
@@ -132,7 +135,7 @@ export async function getMyGitHubPRs(refresh = false): Promise<GitHubPR[]> {
 
   try {
     const user = await getAuthenticatedUser();
-    console.log(`[UserItems] Fetching PRs for GitHub user: ${user.login}`);
+    log.info(`Fetching PRs for GitHub user: ${user.login}`);
 
     const [authored, reviewing] = await Promise.all([
       searchGitHubPRs(`is:pr+is:open+author:${user.login}`),
@@ -154,10 +157,10 @@ export async function getMyGitHubPRs(refresh = false): Promise<GitHubPR[]> {
     await enrichMergeStatus(prs);
 
     myPRsCache = { items: prs, expiry: Date.now() + MY_PRS_TTL };
-    console.log(`[UserItems] Found ${prs.length} GitHub PRs`);
+    log.info(`Found ${prs.length} GitHub PRs`);
     return prs;
   } catch (err) {
-    console.error('[UserItems] Error fetching GitHub PRs:', err);
+    log.error('Error fetching GitHub PRs', err);
     return [];
   }
 }
@@ -172,16 +175,16 @@ function getAdoAuth(): string {
 
 function checkAdoConfig(...extraFields: (keyof typeof config.ado)[]): boolean {
   if (!config.ado.pat) {
-    console.log('[UserItems] No ADO_PAT configured');
+    log.info('No ADO_PAT configured');
     return false;
   }
   if (!config.ado.organization) {
-    console.log('[UserItems] No ADO_ORG configured');
+    log.info('No ADO_ORG configured');
     return false;
   }
   for (const field of extraFields) {
     if (!config.ado[field]) {
-      console.log(`[UserItems] No ADO config for ${field}`);
+      log.info(`No ADO config for ${field}`);
       return false;
     }
   }
@@ -265,7 +268,7 @@ function mapWorkItemToAdoItem(wi: any): AdoWorkItem {
 async function fetchAdoWorkItemsByQuery(wiqlQuery: string, logPrefix: string, limit = 30): Promise<AdoWorkItem[]> {
   if (!checkAdoConfig()) return [];
 
-  console.log(`[UserItems] ${logPrefix} from ADO org: ${config.ado.organization}`);
+  log.info(`${logPrefix} from ADO org: ${config.ado.organization}`);
   const auth = getAdoAuth();
 
   try {
@@ -277,13 +280,13 @@ async function fetchAdoWorkItemsByQuery(wiqlQuery: string, logPrefix: string, li
     });
 
     if (!wiqlRes.ok) {
-      console.error(`[UserItems] ADO WIQL failed (${wiqlRes.status}):`, await wiqlRes.text());
+      log.error(`ADO WIQL failed (${wiqlRes.status}): ${await wiqlRes.text()}`);
       return [];
     }
 
     const wiqlData = await wiqlRes.json();
     const workItemIds = (wiqlData.workItems || []).slice(0, limit).map((w: { id: number }) => w.id);
-    console.log(`[UserItems] ADO WIQL returned ${workItemIds.length} work item IDs`);
+    log.info(`ADO WIQL returned ${workItemIds.length} work item IDs`);
 
     if (workItemIds.length === 0) return [];
 
@@ -291,7 +294,7 @@ async function fetchAdoWorkItemsByQuery(wiqlQuery: string, logPrefix: string, li
     const detailsRes = await fetch(detailsUrl, { headers: { Authorization: `Basic ${auth}` } });
 
     if (!detailsRes.ok) {
-      console.error(`[UserItems] ADO details fetch failed (${detailsRes.status}):`, await detailsRes.text());
+      log.error(`ADO details fetch failed (${detailsRes.status}): ${await detailsRes.text()}`);
       return [];
     }
 
@@ -317,14 +320,14 @@ async function fetchAdoWorkItemsByQuery(wiqlQuery: string, logPrefix: string, li
           }
         }
       } catch (err) {
-        console.error('[UserItems] Error fetching parent titles:', err);
+        log.error('Error fetching parent titles', err);
       }
     }
 
-    console.log(`[UserItems] Found ${items.length} ADO work items`);
+    log.info(`Found ${items.length} ADO work items`);
     return items;
   } catch (err) {
-    console.error(`[UserItems] Error fetching ADO work items:`, err);
+    log.error('Error fetching ADO work items', err);
     return [];
   }
 }
@@ -415,16 +418,16 @@ export async function getResolvedWithPRComments(refresh = false): Promise<(AdoWo
         // Silently skip repos that are inaccessible (404/NOT_FOUND)
         const is404 = err?.status === 404 || err?.errors?.[0]?.type === 'NOT_FOUND';
         if (!is404) {
-          console.error(`[UserItems] Error checking PR comments for ${owner}/${repo}#${prNum}:`, err);
+          log.error(`Error checking PR comments for ${owner}/${repo}#${prNum}`, err);
         }
       }
     }
 
     prCommentsCache = { items: results, expiry: now + PR_COMMENTS_TTL };
-    console.log(`[UserItems] Found ${results.length} resolved items with PR comments`);
+    log.info(`Found ${results.length} resolved items with PR comments`);
     return results;
   } catch (err) {
-    console.error('[UserItems] Error fetching resolved items with PR comments:', err);
+    log.error('Error fetching resolved items with PR comments', err);
     return [];
   }
 }
@@ -441,21 +444,21 @@ export async function getCurrentSprint(): Promise<{ path: string; name: string }
     });
 
     if (!res.ok) {
-      console.error(`[UserItems] Failed to get current sprint (${res.status}):`, await res.text());
+      log.error(`Failed to get current sprint (${res.status}): ${await res.text()}`);
       return null;
     }
 
     const data = await res.json();
     const iteration = data.value?.[0];
     if (!iteration) {
-      console.log('[UserItems] No current iteration found');
+      log.info('No current iteration found');
       return null;
     }
 
-    console.log(`[UserItems] Current sprint: ${iteration.path}`);
+    log.info(`Current sprint: ${iteration.path}`);
     return { path: iteration.path, name: iteration.name };
   } catch (err) {
-    console.error('[UserItems] Error fetching current sprint:', err);
+    log.error('Error fetching current sprint', err);
     return null;
   }
 }
@@ -491,7 +494,7 @@ export async function getReviewedItemsInSprint(): Promise<{ sprintName: string; 
         }
       }
     } catch (err) {
-      console.error('[UserItems] Error enriching reviewed items:', err);
+      log.error('Error enriching reviewed items', err);
     }
   }
 
@@ -509,7 +512,7 @@ export async function getCurrentAndPreviousSprints(): Promise<{ current: string;
   try {
     const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
     if (!res.ok) {
-      console.error(`[UserItems] Failed to get iterations (${res.status}):`, await res.text());
+      log.error(`Failed to get iterations (${res.status}): ${await res.text()}`);
       return null;
     }
 
@@ -521,7 +524,7 @@ export async function getCurrentAndPreviousSprints(): Promise<{ current: string;
       );
 
     if (iterations.length === 0) {
-      console.log('[UserItems] No iterations found');
+      log.info('No iterations found');
       return null;
     }
 
@@ -537,16 +540,16 @@ export async function getCurrentAndPreviousSprints(): Promise<{ current: string;
       // Fallback: use the last iteration
       const last = iterations[iterations.length - 1];
       const prev = iterations.length > 1 ? iterations[iterations.length - 2] : last;
-      console.log(`[UserItems] No current sprint found, using last: ${last.path}`);
+      log.info(`No current sprint found, using last: ${last.path}`);
       return { current: last.path, previous: prev.path };
     }
 
     const current = iterations[currentIdx];
     const previous = currentIdx > 0 ? iterations[currentIdx - 1] : current;
-    console.log(`[UserItems] Sprints: current=${current.path}, previous=${previous.path}`);
+    log.info(`Sprints: current=${current.path}, previous=${previous.path}`);
     return { current: current.path, previous: previous.path };
   } catch (err) {
-    console.error('[UserItems] Error fetching iterations:', err);
+    log.error('Error fetching iterations', err);
     return null;
   }
 }
@@ -589,25 +592,25 @@ export async function getCurrentAdoUser(): Promise<AdoUser | null> {
     });
 
     if (!res.ok) {
-      console.error(`[UserItems] Failed to get current user (${res.status}):`, await res.text());
+      log.error(`Failed to get current user (${res.status}): ${await res.text()}`);
       return null;
     }
 
     const data = await res.json();
     const user = data.authenticatedUser;
     if (!user) {
-      console.log('[UserItems] No authenticated user in response');
+      log.info('No authenticated user in response');
       return null;
     }
 
-    console.log(`[UserItems] Current ADO user: ${user.providerDisplayName}`);
+    log.info(`Current ADO user: ${user.providerDisplayName}`);
     return {
       displayName: user.providerDisplayName || user.customDisplayName || '',
       email: user.properties?.Account?.$value || '',
       id: user.id || '',
     };
   } catch (err) {
-    console.error('[UserItems] Error fetching current ADO user:', err);
+    log.error('Error fetching current ADO user', err);
     return null;
   }
 }
@@ -624,7 +627,7 @@ export async function getTeamMembers(): Promise<TeamMember[]> {
     });
 
     if (!res.ok) {
-      console.error(`[UserItems] Failed to get team members (${res.status}):`, await res.text());
+      log.error(`Failed to get team members (${res.status}): ${await res.text()}`);
       return [];
     }
 
@@ -640,10 +643,10 @@ export async function getTeamMembers(): Promise<TeamMember[]> {
       });
     }
 
-    console.log(`[UserItems] Found ${members.length} team members`);
+    log.info(`Found ${members.length} team members`);
     return members;
   } catch (err) {
-    console.error('[UserItems] Error fetching team members:', err);
+    log.error('Error fetching team members', err);
     return [];
   }
 }

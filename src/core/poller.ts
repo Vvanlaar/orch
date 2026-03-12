@@ -4,8 +4,11 @@ import { createTask, createSuggestion, getAllTasks } from './task-queue.js';
 import { triggerUpdate } from './task-processor.js';
 import { sendNtfySuggestion } from './ntfy-sender.js';
 import { getEffectiveRepoMapping } from './repo-scanner.js';
+import { createLogger } from './logger.js';
 import type { Task, TaskContext } from './types.js';
 import path from 'path';
+
+const log = createLogger('poller');
 
 const suggestionMode = !!process.env.NTFY_COMMAND_TOPIC;
 
@@ -27,7 +30,7 @@ const inaccessibleRepos = new Set<string>();
 function handleRepoNotFound(err: any, repoFullName: string): boolean {
   if (err?.status === 404) {
     inaccessibleRepos.add(repoFullName);
-    console.warn(`[Poller] Repo ${repoFullName} returned 404 — skipping future polls`);
+    log.warn(`Repo ${repoFullName} returned 404 — skipping future polls`);
     return true;
   }
   return false;
@@ -153,12 +156,12 @@ async function pollMyPRReviewComments(repoFullName: string): Promise<void> {
 
       createTaskOrSuggestion('pr-comment-fix', repoFullName, repoPath, context);
       markProcessed(key);
-      console.log(`[Poller] Created pr-comment-fix ${suggestionMode ? 'suggestion' : 'task'} for ${repoFullName}#${pr.number} (${unresolvedComments.length} comments)`);
+      log.info(`Created pr-comment-fix ${suggestionMode ? 'suggestion' : 'task'} for ${repoFullName}#${pr.number} (${unresolvedComments.length} comments)`);
       triggerUpdate();
     }
   } catch (err: any) {
     if (!handleRepoNotFound(err, repoFullName)) {
-      console.error(`[Poller] Error polling review comments for ${repoFullName}:`, err);
+      log.error(`Error polling review comments for ${repoFullName}`, err);
     }
   }
 }
@@ -191,12 +194,12 @@ async function pollGitHubRepo(repoFullName: string): Promise<void> {
 
       createTaskOrSuggestion('pr-review', repoFullName, repoPath, context);
       markProcessed(key);
-      console.log(`[Poller] Created PR review ${suggestionMode ? 'suggestion' : 'task'} for ${repoFullName}#${pr.number}`);
+      log.info(`Created PR review ${suggestionMode ? 'suggestion' : 'task'} for ${repoFullName}#${pr.number}`);
       triggerUpdate();
     }
   } catch (err: any) {
     if (handleRepoNotFound(err, repoFullName)) return;
-    console.error(`[Poller] Error polling PRs for ${repoFullName}:`, err);
+    log.error(`Error polling PRs for ${repoFullName}`, err);
   }
 
   // Poll open issues
@@ -221,12 +224,12 @@ async function pollGitHubRepo(repoFullName: string): Promise<void> {
 
       createTaskOrSuggestion('issue-fix', repoFullName, repoPath, context);
       markProcessed(key);
-      console.log(`[Poller] Created issue-fix ${suggestionMode ? 'suggestion' : 'task'} for ${repoFullName}#${issue.number}`);
+      log.info(`Created issue-fix ${suggestionMode ? 'suggestion' : 'task'} for ${repoFullName}#${issue.number}`);
       triggerUpdate();
     }
   } catch (err: any) {
     if (handleRepoNotFound(err, repoFullName)) return;
-    console.error(`[Poller] Error polling issues for ${repoFullName}:`, err);
+    log.error(`Error polling issues for ${repoFullName}`, err);
   }
 }
 
@@ -262,11 +265,11 @@ async function pollAdoRepo(project: string, repoName: string, localPath: string)
       const repoFullName = `${project}/${repoName}`;
       createTaskOrSuggestion('pr-review', repoFullName, localPath, context);
       markProcessed(key);
-      console.log(`[Poller] Created PR review ${suggestionMode ? 'suggestion' : 'task'} for ${repoFullName}!${pr.pullRequestId}`);
+      log.info(`Created PR review ${suggestionMode ? 'suggestion' : 'task'} for ${repoFullName}!${pr.pullRequestId}`);
       triggerUpdate();
     }
   } catch (err) {
-    console.error(`[Poller] Error polling ADO PRs for ${project}/${repoName}:`, err);
+    log.error(`Error polling ADO PRs for ${project}/${repoName}`, err);
   }
 }
 
@@ -297,12 +300,12 @@ export function startPoller(intervalMs = 60000): void {
   if (pollInterval) return;
 
   initProcessedFromDb();
-  console.log(`[Poller] Started (interval: ${intervalMs / 1000}s)`);
+  log.info(`Started (interval: ${intervalMs / 1000}s)`);
 
   // Poll immediately, then on interval
-  pollAll().catch(console.error);
+  pollAll().catch(err => log.error('Poll failed', err));
   pollInterval = setInterval(() => {
-    pollAll().catch(console.error);
+    pollAll().catch(err => log.error('Poll failed', err));
   }, intervalMs);
 }
 
@@ -311,6 +314,6 @@ export function stopPoller(): void {
     clearInterval(pollInterval);
     pollInterval = null;
     inaccessibleRepos.clear();
-    console.log('[Poller] Stopped');
+    log.info('Stopped');
   }
 }

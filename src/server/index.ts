@@ -33,8 +33,12 @@ import { getCurrentAdoUser, getMyAdoWorkItems, getMyGitHubPRs, getMyResolvedWork
 import { startNtfyListener } from '../core/ntfy-listener.js';
 import { acceptAction, dismissAction, getOrchestratorState, runChatQuery, runOrchestrator, setNotificationGetter, setOrchestratorUpdateCallback } from '../core/orchestrator.js';
 import { loadOrchestratorRules, saveOrchestratorRules } from '../core/orch-feedback.js';
+import { createLogger, getRecentErrors } from '../core/logger.js';
+import { asyncHandler, expressErrorMiddleware, installProcessHandlers } from '../core/error-handler.js';
 import { adoRouter } from './webhooks/ado.js';
 import { githubRouter } from './webhooks/github.js';
+
+const log = createLogger('server');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -64,7 +68,10 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => clients.delete(ws));
+  ws.on('error', (err) => log.error('WebSocket client error', err));
 });
+
+wss.on('error', (err) => log.error('WebSocket server error', err));
 
 export function broadcastTasks(): void {
   const tasks = getAllTasksWithOutput(100);
@@ -141,8 +148,8 @@ app.get('/api/tasks/:id', (req, res) => {
 });
 
 // Stop running task
-app.post('/api/tasks/:id/stop', async (req, res) => {
-  const id = parseInt(req.params.id);
+app.post('/api/tasks/:id/stop', asyncHandler(async (req, res) => {
+  const id = parseInt(req.params.id as string);
   const task = getTask(id);
   if (!task) {
     res.status(404).json({ error: 'Task not found' });
@@ -156,11 +163,11 @@ app.post('/api/tasks/:id/stop', async (req, res) => {
   failTask(id, 'Stopped by user');
   broadcastTasks();
   res.json({ success: true });
-});
+}));
 
 // Delete task
-app.delete('/api/tasks/:id', async (req, res) => {
-  const id = parseInt(req.params.id);
+app.delete('/api/tasks/:id', asyncHandler(async (req, res) => {
+  const id = parseInt(req.params.id as string);
   const success = deleteTask(id);
   if (!success) {
     res.status(400).json({ error: 'Cannot delete task (not found or running)' });
@@ -168,7 +175,7 @@ app.delete('/api/tasks/:id', async (req, res) => {
   }
   broadcastTasks();
   res.json({ success: true });
-});
+}));
 
 // Retry failed task
 app.post('/api/tasks/:id/retry', (req, res) => {
@@ -420,17 +427,17 @@ function sendShellResult(res: express.Response, result: Awaited<ReturnType<typeo
 }
 
 // Open terminal in task's repo directory
-app.post('/api/tasks/:id/terminal', async (req, res) => {
-  const id = parseInt(req.params.id);
+app.post('/api/tasks/:id/terminal', asyncHandler(async (req, res) => {
+  const id = parseInt(req.params.id as string);
   const task = getTask(id);
   if (!task) {
     res.status(404).json({ error: 'Task not found' });
     return;
   }
   sendShellResult(res, await openShellAtPath(task.repoPath, `Task #${id}: ${task.repo}`));
-});
+}));
 
-app.post('/api/open-terminal', async (req, res) => {
+app.post('/api/open-terminal', asyncHandler(async (req, res) => {
   const { repoName, workItemId } = req.body as { repoName: string; workItemId?: number };
   if (!repoName || typeof repoName !== 'string' || /\.\./.test(repoName)) {
     res.status(400).json({ error: 'Invalid repoName' });
@@ -461,13 +468,13 @@ app.post('/api/open-terminal', async (req, res) => {
   const workspacePath = resolveWorkspacePath(basePath, workItemId);
   const title = workItemId ? `#${workItemId} ${repoName}` : repoName;
   sendShellResult(res, await openShellAtPath(workspacePath, title));
-});
+}));
 
-app.post('/api/terminal/run-command', async (req, res) => {
+app.post('/api/terminal/run-command', asyncHandler(async (req, res) => {
   const { command, title } = req.body as { command: string; title?: string };
   if (!command) { res.status(400).json({ error: 'command required' }); return; }
   sendShellResult(res, await openShellWithCommand(command, title ?? 'Orch Command'));
-});
+}));
 
 /** Resolve a local folder name to an absolute path, returning null if no .git exists there. */
 function resolveLocalRepo(localFolder: string): string | null {
@@ -530,10 +537,10 @@ function autoClone(
     cloneUrl = `https://dev.azure.com/${config.ado.organization}/${project || shortName}/_git/${shortName}`;
   }
 
-  console.log(`[auto-clone] Cloning ${cloneUrl} -> .workspaces/clones/${shortName}`);
+  log.info(`auto-clone: ${cloneUrl} -> .workspaces/clones/${shortName}`);
   const clonedPath = cloneRepo(cloneUrl, shortName);
   if (!clonedPath) return null;
-  console.log(`[auto-clone] Success: ${clonedPath}`);
+  log.info(`auto-clone success: ${clonedPath}`);
   return { repoPath: clonedPath, repoName: repoIdentifier };
 }
 
@@ -607,7 +614,7 @@ app.get('/api/processes', (_req, res) => {
 
     res.json(processes);
   } catch (err) {
-    console.error('[processes] Error:', err);
+    log.error('Process list error', err);
     res.json([]);
   }
 });
@@ -656,7 +663,7 @@ app.get('/api/repos', (_req, res) => {
 let orgReposCache: { data: any; expiry: number } | null = null;
 const ORG_REPOS_TTL = 10 * 60 * 1000;
 
-app.get('/api/github/org-repos', async (req, res) => {
+app.get('/api/github/org-repos', asyncHandler(async (req, res) => {
   const refresh = req.query.refresh === 'true';
   const now = Date.now();
   if (!refresh && orgReposCache && now < orgReposCache.expiry) {
@@ -684,10 +691,10 @@ app.get('/api/github/org-repos', async (req, res) => {
     res.json(repos);
   } catch (err: any) {
     const msg = err?.response?.data?.message || err?.message || String(err);
-    console.error('[org-repos] Error:', msg);
+    log.error('Failed to fetch org repos', err);
     res.status(500).json({ error: `Failed to fetch org repos: ${msg}` });
   }
-});
+}));
 
 app.post('/api/repos/clone', (req, res) => {
   const { cloneUrl, targetName } = req.body;
@@ -862,7 +869,7 @@ app.get('/api/auth/github/status', (_req, res) => {
   });
 });
 
-app.post('/api/auth/github/device', async (_req, res) => {
+app.post('/api/auth/github/device', asyncHandler(async (_req, res) => {
   if (!config.github.clientId) {
     res.status(400).json({ error: 'GITHUB_OAUTH_CLIENT_ID not configured' });
     return;
@@ -879,9 +886,9 @@ app.post('/api/auth/github/device', async (_req, res) => {
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
-});
+}));
 
-app.post('/api/auth/github/poll', async (req, res) => {
+app.post('/api/auth/github/poll', asyncHandler(async (req, res) => {
   const { device_code } = req.body;
   if (!device_code || typeof device_code !== 'string' || !config.github.clientId) {
     res.status(400).json({ error: 'Missing device_code or client_id' });
@@ -921,11 +928,11 @@ app.post('/api/auth/github/poll', async (req, res) => {
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
-});
+}));
 
 const validOwnerFilters: OwnerFilter[] = ['my', 'unassigned', 'all'];
 
-app.get('/api/workitems', async (req, res) => {
+app.get('/api/workitems', asyncHandler(async (req, res) => {
   const owner = (req.query.owner as string) || 'my';
   if (!validOwnerFilters.includes(owner as OwnerFilter)) {
     res.status(400).json({ error: 'owner must be my|unassigned|all' });
@@ -933,48 +940,48 @@ app.get('/api/workitems', async (req, res) => {
   }
   const items = await getWorkItemsBySprints(owner as OwnerFilter);
   res.json(items);
-});
+}));
 
-app.get('/api/my/prs', async (req, res) => {
+app.get('/api/my/prs', asyncHandler(async (req, res) => {
   const refresh = req.query.refresh === 'true';
   const prs = await getMyGitHubPRs(refresh);
   res.json(prs);
-});
+}));
 
-app.get('/api/my/workitems', async (_req, res) => {
+app.get('/api/my/workitems', asyncHandler(async (_req, res) => {
   const items = await getMyAdoWorkItems();
   res.json(items);
-});
+}));
 
-app.get('/api/my/resolved-workitems', async (_req, res) => {
+app.get('/api/my/resolved-workitems', asyncHandler(async (_req, res) => {
   const items = await getMyResolvedWorkItems();
   res.json(items);
-});
+}));
 
-app.get('/api/my/resolved-with-comments', async (req, res) => {
+app.get('/api/my/resolved-with-comments', asyncHandler(async (req, res) => {
   const refresh = req.query.refresh === 'true';
   const items = await getResolvedWithPRComments(refresh);
   res.json(items);
-});
+}));
 
-app.get('/api/sprint/reviewed-items', async (_req, res) => {
+app.get('/api/sprint/reviewed-items', asyncHandler(async (_req, res) => {
   const result = await getReviewedItemsInSprint();
   res.json(result);
-});
+}));
 
-app.get('/api/team/members', async (_req, res) => {
+app.get('/api/team/members', asyncHandler(async (_req, res) => {
   const members = await getTeamMembers();
   res.json(members);
-});
+}));
 
-app.get('/api/ado/me', async (_req, res) => {
+app.get('/api/ado/me', asyncHandler(async (_req, res) => {
   const user = await getCurrentAdoUser();
   if (!user) {
     res.status(404).json({ error: 'Could not get current ADO user' });
     return;
   }
   res.json(user);
-});
+}));
 
 let usageCache: { data: unknown; ts: number } | null = null;
 let usageErrorCache: { status: number; ts: number } | null = null;
@@ -985,7 +992,7 @@ function wrapUsageResponse(data: unknown, ts: number) {
   return { ...(data as Record<string, unknown>), updatedAt: new Date(ts).toISOString() };
 }
 
-app.get('/api/claude/usage', async (_req, res) => {
+app.get('/api/claude/usage', asyncHandler(async (_req, res) => {
   try {
     if (usageCache && Date.now() - usageCache.ts < USAGE_CACHE_MS) {
       return res.json(wrapUsageResponse(usageCache.data, usageCache.ts));
@@ -1039,7 +1046,7 @@ app.get('/api/claude/usage', async (_req, res) => {
     }
     res.status(500).json({ error: String(err) });
   }
-});
+}));
 
 // Trigger actions from dashboard
 app.post('/api/actions/review-pr', (req, res) => {
@@ -1065,7 +1072,7 @@ app.post('/api/actions/review-pr', (req, res) => {
   res.json({ taskId: task.id, message: 'PR review task created' });
 });
 
-app.post('/api/actions/checkout-pr-worktree', async (req, res) => {
+app.post('/api/actions/checkout-pr-worktree', asyncHandler(async (req, res) => {
   const { repo, branch } = req.body as { repo: string; prNumber: number; branch?: string };
   const prNumber = Number(req.body.prNumber);
   if (!repo || !prNumber || prNumber < 1 || !Number.isInteger(prNumber)) {
@@ -1081,7 +1088,7 @@ app.post('/api/actions/checkout-pr-worktree', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
-});
+}));
 
 app.post('/api/actions/analyze-workitem', (req, res) => {
   const { id, title, project, url, type, repositories } = req.body;
@@ -1094,7 +1101,7 @@ app.post('/api/actions/analyze-workitem', (req, res) => {
   if (fromField) {
     repoPath = fromField.repoPath;
     repoName = fromField.repoName;
-    console.log(`[analyze-workitem] Resolved from Repository field: ${repoName}`);
+    log.info(`analyze-workitem: Resolved from Repository field: ${repoName}`);
   }
 
   // Fallback: find a repo for this project
@@ -1105,7 +1112,7 @@ app.post('/api/actions/analyze-workitem', (req, res) => {
         if (candidate) {
           repoPath = candidate;
           repoName = remote;
-          console.log(`[analyze-workitem] Found by project: ${remote} -> ${local}`);
+          log.info(`analyze-workitem: Found by project: ${remote} -> ${local}`);
           break;
         }
       }
@@ -1135,7 +1142,7 @@ app.post('/api/actions/analyze-workitem', (req, res) => {
   res.json({ taskId: task.id, message: `${taskType} task created` });
 });
 
-app.post('/api/actions/fix-pr-comments', async (req, res) => {
+app.post('/api/actions/fix-pr-comments', asyncHandler(async (req, res) => {
   const { repo, prNumber, source, title, url, branch, baseBranch } = req.body;
   const resolved = resolveRepoPath(repo) ?? autoClone(repo, source || 'github');
 
@@ -1154,9 +1161,9 @@ app.post('/api/actions/fix-pr-comments', async (req, res) => {
       const prData = await getPull(owner, repoName, prNumber);
       headBranch = prData.head.ref;
       baseBranchRef = prData.base.ref;
-      console.log(`[fix-pr-comments] Fetched branch info: ${headBranch} -> ${baseBranchRef}`);
+      log.info(`fix-pr-comments: Fetched branch info: ${headBranch} -> ${baseBranchRef}`);
     } catch (err) {
-      console.error('[fix-pr-comments] Failed to fetch PR branch info:', err);
+      log.error('fix-pr-comments: Failed to fetch PR branch info:', err);
       res.status(400).json({ error: 'Failed to fetch PR branch info' });
       return;
     }
@@ -1198,16 +1205,16 @@ app.post('/api/actions/fix-pr-comments', async (req, res) => {
     broadcastTasks();
     res.json({ taskId: task.id, message: `PR comment fix task created (${unresolvedComments.length} comments)` });
   } catch (err) {
-    console.error('[fix-pr-comments] Error:', err);
+    log.error('fix-pr-comments failed', err);
     res.status(500).json({ error: 'Failed to fetch review comments' });
   }
-});
+}));
 
 app.post('/api/actions/test-workitem', (req, res) => {
   const { id, title, project, url, githubPrUrl, testNotes, body, repositories, selectedRepo } = req.body;
   const repoMapping = getEffectiveRepoMapping();
 
-  console.log(`[test-workitem] Project: ${project}, PR URL: ${githubPrUrl}, Selected: ${selectedRepo}`);
+  log.info(`test-workitem: Project: ${project}, PR URL: ${githubPrUrl}, Selected: ${selectedRepo}`);
 
   let repoPath: string | null = null;
   let repoName = '';
@@ -1220,7 +1227,7 @@ app.post('/api/actions/test-workitem', (req, res) => {
     if (resolved) {
       repoPath = resolved.repoPath;
       repoName = selectedRepo;
-      console.log(`[test-workitem] Using selected repo: ${selectedRepo}`);
+      log.info(`test-workitem: Using selected repo: ${selectedRepo}`);
     }
   }
 
@@ -1230,7 +1237,7 @@ app.post('/api/actions/test-workitem', (req, res) => {
     if (fromField) {
       repoPath = fromField.repoPath;
       repoName = fromField.repoName;
-      console.log(`[test-workitem] Resolved from Repository field: ${repoName}`);
+      log.info(`test-workitem: Resolved from Repository field: ${repoName}`);
     }
   }
 
@@ -1244,7 +1251,7 @@ app.post('/api/actions/test-workitem', (req, res) => {
       if (resolved) {
         repoPath = resolved.repoPath;
         repoName = ghRepo;
-        console.log(`[test-workitem] Found mapping for ${ghRepo}`);
+        log.info(`test-workitem: Found mapping for ${ghRepo}`);
       }
     }
   }
@@ -1257,7 +1264,7 @@ app.post('/api/actions/test-workitem', (req, res) => {
         if (candidate) {
           repoPath = candidate;
           repoName = remote;
-          console.log(`[test-workitem] Found by project: ${remote} -> ${local}`);
+          log.info(`test-workitem: Found by project: ${remote} -> ${local}`);
           break;
         }
       }
@@ -1281,7 +1288,7 @@ app.post('/api/actions/test-workitem', (req, res) => {
     repoPath = config.repos.baseDir;
     repoName = ghRepoRef || project || 'unknown';
     const mode = ghRepoRef ? `remote-only for ${ghRepoRef}` : 'ADO-only (no PR URL)';
-    console.log(`[test-workitem] ${mode}`);
+    log.info(`test-workitem: ${mode}`);
   }
 
   const task = createTask('testing', repoName, repoPath, {
@@ -1306,7 +1313,7 @@ app.post('/api/actions/review-resolution', (req, res) => {
   const { id, title, project, url, resolution, githubPrUrl, testNotes, body, repositories } = req.body;
   const repoMapping = getEffectiveRepoMapping();
 
-  console.log(`[review-resolution] Project: ${project}, PR URL: ${githubPrUrl}`);
+  log.info(`review-resolution: Project: ${project}, PR URL: ${githubPrUrl}`);
 
   let repoPath: string | null = null;
   let repoName = '';
@@ -1316,7 +1323,7 @@ app.post('/api/actions/review-resolution', (req, res) => {
   if (fromField) {
     repoPath = fromField.repoPath;
     repoName = fromField.repoName;
-    console.log(`[review-resolution] Resolved from Repository field: ${repoName}`);
+    log.info(`review-resolution: Resolved from Repository field: ${repoName}`);
   }
 
   // Try to find repo from GitHub PR URL
@@ -1328,7 +1335,7 @@ app.post('/api/actions/review-resolution', (req, res) => {
       if (resolved) {
         repoPath = resolved.repoPath;
         repoName = ghRepo;
-        console.log(`[review-resolution] Found mapping for ${ghRepo}`);
+        log.info(`review-resolution: Found mapping for ${ghRepo}`);
       }
     }
   }
@@ -1341,7 +1348,7 @@ app.post('/api/actions/review-resolution', (req, res) => {
         if (candidate) {
           repoPath = candidate;
           repoName = remote;
-          console.log(`[review-resolution] Found by project: ${remote} -> ${local}`);
+          log.info(`review-resolution: Found by project: ${remote} -> ${local}`);
           break;
         }
       }
@@ -1379,19 +1386,19 @@ app.post('/api/actions/review-resolution', (req, res) => {
 
 // --- Orchestrator API ---
 
-app.post('/api/orchestrate', async (_req, res) => {
+app.post('/api/orchestrate', asyncHandler(async (_req, res) => {
   const orchState = getOrchestratorState();
   if (orchState.status === 'gathering' || orchState.status === 'analyzing') {
     return res.status(409).json({ error: 'Orchestrator already running' });
   }
   try {
     // Don't await — let it run in background
-    runOrchestrator().catch(err => console.error('[Orchestrator] Error:', err));
+    runOrchestrator().catch(err => log.error('Orchestrator error', err));
     res.json({ message: 'Orchestration started', runId: getOrchestratorState().runId });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
-});
+}));
 
 app.get('/api/orchestrator/state', (_req, res) => {
   res.json(getOrchestratorState());
@@ -1423,7 +1430,7 @@ app.post('/api/orchestrator/rules', (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/orchestrator/chat', async (req, res) => {
+app.post('/api/orchestrator/chat', asyncHandler(async (req, res) => {
   const { question } = req.body;
   if (!question || typeof question !== 'string') {
     return res.status(400).json({ error: 'question required' });
@@ -1434,12 +1441,18 @@ app.post('/api/orchestrator/chat', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
-});
+}));
 
 // Notifications
 const notificationLogPath = join(homedir(), '.claude', 'notification-log.jsonl');
 
-app.get('/api/notifications', async (_req, res) => {
+// Errors API
+app.get('/api/errors', (_req, res) => {
+  const limit = parseInt(String((_req as any).query?.limit)) || 50;
+  res.json(getRecentErrors(limit));
+});
+
+app.get('/api/notifications', asyncHandler(async (_req, res) => {
   try {
     if (!existsSync(notificationLogPath)) return res.json([]);
     const content = await readFile(notificationLogPath, 'utf-8');
@@ -1452,7 +1465,7 @@ app.get('/api/notifications', async (_req, res) => {
   } catch {
     res.json([]);
   }
-});
+}));
 
 app.post('/api/notifications/incoming', (req, res) => {
   const notification = req.body;
@@ -1469,20 +1482,24 @@ app.post('/api/notifications/incoming', (req, res) => {
   res.json({ ok: true });
 });
 
+// Error middleware (must be after all routes)
+app.use(expressErrorMiddleware);
+
 // Start server
+installProcessHandlers();
 server.listen(config.server.port, () => {
-  console.log(`Orch server listening on port ${config.server.port}`);
-  console.log(`Dashboard: http://localhost:${config.server.port}`);
-  console.log(`GitHub webhooks: http://localhost:${config.server.port}/webhooks/github`);
-  console.log(`ADO webhooks: http://localhost:${config.server.port}/webhooks/ado`);
+  log.info(`Orch server listening on port ${config.server.port}`);
+  log.info(`Dashboard: http://localhost:${config.server.port}`);
+  log.info(`GitHub webhooks: http://localhost:${config.server.port}/webhooks/github`);
+  log.info(`ADO webhooks: http://localhost:${config.server.port}/webhooks/ado`);
 
   // Log discovered repos
   if (config.repos.autoScan) {
     const repos = getScannedRepos();
-    console.log(`\nDiscovered ${repos.length} repos:`);
+    log.info(`Discovered ${repos.length} repos:`);
     for (const repo of repos) {
       const icon = repo.source === 'github' ? '🐙' : repo.source === 'ado' ? '🔷' : '❓';
-      console.log(`  ${icon} ${repo.remote || repo.localName} -> ${repo.localName}`);
+      log.info(`  ${icon} ${repo.remote || repo.localName} -> ${repo.localName}`);
     }
   }
 

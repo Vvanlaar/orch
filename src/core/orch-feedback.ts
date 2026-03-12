@@ -2,6 +2,9 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { runClaude } from './claude-runner.js';
 import type { TaskType } from './types.js';
+import { createLogger } from './logger.js';
+
+const log = createLogger('orch-feedback');
 
 const FEEDBACK_FILE = '.orch-feedback.json';
 const RULES_FILE = '.orch-rules.md';
@@ -122,9 +125,9 @@ Output ONLY the markdown rules (no fences, no explanation).`;
     if (result.success && result.output.trim()) {
       saveOrchestratorRules(result.output.trim());
       markFeedbackProcessed(unprocessed.map(e => e.id));
-      console.log(`[orch-feedback] Distilled ${unprocessed.length} feedback entries into rules`);
+      log.info(`Distilled ${unprocessed.length} feedback entries into rules`);
     }
   } catch (err) {
-    console.error('[orch-feedback] Distillation failed:', err);
+    log.error('Distillation failed', err);
   }
 }

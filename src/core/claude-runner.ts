@@ -7,6 +7,9 @@ import type { Task, TerminalId } from './types.js';
 import { config } from './config.js';
 import { loadLearnings } from './learnings.js';
 import { findTerminalPath, getTerminalInteractiveSession, getTerminalPreference, isMacPlatform, isWindowsPlatform } from './settings.js';
+import { createLogger } from './logger.js';
+
+const log = createLogger('claude-runner');
 
 // Process registry for steering running tasks
 const runningProcesses = new Map<number, ChildProcess>();
@@ -364,13 +367,13 @@ export async function runClaudeInTerminal(
 
   if (result.success) {
     const terminalName = terminalNames[result.terminal] || result.terminal;
-    console.log(`[terminal] Opened ${terminalName} for task #${taskId}`);
+    log.info(`Opened ${terminalName} for task #${taskId}`);
     const tmuxHint = result.terminal === 'tmux' ? `\nAttach with: tmux attach -t orch-task-${taskId}\n` : '';
     claudeEmitter.emit('output', taskId, `[${terminalName} opened - running in external terminal]\nPrompt file: ${promptFile}\n${tmuxHint}`);
     return { success: true, output: `Running in ${terminalName}` };
   }
 
-  console.error(`[terminal] Failed to open terminal for task #${taskId}`);
+  log.error(`Failed to open terminal for task #${taskId}`);
   return { success: false, output: '', error: 'Failed to open terminal window. Check terminal selection in Settings.' };
 }
 

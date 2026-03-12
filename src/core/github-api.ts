@@ -1,6 +1,9 @@
 import { execFileSync } from 'child_process';
 import { Octokit } from 'octokit';
 import { config } from './config.js';
+import { createLogger } from './logger.js';
+
+const log = createLogger('github-api');
 
 type Method = 'pat' | 'gh';
 
@@ -27,10 +30,10 @@ function checkGhCliAvailable(): boolean {
   try {
     execFileSync('gh', ['auth', 'status'], { stdio: 'pipe', timeout: 10000 });
     ghCliAvailable = true;
-    console.log('[GitHubAPI] gh CLI is authenticated and available');
+    log.info('gh CLI is authenticated and available');
   } catch {
     ghCliAvailable = false;
-    console.log('[GitHubAPI] gh CLI not available or not authenticated');
+    log.info('gh CLI not available or not authenticated');
   }
   return ghCliAvailable;
 }
@@ -71,7 +74,7 @@ async function tryPat<T>(op: string, octokitFn: (octokit: Octokit) => Promise<T>
   const result = await octokitFn(octokit);
   if (!methodPrefs.has(op)) {
     methodPrefs.set(op, 'pat');
-    console.log(`[GitHubAPI] ${op}: PAT works, remembering`);
+    log.info(`${op}: PAT works, remembering`);
   }
   return result;
 }
@@ -83,7 +86,7 @@ function tryGhCli<T>(op: string, ghCliFn: () => T): T {
   const result = ghCliFn();
   if (!methodPrefs.has(op)) {
     methodPrefs.set(op, 'gh');
-    console.log(`[GitHubAPI] ${op}: gh CLI works, remembering`);
+    log.info(`${op}: gh CLI works, remembering`);
   }
   return result;
 }
@@ -108,7 +111,7 @@ async function withFallback<T>(
       return await tryPat(op, octokitFn);
     } catch (err: any) {
       if (!isPermissionError(err)) throw err;
-      console.warn(`[GitHubAPI] ${op}: PAT failed (${err.status || err.message}), trying gh CLI`);
+      log.warn(`${op}: PAT failed (${err.status || err.message}), trying gh CLI`);
       try {
         methodPrefs.delete(op); // clear stale pref
         return tryGhCli(op, ghCliFn);
@@ -121,7 +124,7 @@ async function withFallback<T>(
       return tryGhCli(op, ghCliFn);
     } catch (ghErr: any) {
       if (!hasPat || !isGhCliError(ghErr)) throw ghErr;
-      console.warn(`[GitHubAPI] ${op}: gh CLI failed, trying PAT`);
+      log.warn(`${op}: gh CLI failed, trying PAT`);
       try {
         methodPrefs.delete(op);
         return await tryPat(op, octokitFn);

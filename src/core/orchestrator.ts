@@ -2,6 +2,9 @@ import { config } from './config.js';
 import { runClaude } from './claude-runner.js';
 import { appendFeedback, distillFeedback, getUnprocessedFeedback, loadOrchestratorRules } from './orch-feedback.js';
 import { getAllTasks, createTask } from './task-queue.js';
+import { createLogger } from './logger.js';
+
+const log = createLogger('orchestrator');
 import {
   getMyAdoWorkItems,
   getMyGitHubPRs,
@@ -301,7 +304,7 @@ export async function runOrchestrator(): Promise<void> {
 
     // Fire-and-forget: distill feedback if enough unprocessed entries
     if (getUnprocessedFeedback().length >= 3) {
-      distillFeedback().catch(err => console.error('[orch-feedback] Background distillation error:', err));
+      distillFeedback().catch(err => log.error('Background distillation error', err));
     }
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);

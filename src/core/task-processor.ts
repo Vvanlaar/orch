@@ -1,6 +1,9 @@
 import { existsSync } from 'fs';
 import path from 'path';
+import { createLogger } from './logger.js';
 import { config, WORKSPACES_DIR } from './config.js';
+
+const log = createLogger('task-processor');
 import { createIssueComment, createReviewCommentReply, getReviewThreads, resolveReviewThread } from './github-api.js';
 import {
   getPendingTasks,
@@ -59,7 +62,7 @@ export function triggerUpdate(): void {
 export { steerTask };
 
 async function extractAndStoreLearning(failedTask: Task, successTask: Task): Promise<void> {
-  console.log(`[learnings] Extracting lesson: failed #${failedTask.id} -> success #${successTask.id}`);
+  log.info(`Extracting lesson: failed #${failedTask.id} -> success #${successTask.id}`);
   const learning = await extractLesson(failedTask, successTask);
   if (!learning) return;
 
@@ -74,7 +77,7 @@ function triggerLearningExtraction(task: Task): void {
   if (!failedTask) return;
 
   extractAndStoreLearning(failedTask, task).catch(err => {
-    console.error('[learnings] Error extracting lesson:', err);
+    log.error('Error extracting lesson', err);
   });
 }
 
@@ -87,7 +90,7 @@ claudeEmitter.on('output', (taskId: number, chunk: string) => {
 // Wire up PID tracking
 claudeEmitter.on('pid', (taskId: number, pid: number) => {
   updateTaskPid(taskId, pid);
-  console.log(`[Task #${taskId}] Process started with PID ${pid}`);
+  log.info(`Task #${taskId} Process started with PID ${pid}`);
 });
 
 async function postGitHubPrComment(repo: string, prNumber: number, body: string): Promise<void> {
@@ -144,7 +147,7 @@ async function replyToReviewComment(
 }
 
 async function processPrCommentFix(task: Task): Promise<void> {
-  console.log(`[Task #${task.id}] Processing PR comment fix for ${task.repo}#${task.context.prNumber}`);
+  log.info(`Task #${task.id} Processing PR comment fix for ${task.repo}#${task.context.prNumber}`);
   startTask(task.id);
   notifyUpdate();
 
@@ -184,28 +187,28 @@ async function processPrCommentFix(task: Task): Promise<void> {
       execSync(`git fetch origin ${baseBranch}`, { cwd: worktreePath, stdio: 'pipe' });
       try {
         execSync(`git merge origin/${baseBranch} --no-edit`, { cwd: worktreePath, stdio: 'pipe' });
-        console.log(`[Task #${task.id}] Step 0: Merged ${baseBranch} (no conflicts)`);
+        log.info(`Task #${task.id} Step 0: Merged ${baseBranch} (no conflicts)`);
       } catch {
-        console.log(`[Task #${task.id}] Step 0: Merge conflicts detected, letting Claude resolve`);
+        log.info(`Task #${task.id} Step 0: Merge conflicts detected, letting Claude resolve`);
         const mergePrompt = buildMergeConflictPrompt(baseBranch);
         const mergeResult = await runClaude(task, mergePrompt, { allowEdits: true, workingDir: worktreePath });
         if (mergeResult.success) {
           try {
             execSync('git commit --no-edit', { cwd: worktreePath, stdio: 'pipe' });
-            console.log(`[Task #${task.id}] Step 0: Merge conflicts resolved and committed`);
+            log.info(`Task #${task.id} Step 0: Merge conflicts resolved and committed`);
           } catch {
-            console.warn(`[Task #${task.id}] Merge commit failed, aborting merge`);
+            log.warn(`Task #${task.id} Merge commit failed, aborting merge`);
             try { execSync('git merge --abort', { cwd: worktreePath, stdio: 'pipe' }); } catch {}
           }
         } else {
-          console.warn(`[Task #${task.id}] Merge conflict resolution failed, aborting merge`);
+          log.warn(`Task #${task.id} Merge conflict resolution failed, aborting merge`);
           try { execSync('git merge --abort', { cwd: worktreePath, stdio: 'pipe' }); } catch {}
         }
       }
     }
 
     // Step 1: Fix review comments
-    console.log(`[Task #${task.id}] Step 1: Fixing ${comments.length} review comments`);
+    log.info(`Task #${task.id} Step 1: Fixing ${comments.length} review comments`);
     const fixPrompt = buildPrCommentFixPrompt(task.context);
     const fixResult = await runClaude(task, fixPrompt, { allowEdits: true, workingDir: worktreePath });
 
@@ -219,23 +222,23 @@ async function processPrCommentFix(task: Task): Promise<void> {
 
     if (modifiedFiles.length > 0) {
       // Step 2: Run code simplifier on modified files
-      console.log(`[Task #${task.id}] Step 2: Running code simplifier on ${modifiedFiles.length} files`);
+      log.info(`Task #${task.id} Step 2: Running code simplifier on ${modifiedFiles.length} files`);
       const simplifyPrompt = buildCodeSimplifierPrompt(modifiedFiles);
       await runClaude(task, simplifyPrompt, { allowEdits: true, workingDir: worktreePath });
 
       // Step 3: Self-review
-      console.log(`[Task #${task.id}] Step 3: Self-review`);
+      log.info(`Task #${task.id} Step 3: Self-review`);
       const reviewPrompt = buildSelfReviewPrompt();
       const reviewResult = await runClaude(task, reviewPrompt, { allowEdits: false, workingDir: worktreePath });
 
       // Check if review passed
       const reviewOutput = reviewResult.output.toLowerCase();
       if (reviewOutput.includes('needs attention') && !reviewOutput.includes('approved')) {
-        console.log(`[Task #${task.id}] Self-review flagged issues, continuing anyway`);
+        log.info(`Task #${task.id} Self-review flagged issues, continuing anyway`);
       }
 
       // Step 4: Commit and push
-      console.log(`[Task #${task.id}] Step 4: Committing and pushing`);
+      log.info(`Task #${task.id} Step 4: Committing and pushing`);
       const commitMsg = `fix: address PR review comments\n\nFixed ${comments.length} review comment(s)\nGenerated by Orch task #${task.id}`;
 
       if (!stageAndCommit(worktreePath, commitMsg)) {
@@ -252,7 +255,7 @@ async function processPrCommentFix(task: Task): Promise<void> {
     }
 
     // Step 5: Generate per-comment resolutions
-    console.log(`[Task #${task.id}] Step 5: Generating comment resolutions`);
+    log.info(`Task #${task.id} Step 5: Generating comment resolutions`);
     let resolutions: Array<{ index: number; resolution: string }> = [];
     try {
       const resPrompt = buildCommentResolutionPrompt(comments);
@@ -264,11 +267,11 @@ async function processPrCommentFix(task: Task): Promise<void> {
         }
       }
     } catch (err) {
-      console.error(`[Task #${task.id}] Failed to parse resolutions, falling back to generic reply`);
+      log.error(`Task #${task.id} Failed to parse resolutions, falling back to generic reply`);
     }
 
     // Step 6: Reply to each review comment with resolution
-    console.log(`[Task #${task.id}] Step 6: Replying to review comments`);
+    log.info(`Task #${task.id} Step 6: Replying to review comments`);
     for (let i = 0; i < comments.length; i++) {
       const comment = comments[i];
       try {
@@ -278,13 +281,13 @@ async function processPrCommentFix(task: Task): Promise<void> {
           : `✅ Addressed in latest push.\n\n_Auto-fixed by Orch task #${task.id}_`;
         await replyToReviewComment(task.repo, task.context.prNumber!, comment.id, replyBody);
       } catch (err) {
-        console.error(`[Task #${task.id}] Failed to reply to comment ${comment.id}:`, err);
+        log.error(`Task #${task.id} Failed to reply to comment ${comment.id}`, err);
       }
     }
 
     // Step 7: Resolve review threads on GitHub
     if (task.context.source === 'github') {
-      console.log(`[Task #${task.id}] Step 7: Resolving review threads`);
+      log.info(`Task #${task.id} Step 7: Resolving review threads`);
       try {
         const [owner, repoName] = task.repo.split('/');
         const threads = await getReviewThreads(owner, repoName, prNumber);
@@ -297,23 +300,23 @@ async function processPrCommentFix(task: Task): Promise<void> {
           }
         }
         if (resolved > 0) {
-          console.log(`[Task #${task.id}] Resolved ${resolved} review thread(s)`);
+          log.info(`Task #${task.id} Resolved ${resolved} review thread(s)`);
         }
       } catch (err) {
-        console.error(`[Task #${task.id}] Failed to resolve threads:`, err);
+        log.error(`Task #${task.id} Failed to resolve threads`, err);
       }
     }
 
     const resultSummary = `Fixed ${comments.length} review comment(s) and pushed to ${targetBranch}\n\n${fixResult.output}`;
     completeTask(task.id, resultSummary);
-    console.log(`[Task #${task.id}] Completed successfully`);
+    log.info(`Task #${task.id} Completed successfully`);
     triggerLearningExtraction(task);
     notifyUpdate();
 
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     failTask(task.id, error);
-    console.error(`[Task #${task.id}] Error:`, error);
+    log.error(`Task #${task.id} Error: ${error}`);
     discardChanges(worktreePath);
     notifyUpdate();
   } finally {
@@ -337,11 +340,11 @@ async function handleCodeChanges(task: Task, output: string, worktreePath?: stri
   const status = getGitStatus(workingDir);
 
   if (!status.hasChanges) {
-    console.log(`[Task #${task.id}] No code changes detected`);
+    log.info(`Task #${task.id} No code changes detected`);
     return null;
   }
 
-  console.log(`[Task #${task.id}] Detected changes: ${status.unstaged.length + status.untracked.length} files`);
+  log.info(`Task #${task.id} Detected changes: ${status.unstaged.length + status.untracked.length} files`);
 
   const defaultBranch = getDefaultBranch(task.repoPath);
   let newBranch: string;
@@ -355,7 +358,7 @@ async function handleCodeChanges(task: Task, output: string, worktreePath?: stri
     originalBranch = getCurrentBranch(task.repoPath);
     newBranch = generateBranchName(task);
     if (!createBranch(task.repoPath, newBranch, defaultBranch)) {
-      console.error(`[Task #${task.id}] Failed to create branch ${newBranch}`);
+      log.error(`Task #${task.id} Failed to create branch ${newBranch}`);
       discardChanges(task.repoPath);
       checkoutBranch(task.repoPath, originalBranch);
       return null;
@@ -365,7 +368,7 @@ async function handleCodeChanges(task: Task, output: string, worktreePath?: stri
   // Commit changes
   const commitMsg = `${task.type}: ${task.context.title || 'Auto-generated changes'}\n\nGenerated by Orch task #${task.id}`;
   if (!stageAndCommit(workingDir, commitMsg)) {
-    console.error(`[Task #${task.id}] Failed to commit`);
+    log.error(`Task #${task.id} Failed to commit`);
     discardChanges(workingDir);
     if (originalBranch) checkoutBranch(task.repoPath, originalBranch);
     return null;
@@ -373,7 +376,7 @@ async function handleCodeChanges(task: Task, output: string, worktreePath?: stri
 
   // Push branch
   if (!pushBranch(workingDir, newBranch)) {
-    console.error(`[Task #${task.id}] Failed to push branch`);
+    log.error(`Task #${task.id} Failed to push branch`);
     if (originalBranch) checkoutBranch(task.repoPath, originalBranch);
     return null;
   }
@@ -397,7 +400,7 @@ async function handleCodeChanges(task: Task, output: string, worktreePath?: stri
   if (originalBranch) checkoutBranch(task.repoPath, originalBranch);
 
   if (prUrl) {
-    console.log(`[Task #${task.id}] Created PR: ${prUrl}`);
+    log.info(`Task #${task.id} Created PR: ${prUrl}`);
   }
 
   return prUrl;
@@ -421,26 +424,26 @@ function resolveOrCloneRepo(task: Task): string | null {
   const orchClonePath = path.join(WORKSPACES_DIR, 'clones', basename);
 
   if (existsSync(path.join(orchClonePath, '.git'))) {
-    console.log(`[Task #${task.id}] Found in .workspaces/clones/: ${orchClonePath}`);
+    log.info(`Task #${task.id} Found in .workspaces/clones/: ${orchClonePath}`);
     return orchClonePath;
   }
 
   const cloneUrl = deriveCloneUrl(task);
   const clonedPath = cloneUrl ? cloneRepo(cloneUrl, basename) : null;
   if (clonedPath) {
-    console.log(`[Task #${task.id}] Cloned ${cloneUrl} -> ${clonedPath}`);
+    log.info(`Task #${task.id} Cloned ${cloneUrl} -> ${clonedPath}`);
   }
   return clonedPath;
 }
 
 async function processTask(task: Task): Promise<void> {
-  console.log(`Processing task #${task.id} (${task.type}) for ${task.repo}`);
+  log.info(`Processing task #${task.id} (${task.type}) for ${task.repo}`);
 
   // Ensure repo folder exists — check .orch-clones/, then auto-clone
   if (!existsSync(task.repoPath)) {
     const resolvedPath = resolveOrCloneRepo(task);
     if (!resolvedPath) {
-      console.warn(`[Task #${task.id}] Repo not found and clone failed; waiting for user input`);
+      log.warn(`Task #${task.id} Repo not found and clone failed; waiting for user input`);
       updateTaskStatus(task.id, 'needs-repo');
       notifyUpdate();
       return;
@@ -472,7 +475,7 @@ async function processTask(task: Task): Promise<void> {
     const defaultBranch = getDefaultBranch(task.repoPath);
     worktreePath = createWorktree(task.repoPath, branchName, defaultBranch);
     if (!worktreePath) {
-      console.warn(`[Task #${task.id}] Worktree creation failed, using main repo`);
+      log.warn(`Task #${task.id} Worktree creation failed, using main repo`);
     }
   }
 
@@ -525,18 +528,18 @@ async function processTask(task: Task): Promise<void> {
 
       const resultWithPr = prUrl ? `${result.output}\n\nPR: ${prUrl}` : result.output;
       completeTask(task.id, resultWithPr);
-      console.log(`Task #${task.id} completed${prUrl ? ` (PR: ${prUrl})` : ''}`);
+      log.info(`Task #${task.id} completed${prUrl ? ` (PR: ${prUrl})` : ''}`);
       triggerLearningExtraction(task);
       notifyUpdate();
     } else {
       failTask(task.id, result.error || 'Unknown error');
-      console.error(`Task #${task.id} failed:`, result.error);
+      log.error(`Task #${task.id} failed: ${result.error}`);
       notifyUpdate();
     }
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     failTask(task.id, error);
-    console.error(`Task #${task.id} error:`, error);
+    log.error(`Task #${task.id} error: ${error}`);
     notifyUpdate();
   } finally {
     if (worktreePath) {
@@ -556,7 +559,7 @@ export async function processQueue(): Promise<void> {
   for (const task of pending) {
     // Don't await - run concurrently
     processTask(task).catch((err) => {
-      console.error(`Unhandled error in task #${task.id}:`, err);
+      log.error(`Unhandled error in task #${task.id}`, err);
     });
   }
 }
@@ -565,18 +568,18 @@ let intervalId: NodeJS.Timeout | null = null;
 
 export function startProcessor(intervalMs = 5000): void {
   if (intervalId) return;
-  console.log('Task processor started');
+  log.info('Task processor started');
   intervalId = setInterval(() => {
-    processQueue().catch(console.error);
+    processQueue().catch(err => log.error('Queue processing error', err));
   }, intervalMs);
   // Process immediately on start
-  processQueue().catch(console.error);
+  processQueue().catch(err => log.error('Queue processing error', err));
 }
 
 export function stopProcessor(): void {
   if (intervalId) {
     clearInterval(intervalId);
     intervalId = null;
-    console.log('Task processor stopped');
+    log.info('Task processor stopped');
   }
 }

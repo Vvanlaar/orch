@@ -3,6 +3,9 @@ import { existsSync, mkdirSync, readFileSync } from 'fs';
 import path from 'path';
 import { config, WORKSPACES_DIR } from './config.js';
 import { createPull } from './github-api.js';
+import { createLogger } from './logger.js';
+
+const log = createLogger('git-ops');
 
 export interface GitStatus {
   hasChanges: boolean;
@@ -43,7 +46,8 @@ export function getGitStatus(repoPath: string): GitStatus {
       unstaged,
       untracked,
     };
-  } catch {
+  } catch (err) {
+    log.warn('Failed to get git status', { error: String(err) });
     return { hasChanges: false, staged: [], unstaged: [], untracked: [] };
   }
 }
@@ -54,7 +58,8 @@ export function getCurrentBranch(repoPath: string): string {
       cwd: repoPath,
       encoding: 'utf-8',
     }).trim();
-  } catch {
+  } catch (err) {
+    log.warn('Failed to get current branch', { error: String(err) });
     return 'main';
   }
 }
@@ -68,7 +73,8 @@ export function getDefaultBranch(repoPath: string): string {
     });
     const match = remote.match(/HEAD branch: (\S+)/);
     return match ? match[1] : 'main';
-  } catch {
+  } catch (err) {
+    log.warn('Failed to get default branch', { error: String(err) });
     return 'main';
   }
 }
@@ -89,7 +95,7 @@ export function createBranch(repoPath: string, branchName: string, baseBranch?: 
     initSubmodules(repoPath);
     return true;
   } catch (err) {
-    console.error('[GitOps] Failed to create branch:', err);
+    log.error('Failed to create branch', err);
     return false;
   }
 }
@@ -107,7 +113,7 @@ export function stageAndCommit(repoPath: string, message: string): boolean {
 
     return true;
   } catch (err) {
-    console.error('[GitOps] Failed to commit:', err);
+    log.error('Failed to commit', err);
     return false;
   }
 }
@@ -120,7 +126,7 @@ export function pushBranch(repoPath: string, branchName: string): boolean {
     });
     return true;
   } catch (err) {
-    console.error('[GitOps] Failed to push:', err);
+    log.error('Failed to push', err);
     return false;
   }
 }
@@ -133,7 +139,8 @@ export function checkoutBranch(repoPath: string, branchName: string): boolean {
     });
     initSubmodules(repoPath);
     return true;
-  } catch {
+  } catch (err) {
+    log.warn('Failed to checkout branch', { error: String(err) });
     return false;
   }
 }
@@ -142,7 +149,7 @@ function initSubmodules(cwd: string): void {
   try {
     execSync('git submodule update --init --recursive', { cwd, stdio: 'pipe', timeout: 120000 });
   } catch (err) {
-    console.error('[GitOps] Failed to init submodules:', err);
+    log.error('Failed to init submodules', err);
   }
 }
 
@@ -169,13 +176,13 @@ function linkOrInstallNodeModules(worktreePath: string, sourceRepoPath: string):
       } else {
         execSync(`ln -s "${sourceModules}" "${targetModules}"`, { stdio: 'pipe' });
       }
-      console.log(`[GitOps] Linked node_modules from ${sourceRepoPath}`);
+      log.info(`Linked node_modules from ${sourceRepoPath}`);
     } else if (!same) {
-      console.log(`[GitOps] Lockfile differs, running npm ci`);
+      log.info('Lockfile differs, running npm ci');
       execSync('npm ci --prefer-offline', { cwd: worktreePath, stdio: 'pipe', timeout: 120000 });
     }
   } catch (err) {
-    console.error('[GitOps] Failed to link/install node_modules:', err);
+    log.error('Failed to link/install node_modules', err);
   }
 }
 
@@ -183,8 +190,8 @@ export function discardChanges(repoPath: string): void {
   try {
     execSync('git checkout -- .', { cwd: repoPath, stdio: 'pipe' });
     execSync('git clean -fd', { cwd: repoPath, stdio: 'pipe' });
-  } catch {
-    // Ignore errors
+  } catch (err) {
+    log.warn('Failed to discard changes', { error: String(err) });
   }
 }
 
@@ -200,7 +207,7 @@ export async function createGitHubPR(
     const pr = await createPull(owner, repoName, head, base, title, body);
     return pr.html_url;
   } catch (err) {
-    console.error('[GitOps] Failed to create GitHub PR:', err);
+    log.error('Failed to create GitHub PR', err);
     return null;
   }
 }
@@ -219,7 +226,7 @@ export function createWorktree(repoPath: string, branchName: string, baseBranch?
 
     // Enable long paths on Windows to avoid "Filename too long" errors
     if (process.platform === 'win32') {
-      try { execSync('git config core.longpaths true', { cwd: repoPath, stdio: 'pipe' }); } catch { /* ignore */ }
+      try { execSync('git config core.longpaths true', { cwd: repoPath, stdio: 'pipe' }); } catch (err) { log.warn('Failed to set core.longpaths', { error: String(err) }); }
     }
 
     execSync(`git worktree add "${worktreePath}" -b "${branchName}" "origin/${base}"`, { cwd: repoPath, stdio: 'pipe' });
@@ -227,7 +234,7 @@ export function createWorktree(repoPath: string, branchName: string, baseBranch?
     linkOrInstallNodeModules(worktreePath, repoPath);
     return worktreePath;
   } catch (err) {
-    console.error('[GitOps] Failed to create worktree:', err);
+    log.error('Failed to create worktree', err);
     return null;
   }
 }
@@ -245,7 +252,7 @@ export function checkoutPRInWorktree(repoPath: string, prNumber: number, branch?
 
     // Enable long paths on Windows to avoid "Filename too long" errors
     if (process.platform === 'win32') {
-      try { execFileSync('git', ['config', 'core.longpaths', 'true'], { cwd: repoPath, stdio: 'pipe' }); } catch { /* ignore */ }
+      try { execFileSync('git', ['config', 'core.longpaths', 'true'], { cwd: repoPath, stdio: 'pipe' }); } catch (err) { log.warn('Failed to set core.longpaths', { error: String(err) }); }
     }
 
     mkdirSync(path.dirname(worktreePath), { recursive: true });
@@ -255,14 +262,14 @@ export function checkoutPRInWorktree(repoPath: string, prNumber: number, branch?
     if (branch) {
       try {
         execFileSync('git', ['branch', '--set-upstream-to', `origin/${branch}`, `pr-${prNumber}`], { cwd: repoPath, stdio: 'pipe' });
-      } catch { /* branch may be from a fork — upstream not critical for checkout use */ }
+      } catch (err) { log.warn('Failed to set upstream (fork branch?)', { error: String(err) }); }
     }
 
     initSubmodules(worktreePath);
     linkOrInstallNodeModules(worktreePath, repoPath);
     return worktreePath;
   } catch (err) {
-    console.error('[GitOps] Failed to checkout PR in worktree:', err);
+    log.error('Failed to checkout PR in worktree', err);
     return null;
   }
 }
@@ -272,7 +279,7 @@ export function removeWorktree(repoPath: string, worktreePath: string): void {
     execSync(`git worktree remove --force "${worktreePath}"`, { cwd: repoPath, stdio: 'pipe' });
     execSync('git worktree prune', { cwd: repoPath, stdio: 'pipe' });
   } catch (err) {
-    console.error('[GitOps] Failed to remove worktree:', err);
+    log.error('Failed to remove worktree', err);
   }
 }
 
@@ -288,7 +295,7 @@ export function cloneRepo(cloneUrl: string, targetName: string): string | null {
     });
     return targetPath;
   } catch (err) {
-    console.error('[GitOps] Failed to clone repo:', err);
+    log.error('Failed to clone repo', err);
     return null;
   }
 }
@@ -322,14 +329,14 @@ export async function createAdoPR(
     });
 
     if (!res.ok) {
-      console.error('[GitOps] ADO PR creation failed:', await res.text());
+      log.error(`ADO PR creation failed: ${await res.text()}`);
       return null;
     }
 
     const data = await res.json();
     return data._links?.web?.href || null;
   } catch (err) {
-    console.error('[GitOps] Failed to create ADO PR:', err);
+    log.error('Failed to create ADO PR', err);
     return null;
   }
 }

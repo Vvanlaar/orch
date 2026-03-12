@@ -1,5 +1,8 @@
 import https from 'https';
 import type { Task } from './types.js';
+import { createLogger } from './logger.js';
+
+const log = createLogger('ntfy-sender');
 
 const NTFY_TOPIC = process.env.NTFY_TOPIC;
 
@@ -27,7 +30,7 @@ function postNtfy(body: string, headers: Record<string, string> = {}): Promise<v
       }
     );
     req.on('error', (err) => {
-      console.error('[ntfy] Send error:', err.message);
+      log.error('Send error', err);
       reject(err);
     });
     req.end(body);
@@ -46,7 +49,7 @@ export async function sendNtfySuggestion(task: Task): Promise<void> {
       Title: title,
       Tags: 'question',
     });
-    console.log(`[ntfy] Sent suggestion for task #${task.id}`);
+    log.info(`Sent suggestion for task #${task.id}`);
   } catch {
     // logged in postNtfy
   }

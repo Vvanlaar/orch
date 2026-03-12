@@ -3,6 +3,9 @@ import type { IncomingMessage } from 'http';
 import { approveSuggestion, dismissSuggestion, getPendingSuggestions, getTask } from './task-queue.js';
 import { sendNtfyConfirmation } from './ntfy-sender.js';
 import { triggerUpdate } from './task-processor.js';
+import { createLogger } from './logger.js';
+
+const log = createLogger('ntfy-listener');
 
 const NTFY_COMMAND_TOPIC = process.env.NTFY_COMMAND_TOPIC;
 
@@ -43,7 +46,7 @@ function parseCommand(text: string): { action: 'approve' | 'dismiss' | 'approve-
 async function handleMessage(text: string): Promise<void> {
   const cmd = parseCommand(text);
   if (!cmd) {
-    console.log(`[ntfy-listener] Ignoring unrecognized: "${text}"`);
+    log.info(`Ignoring unrecognized: "${text}"`);
     return;
   }
 
@@ -58,7 +61,7 @@ async function handleMessage(text: string): Promise<void> {
     }
     triggerUpdate();
     await sendNtfyConfirmation(`Approved ${suggestions.length} suggestion(s)`);
-    console.log(`[ntfy-listener] Approved all ${suggestions.length} suggestions`);
+    log.info(`Approved all ${suggestions.length} suggestions`);
     return;
   }
 
@@ -72,13 +75,13 @@ async function handleMessage(text: string): Promise<void> {
     dismissSuggestion(cmd.id!);
     triggerUpdate();
     await sendNtfyConfirmation(`Task #${cmd.id} dismissed`);
-    console.log(`[ntfy-listener] Dismissed #${cmd.id}`);
+    log.info(`Dismissed #${cmd.id}`);
   } else {
     approveSuggestion(cmd.id!, cmd.extra);
     triggerUpdate();
     const note = cmd.extra ? ` with note: ${cmd.extra}` : '';
     await sendNtfyConfirmation(`Task #${cmd.id} approved${note}`);
-    console.log(`[ntfy-listener] Approved #${cmd.id}${note}`);
+    log.info(`Approved #${cmd.id}${note}`);
   }
 }
 
@@ -86,12 +89,12 @@ function connect(): void {
   if (stopped || !NTFY_COMMAND_TOPIC) return;
 
   const url = `https://ntfy.sh/${NTFY_COMMAND_TOPIC}/json`;
-  console.log(`[ntfy-listener] Connecting to ${url}`);
+  log.info(`Connecting to ${url}`);
 
   const req = https.get(url, (res) => {
     connection = res;
     backoff = 1000;
-    console.log('[ntfy-listener] Connected');
+    log.info('Connected');
 
     let buffer = '';
     res.on('data', (chunk: Buffer) => {
@@ -105,7 +108,7 @@ function connect(): void {
           const msg = JSON.parse(line);
           if (msg.event === 'message' && msg.message) {
             handleMessage(msg.message).catch((err) => {
-              console.error('[ntfy-listener] Handle error:', err);
+              log.error('Handle error', err);
             });
           }
         } catch {
@@ -115,20 +118,20 @@ function connect(): void {
     });
 
     res.on('end', () => {
-      console.log('[ntfy-listener] Disconnected');
+      log.info('Disconnected');
       connection = null;
       scheduleReconnect();
     });
 
     res.on('error', (err) => {
-      console.error('[ntfy-listener] Stream error:', err.message);
+      log.error('Stream error', err);
       connection = null;
       scheduleReconnect();
     });
   });
 
   req.on('error', (err) => {
-    console.error('[ntfy-listener] Connection error:', err.message);
+    log.error('Connection error', err);
     connection = null;
     scheduleReconnect();
   });
@@ -136,7 +139,7 @@ function connect(): void {
 
 function scheduleReconnect(): void {
   if (stopped) return;
-  console.log(`[ntfy-listener] Reconnecting in ${backoff / 1000}s`);
+  log.info(`Reconnecting in ${backoff / 1000}s`);
   reconnectTimer = setTimeout(() => {
     backoff = Math.min(backoff * 2, MAX_BACKOFF);
     connect();
@@ -145,11 +148,11 @@ function scheduleReconnect(): void {
 
 export function startNtfyListener(): void {
   if (!NTFY_COMMAND_TOPIC) {
-    console.log('[ntfy-listener] NTFY_COMMAND_TOPIC not set, skipping');
+    log.info('NTFY_COMMAND_TOPIC not set, skipping');
     return;
   }
   if (!process.env.NTFY_TOPIC) {
-    console.warn('[ntfy-listener] WARNING: NTFY_COMMAND_TOPIC set but NTFY_TOPIC is missing — suggestions will queue but no notifications will be sent');
+    log.warn('NTFY_COMMAND_TOPIC set but NTFY_TOPIC is missing — suggestions will queue but no notifications will be sent');
   }
   stopped = false;
   connect();
@@ -165,5 +168,5 @@ export function stopNtfyListener(): void {
     connection.destroy();
     connection = null;
   }
-  console.log('[ntfy-listener] Stopped');
+  log.info('Stopped');
 }
