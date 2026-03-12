@@ -77,7 +77,7 @@ function mapPrToGitHubPR(pr: any, role: 'author' | 'reviewer'): GitHubPR {
     createdAt: pr.created_at,
     updatedAt: pr.updated_at,
     role,
-    commentCount: pr.comments || 0,
+    commentCount: 0, // enriched later via GraphQL with unresolved review thread count
     adoTicketId,
     adoTicketUrl,
   };
@@ -100,16 +100,18 @@ async function enrichMergeStatus(prs: GitHubPR[]): Promise<void> {
 
   await Promise.all([...byRepo.entries()].map(async ([repo, repoPrs]) => {
     const [owner, name] = repo.split('/');
-    const prFields = repoPrs.map((pr, i) => `pr${i}: pullRequest(number: ${pr.number}) { mergeable }`).join('\n');
+    const prFields = repoPrs.map((pr, i) => `pr${i}: pullRequest(number: ${pr.number}) { mergeable reviewThreads(first: 100) { nodes { isResolved } } }`).join('\n');
 
     try {
-      const result = await graphql<{ repository: Record<string, { mergeable: string }> }>(
+      const result = await graphql<{ repository: Record<string, { mergeable: string; reviewThreads?: { nodes: { isResolved: boolean }[] } }> }>(
         `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ${prFields} } }`,
         { owner, name },
       );
       for (let i = 0; i < repoPrs.length; i++) {
-        const status = result.repository[`pr${i}`]?.mergeable;
-        if (status) repoPrs[i].mergeable = status as GitHubPR['mergeable'];
+        const prData = result.repository[`pr${i}`];
+        if (prData?.mergeable) repoPrs[i].mergeable = prData.mergeable as GitHubPR['mergeable'];
+        const threads = prData?.reviewThreads?.nodes || [];
+        repoPrs[i].commentCount = threads.filter(t => !t.isResolved).length;
       }
     } catch (err: any) {
       const is404 = err?.status === 404 || err?.errors?.[0]?.type === 'NOT_FOUND';

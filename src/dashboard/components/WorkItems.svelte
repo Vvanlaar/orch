@@ -56,7 +56,7 @@
     { key: 'draft', label: 'Draft' },
     { key: 'needs-review', label: 'Needs Your Review' },
     { key: 'merge-conflicts', label: 'Merge Conflicts' },
-    { key: 'has-comments', label: 'Has Comments' },
+    { key: 'has-comments', label: 'Unresolved Comments' },
     { key: 'open', label: 'Open' },
   ];
 
