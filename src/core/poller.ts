@@ -313,9 +313,11 @@ async function pollAll(): Promise<void> {
 }
 
 let pollInterval: NodeJS.Timeout | null = null;
+let started = false;
 
 export function startPoller(intervalMs = 60000): void {
-  if (pollInterval) return;
+  if (started) return;
+  started = true;
 
   const tasksFromDb = initProcessedFromDb();
   log.info(`Started (interval: ${intervalMs / 1000}s, ${tasksFromDb} tasks from DB)`);
@@ -331,16 +333,23 @@ export function startPoller(intervalMs = 60000): void {
       })()
     : pollAll();
 
-  firstPoll.catch(err => log.error('Poll failed', err));
-  pollInterval = setInterval(() => {
-    pollAll().catch(err => log.error('Poll failed', err));
-  }, intervalMs);
+  // Start interval only after first poll completes to avoid race with seed mode
+  firstPoll
+    .catch(err => log.error('Poll failed', err))
+    .finally(() => {
+      pollInterval = setInterval(() => {
+        pollAll().catch(err => log.error('Poll failed', err));
+      }, intervalMs);
+    });
 }
 
 export function stopPoller(): void {
-  if (pollInterval) {
-    clearInterval(pollInterval);
-    pollInterval = null;
+  if (started) {
+    started = false;
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
     inaccessibleRepos.clear();
     log.info('Stopped');
   }
