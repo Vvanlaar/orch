@@ -191,7 +191,7 @@ async function processPrCommentFix(task: Task): Promise<void> {
       } catch {
         log.info(`Task #${task.id} Step 0: Merge conflicts detected, letting Claude resolve`);
         const mergePrompt = buildMergeConflictPrompt(baseBranch);
-        const mergeResult = await runClaude(task, mergePrompt, { allowEdits: true, workingDir: worktreePath });
+        const mergeResult = await runClaudeStreaming(task.id, task, mergePrompt, { allowEdits: true, workingDir: worktreePath });
         if (mergeResult.success) {
           try {
             execFileSync('git', ['commit', '--no-edit'], { cwd: worktreePath, stdio: 'pipe' });
@@ -210,7 +210,7 @@ async function processPrCommentFix(task: Task): Promise<void> {
     // Step 1: Fix review comments
     log.info(`Task #${task.id} Step 1: Fixing ${comments.length} review comments`);
     const fixPrompt = buildPrCommentFixPrompt(task.context);
-    const fixResult = await runClaude(task, fixPrompt, { allowEdits: true, workingDir: worktreePath });
+    const fixResult = await runClaudeStreaming(task.id, task, fixPrompt, { allowEdits: true, workingDir: worktreePath });
 
     if (!fixResult.success) {
       throw new Error(`Fix step failed: ${fixResult.error}`);
@@ -224,12 +224,12 @@ async function processPrCommentFix(task: Task): Promise<void> {
       // Step 2: Run code simplifier on modified files
       log.info(`Task #${task.id} Step 2: Running code simplifier on ${modifiedFiles.length} files`);
       const simplifyPrompt = buildCodeSimplifierPrompt(modifiedFiles);
-      await runClaude(task, simplifyPrompt, { allowEdits: true, workingDir: worktreePath });
+      await runClaudeStreaming(task.id, task, simplifyPrompt, { allowEdits: true, workingDir: worktreePath });
 
       // Step 3: Self-review
       log.info(`Task #${task.id} Step 3: Self-review`);
       const reviewPrompt = buildSelfReviewPrompt();
-      const reviewResult = await runClaude(task, reviewPrompt, { allowEdits: false, workingDir: worktreePath });
+      const reviewResult = await runClaudeStreaming(task.id, task, reviewPrompt, { allowEdits: false, workingDir: worktreePath });
 
       // Check if review passed
       const reviewOutput = reviewResult.output.toLowerCase();
@@ -272,7 +272,7 @@ async function processPrCommentFix(task: Task): Promise<void> {
     let resolutions: Array<{ index: number; resolution: string }> = [];
     try {
       const resPrompt = buildCommentResolutionPrompt(comments);
-      const resResult = await runClaude(task, resPrompt, { allowEdits: false, workingDir: worktreePath });
+      const resResult = await runClaudeStreaming(task.id, task, resPrompt, { allowEdits: false, workingDir: worktreePath });
       if (resResult.success) {
         const jsonMatch = resResult.output.match(/\[[\s\S]*\]/);
         if (jsonMatch) {
