@@ -247,8 +247,8 @@ export function checkoutPRInWorktree(repoPath: string, prNumber: number, branch?
     // Reuse existing worktree
     if (existsSync(path.join(worktreePath, '.git'))) return worktreePath;
 
-    // Fetch the PR head ref (handles fork branches that aren't on origin)
-    execFileSync('git', ['fetch', 'origin', `pull/${prNumber}/head:pr-${prNumber}`], { cwd: repoPath, stdio: 'pipe' });
+    // Fetch the PR head ref (+ force-updates if local ref already exists)
+    execFileSync('git', ['fetch', 'origin', `+pull/${prNumber}/head:pr-${prNumber}`], { cwd: repoPath, stdio: 'pipe' });
 
     // Enable long paths on Windows to avoid "Filename too long" errors
     if (process.platform === 'win32') {
