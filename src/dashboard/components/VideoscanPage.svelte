@@ -6,6 +6,7 @@
   let url = $state('');
   let maxPages = $state(50);
   let concurrency = $state(6);
+  let delay = $state(0);
   let starting = $state(false);
   let error = $state('');
 
@@ -23,7 +24,7 @@
     starting = true;
     error = '';
     try {
-      await startScan(url, maxPages, concurrency);
+      await startScan(url, maxPages, concurrency, delay);
       url = '';
       setTimeout(() => fetchScans(), 2000);
     } catch (err: any) {
@@ -35,7 +36,7 @@
 
   async function handleResume(scan: ScanSummary) {
     try {
-      await resumeScan(scan.filename, maxPages, concurrency);
+      await resumeScan(scan.filename, maxPages, concurrency, delay);
       setTimeout(() => fetchScans(), 2000);
     } catch (err: any) {
       error = err.message;
@@ -73,6 +74,10 @@
         <label>
           <span>Concurrency</span>
           <input type="number" min="1" max="20" bind:value={concurrency} />
+        </label>
+        <label>
+          <span>Delay (ms)</span>
+          <input type="number" min="0" max="30000" step="100" bind:value={delay} />
         </label>
       </div>
       {#if error}

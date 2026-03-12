@@ -38,10 +38,10 @@ async function postJson(url: string, body: Record<string, unknown>) {
   return data;
 }
 
-export function startScan(url: string, maxPages: number, concurrency: number) {
-  return postJson('/api/actions/start-videoscan', { url, maxPages, concurrency });
+export function startScan(url: string, maxPages: number, concurrency: number, delay: number) {
+  return postJson('/api/actions/start-videoscan', { url, maxPages, concurrency, delay });
 }
 
-export function resumeScan(filename: string, maxPages: number, concurrency: number) {
-  return postJson('/api/actions/resume-videoscan', { filename, maxPages, concurrency });
+export function resumeScan(filename: string, maxPages: number, concurrency: number, delay: number) {
+  return postJson('/api/actions/resume-videoscan', { filename, maxPages, concurrency, delay });
 }

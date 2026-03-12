@@ -449,6 +449,53 @@ async function waitForDynamicMedia(page, timeoutMs = 5000) {
   }, timeoutMs);
 }
 
+// ── Rate Limit Detection ──────────────────────────────────────────
+
+const WAF_TITLE_PATTERNS = [
+  /just a moment/i, /attention required/i, /cloudflare/i,
+  /access denied/i, /security check/i, /please wait/i,
+  /checking your browser/i, /ddos protection/i,
+];
+
+const CONNECTION_ERROR_PATTERNS = [
+  'ERR_CONNECTION_REFUSED', 'ERR_CONNECTION_RESET', 'ERR_CONNECTION_CLOSED',
+  'ECONNRESET', 'ECONNREFUSED',
+];
+
+function detectConnectionRateLimit(err) {
+  const msg = err?.message;
+  if (!msg) return null;
+  const match = CONNECTION_ERROR_PATTERNS.find(p => msg.includes(p));
+  return match ? `connection: ${match}` : null;
+}
+
+function detectResponseRateLimit(response, html) {
+  if (!response) return 'null response (blocked)';
+  const status = response.status();
+  if (status === 429) return `HTTP 429`;
+  if ((status === 403 || status === 503) && html) {
+    const titleMatch = html.match(/<title[^>]*>(.*?)<\/title>/i);
+    const title = titleMatch ? titleMatch[1] : '';
+    for (const p of WAF_TITLE_PATTERNS) {
+      if (p.test(title) || p.test(html.slice(0, 5000))) {
+        return `HTTP ${status} WAF (${title.slice(0, 40)})`;
+      }
+    }
+    // cf-ray header on 403 suggests Cloudflare block
+    const headers = response.headers();
+    if (status === 403 && headers['cf-ray']) {
+      return `HTTP 403 Cloudflare (cf-ray: ${headers['cf-ray']})`;
+    }
+  }
+  return null;
+}
+
+function createRateLimitError(reason) {
+  const err = new Error(`Rate limited: ${reason}`);
+  err._rateLimit = reason;
+  return err;
+}
+
 async function scanOnePage(context, url, timeout) {
   const page = await context.newPage();
   const networkRequests = [];
@@ -457,7 +504,23 @@ async function scanOnePage(context, url, timeout) {
     networkRequests.push(req.url());
   });
 
-  await page.goto(url, { waitUntil: "networkidle", timeout });
+  let response;
+  try {
+    response = await page.goto(url, { waitUntil: "networkidle", timeout });
+  } catch (err) {
+    const rlReason = detectConnectionRateLimit(err);
+    await page.close();
+    if (rlReason) throw createRateLimitError(rlReason);
+    throw err;
+  }
+
+  // Check response for WAF/rate limit pages
+  const earlyHtml = await page.content();
+  const rlReason = detectResponseRateLimit(response, earlyHtml);
+  if (rlReason) {
+    await page.close();
+    throw createRateLimitError(rlReason);
+  }
 
   // Scroll to trigger lazy-loaded video embeds
   await scrollPage(page);
@@ -482,9 +545,91 @@ async function scanOnePage(context, url, timeout) {
   return { detected, links };
 }
 
+// First page: accept cookies before scanning (re-navigates if cookies accepted)
+async function scanFirstPage(context, url, timeout) {
+  const page = await context.newPage();
+  const networkRequests = [];
+  page.on("request", (req) => networkRequests.push(req.url()));
+
+  let response;
+  try {
+    response = await page.goto(url, { waitUntil: "networkidle", timeout });
+  } catch (err) {
+    const rlReason = detectConnectionRateLimit(err);
+    await page.close();
+    if (rlReason) throw createRateLimitError(rlReason);
+    throw err;
+  }
+
+  const earlyHtml = await page.content();
+  const rlReason = detectResponseRateLimit(response, earlyHtml);
+  if (rlReason) {
+    await page.close();
+    throw createRateLimitError(rlReason);
+  }
+
+  const cookiesAccepted = await acceptCookies(page);
+  if (cookiesAccepted) {
+    await page.goto(url, { waitUntil: "networkidle", timeout });
+  }
+
+  await scrollPage(page);
+  const dynamicMedia = await waitForDynamicMedia(page, 5000);
+  for (const src of [...dynamicMedia.scripts, ...dynamicMedia.iframes]) {
+    networkRequests.push(src);
+  }
+
+  const html = await page.content();
+  const detected = detectPlayers(html, networkRequests);
+  const links = await page.evaluate(() =>
+    Array.from(document.querySelectorAll("a[href]"), (a) => a.href)
+  );
+
+  await page.close();
+  return { detected, links, cookiesAccepted };
+}
+
 const DEFAULT_CONCURRENCY = 6;
 
-async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile = null, concurrency = DEFAULT_CONCURRENCY } = {}) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function onRateLimit(throttle, url, reason) {
+  throttle.rateLimitHits++;
+  throttle.cooldownUntil = Date.now() + 60_000;
+  throttle.delay = throttle.delay === 0 ? 1000 : Math.min(throttle.delay * 2, 30_000);
+  throttle.concurrency = Math.max(1, Math.floor(throttle.concurrency / 2));
+  throttle.peakDelay = Math.max(throttle.peakDelay, throttle.delay);
+  throttle.minConcurrency = Math.min(throttle.minConcurrency, throttle.concurrency);
+  throttle.events.push({ time: Date.now(), url, reason });
+  console.log(chalk.yellow(`  ⚠ Rate limit: ${reason} — delay=${throttle.delay}ms, concurrency=${throttle.concurrency}`));
+}
+
+function tryRecover(throttle) {
+  if (Date.now() < throttle.cooldownUntil) return;
+  // Reduce delay by 25%
+  throttle.delay = Math.max(throttle.baseDelay, Math.floor(throttle.delay * 0.75));
+  // Increase concurrency by 1 (cap at base)
+  throttle.concurrency = Math.min(throttle.baseConcurrency, throttle.concurrency + 1);
+}
+
+// SIGINT/SIGTERM graceful shutdown
+let interrupted = false;
+function setupInterruptHandler(getState) {
+  let signalCount = 0;
+  const handler = (sig) => {
+    signalCount++;
+    if (signalCount >= 2) {
+      console.log(chalk.red('\nForce exit'));
+      process.exit(1);
+    }
+    console.log(chalk.yellow(`\n${sig} received — finishing current batch (press again to force)...`));
+    interrupted = true;
+  };
+  process.on('SIGINT', handler);
+  process.on('SIGTERM', handler);
+}
+
+async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile = null, concurrency = DEFAULT_CONCURRENCY, delay = 0 } = {}) {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     userAgent:
@@ -497,7 +642,21 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   let visited = new Set();
   let queue = [normalizeUrl(startUrl, startUrl)];
   let results = [];
-  let cookiesAccepted = false;
+
+  // Throttle state
+  const throttle = {
+    delay,
+    concurrency,
+    baseDelay: delay,
+    baseConcurrency: concurrency,
+    rateLimitHits: 0,
+    cooldownUntil: 0,
+    events: [],
+    peakDelay: delay,
+    minConcurrency: concurrency,
+  };
+  const retryCount = new Map();
+  const MAX_RETRIES = 2;
 
   // Resume from previous scan state
   if (resumeFile) {
@@ -531,55 +690,49 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   } else {
     console.log(chalk.blue(`\nStarting scan of ${domain}`));
   }
-  console.log(chalk.gray(`Max pages: ${maxPages}, Timeout per page: ${timeout}ms, Concurrency: ${concurrency}\n`));
+  console.log(chalk.gray(`Max pages: ${maxPages}, Timeout per page: ${timeout}ms, Concurrency: ${concurrency}, Delay: ${delay}ms\n`));
+
+  // Graceful interrupt handler
+  setupInterruptHandler(() => ({
+    domain, results, pagesScanned: visited.size,
+    _state: { visited: [...visited], queue },
+    rateLimits: throttle.events.length > 0 ? {
+      totalHits: throttle.rateLimitHits, peakDelay: throttle.peakDelay,
+      minConcurrency: throttle.minConcurrency, events: throttle.events,
+    } : undefined,
+  }));
 
   // Accept cookies on first page before parallel scanning
-  {
-    const firstUrl = queue.shift();
-    if (firstUrl && !visited.has(firstUrl)) {
-      visited.add(firstUrl);
-      process.stdout.write(
-        chalk.gray(`[${visited.size}/${maxPages}] `) + chalk.white(truncate(firstUrl, 80)) + " "
-      );
-      try {
-        const page = await context.newPage();
-        const networkRequests = [];
-        page.on("request", (req) => networkRequests.push(req.url()));
-        await page.goto(firstUrl, { waitUntil: "networkidle", timeout });
+  const firstUrl = queue.shift();
+  if (firstUrl && !visited.has(firstUrl)) {
+    visited.add(firstUrl);
+    process.stdout.write(
+      chalk.gray(`[${visited.size}/${maxPages}] `) + chalk.white(truncate(firstUrl, 80)) + " "
+    );
+    try {
+      const { detected, links } = await scanFirstPage(context, firstUrl, timeout);
+      if (detected.length > 0) {
+        console.log(chalk.green(`  [${detected.map((d) => d.player).join(", ")}]`));
+      } else {
+        console.log(chalk.gray("  -"));
+      }
+      results.push({ url: firstUrl, players: detected });
 
-        cookiesAccepted = await acceptCookies(page);
-        if (cookiesAccepted) {
-          await page.goto(firstUrl, { waitUntil: "networkidle", timeout });
+      const newLinks = [];
+      for (const link of links) {
+        const norm = normalizeUrl(link, firstUrl);
+        if (norm && !visited.has(norm) && !queue.includes(norm) && isSameDomain(norm, domain) && !shouldSkipUrl(norm)) {
+          newLinks.push(norm);
         }
-
-        await scrollPage(page);
-        const dynamicMedia = await waitForDynamicMedia(page, 5000);
-        for (const src of [...dynamicMedia.scripts, ...dynamicMedia.iframes]) {
-          networkRequests.push(src);
-        }
-        const html = await page.content();
-        const detected = detectPlayers(html, networkRequests);
-
-        if (detected.length > 0) {
-          console.log(chalk.green(`  [${detected.map((d) => d.player).join(", ")}]`));
-        } else {
-          console.log(chalk.gray("  -"));
-        }
-        results.push({ url: firstUrl, players: detected });
-
-        const links = await page.evaluate(() =>
-          Array.from(document.querySelectorAll("a[href]"), (a) => a.href)
-        );
-        const newLinks = [];
-        for (const link of links) {
-          const norm = normalizeUrl(link, firstUrl);
-          if (norm && !visited.has(norm) && !queue.includes(norm) && isSameDomain(norm, domain) && !shouldSkipUrl(norm)) {
-            newLinks.push(norm);
-          }
-        }
-        queue.push(...prioritizeUrls(newLinks));
-        await page.close();
-      } catch (err) {
+      }
+      queue.push(...prioritizeUrls(newLinks));
+    } catch (err) {
+      if (err._rateLimit) {
+        onRateLimit(throttle, firstUrl, err._rateLimit);
+        visited.delete(firstUrl);
+        queue.unshift(firstUrl);
+        console.log(chalk.yellow(`  ⚠ First page rate-limited, will retry`));
+      } else {
         console.log(chalk.red(`  ERROR: ${err.message.slice(0, 60)}`));
         results.push({ url: firstUrl, players: [], error: err.message });
       }
@@ -588,10 +741,20 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
 
   // Parallel crawl loop
   const queuedSet = new Set(queue);
-  while (queue.length > 0 && visited.size < maxPages) {
-    // Grab a batch of URLs to scan in parallel
+  let batchNum = 0;
+  let lastProgressAt = Date.now();
+  const scanStartTime = Date.now();
+
+  while (queue.length > 0 && visited.size < maxPages && !interrupted) {
+    // Inter-batch delay (skip first batch)
+    if (batchNum > 0 && throttle.delay > 0) {
+      await sleep(throttle.delay);
+    }
+    batchNum++;
+
+    // Grab a batch of URLs to scan in parallel (use throttle.concurrency)
     const batch = [];
-    while (batch.length < concurrency && queue.length > 0 && visited.size + batch.length < maxPages) {
+    while (batch.length < throttle.concurrency && queue.length > 0 && visited.size + batch.length < maxPages) {
       const url = queue.shift();
       if (!url || visited.has(url)) continue;
       batch.push(url);
@@ -613,6 +776,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     );
 
     // Process results and collect new links
+    let batchHadRateLimit = false;
     for (let i = 0; i < batch.length; i++) {
       const url = batch[i];
       const result = batchResults[i];
@@ -633,10 +797,40 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
           }
         }
       } else {
-        const errMsg = result.reason?.message || "Unknown error";
-        console.log(chalk.red(`  ✗ ${truncate(url, 65)}  ${errMsg.slice(0, 50)}`));
-        results.push({ url, players: [], error: errMsg });
+        const err = result.reason;
+        const errMsg = err?.message || "Unknown error";
+
+        if (err?._rateLimit) {
+          batchHadRateLimit = true;
+          onRateLimit(throttle, url, err._rateLimit);
+          visited.delete(url);
+          const retries = retryCount.get(url) || 0;
+          if (retries < MAX_RETRIES) {
+            retryCount.set(url, retries + 1);
+            queue.unshift(url); // push to front for retry
+            queuedSet.add(url);
+          } else {
+            console.log(chalk.red(`  ✗ ${truncate(url, 65)}  permanently failed (${MAX_RETRIES} retries)`));
+            results.push({ url, players: [], error: `Rate limited: ${err._rateLimit} (max retries)` });
+          }
+        } else {
+          console.log(chalk.red(`  ✗ ${truncate(url, 65)}  ${errMsg.slice(0, 50)}`));
+          results.push({ url, players: [], error: errMsg });
+        }
       }
+    }
+
+    // Recovery check: if no rate limits this batch and cooldown expired
+    if (!batchHadRateLimit && throttle.rateLimitHits > 0) {
+      tryRecover(throttle);
+    }
+
+    // Progress stats every 30s
+    if (Date.now() - lastProgressAt > 30_000) {
+      const elapsed = (Date.now() - scanStartTime) / 60_000;
+      const ppm = (visited.size / elapsed).toFixed(1);
+      console.log(chalk.cyan(`  ── ${ppm} pages/min | delay=${throttle.delay}ms | concurrency=${throttle.concurrency} | queue=${queue.length}`));
+      lastProgressAt = Date.now();
     }
 
     // Re-prioritize remaining queue after each batch (new video-likely URLs bubble up)
@@ -644,11 +838,20 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   }
 
   await browser.close();
+
+  const rateLimits = throttle.events.length > 0 ? {
+    totalHits: throttle.rateLimitHits,
+    peakDelay: throttle.peakDelay,
+    minConcurrency: throttle.minConcurrency,
+    events: throttle.events.map(e => ({ time: new Date(e.time).toISOString(), url: e.url, reason: e.reason })),
+  } : undefined;
+
   return {
     domain,
     results,
     pagesScanned: visited.size,
     _state: { visited: [...visited], queue },
+    rateLimits,
   };
 }
 
@@ -684,7 +887,7 @@ function detectPlayers(html, networkRequests) {
 
 // ── Report ──────────────────────────────────────────────────────────
 
-function generateReport({ domain, results, pagesScanned, _state }) {
+function generateReport({ domain, results, pagesScanned, _state, rateLimits }) {
   const playerSummary = {};
   const pagesWithPlayers = [];
   const pagesWithoutPlayers = [];
@@ -742,6 +945,20 @@ function generateReport({ domain, results, pagesScanned, _state }) {
     }
   }
 
+  if (rateLimits) {
+    console.log(chalk.bold.yellow("\n  ── Rate Limiting ─────────────────────────────"));
+    console.log(chalk.white(`  Total rate limit hits: ${rateLimits.totalHits}`));
+    console.log(chalk.white(`  Peak delay: ${rateLimits.peakDelay}ms`));
+    console.log(chalk.white(`  Min concurrency: ${rateLimits.minConcurrency}`));
+    for (const e of rateLimits.events.slice(0, 10)) {
+      const t = typeof e.time === 'string' ? e.time : new Date(e.time).toISOString();
+      console.log(chalk.gray(`    ${t.slice(11, 19)} ${e.reason} — ${truncate(e.url, 50)}`));
+    }
+    if (rateLimits.events.length > 10) {
+      console.log(chalk.gray(`    ... and ${rateLimits.events.length - 10} more`));
+    }
+  }
+
   console.log(chalk.bold.blue("\n" + "═".repeat(70)));
 
   // Save JSON report
@@ -760,6 +977,7 @@ function generateReport({ domain, results, pagesScanned, _state }) {
       url,
       players: players.map((p) => ({ name: p.player, evidence: p.evidence })),
     })),
+    rateLimits,
     _state,
   };
   writeFileSync(jsonFile, JSON.stringify(jsonReport, null, 2));
@@ -784,6 +1002,7 @@ ${chalk.bold("Opties:")}
   --max-pages <n>       Max pagina's te scannen (standaard: 50)
   --timeout <ms>        Timeout per pagina in ms (standaard: 15000)
   --concurrency <n>     Pagina's tegelijk scannen (standaard: 6)
+  --delay <ms>          Vertraging tussen batches in ms (standaard: 0)
   --resume <json-file>  Hervat scan vanuit eerder resultaat
 
 ${chalk.bold("Voorbeelden:")}
@@ -825,9 +1044,10 @@ async function main() {
   const maxPages = parseInt(args[args.indexOf("--max-pages") + 1]) || 50;
   const timeout = parseInt(args[args.indexOf("--timeout") + 1]) || 15000;
   const concurrency = parseInt(args[args.indexOf("--concurrency") + 1]) || DEFAULT_CONCURRENCY;
+  const delay = parseInt(args[args.indexOf("--delay") + 1]) || 0;
 
   try {
-    const scanResult = await crawlSite(url, { maxPages, timeout, resumeFile, concurrency });
+    const scanResult = await crawlSite(url, { maxPages, timeout, resumeFile, concurrency, delay });
     generateReport(scanResult);
   } catch (err) {
     console.error(chalk.red(`Scan mislukt: ${err.message}`));

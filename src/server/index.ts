@@ -1394,7 +1394,7 @@ app.post('/api/actions/review-resolution', (req, res) => {
 // --- Videoscan API ---
 
 app.post('/api/actions/start-videoscan', (req, res) => {
-  const { url, maxPages, concurrency } = req.body;
+  const { url, maxPages, concurrency, delay } = req.body;
   if (!url || typeof url !== 'string') {
     res.status(400).json({ error: 'url required' });
     return;
@@ -1408,6 +1408,7 @@ app.post('/api/actions/start-videoscan', (req, res) => {
     scanUrl: url,
     maxPages: maxPages || 50,
     concurrency: concurrency || 6,
+    delay: delay || 0,
   });
   triggerUpdate();
   broadcastTasks();
@@ -1415,7 +1416,7 @@ app.post('/api/actions/start-videoscan', (req, res) => {
 });
 
 app.post('/api/actions/resume-videoscan', (req, res) => {
-  const { filename, maxPages, concurrency } = req.body;
+  const { filename, maxPages, concurrency, delay } = req.body;
   if (!filename || typeof filename !== 'string') {
     res.status(400).json({ error: 'filename required' });
     return;
@@ -1443,6 +1444,7 @@ app.post('/api/actions/resume-videoscan', (req, res) => {
     maxPages: maxPages || 200,
     concurrency: concurrency || 6,
     resumeFile: resumePath,
+    delay: delay || 0,
   });
   triggerUpdate();
   broadcastTasks();

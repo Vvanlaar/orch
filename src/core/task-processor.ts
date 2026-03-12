@@ -364,6 +364,7 @@ async function processVideoscan(task: Task): Promise<void> {
       maxPages: ctx.maxPages,
       concurrency: ctx.concurrency,
       resumeFile: ctx.resumeFile,
+      delay: ctx.delay,
     });
 
     if (result.success) {

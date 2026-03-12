@@ -32,6 +32,7 @@ export interface VideoscanOptions {
   maxPages?: number;
   concurrency?: number;
   resumeFile?: string;
+  delay?: number;
 }
 
 export async function runVideoscan(taskId: number, options: VideoscanOptions): Promise<VideoscanResult> {
@@ -46,6 +47,7 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
   if (options.maxPages) args.push('--max-pages', String(options.maxPages));
   if (options.concurrency) args.push('--concurrency', String(options.concurrency));
   if (options.resumeFile) args.push('--resume', options.resumeFile);
+  if (options.delay) args.push('--delay', String(options.delay));
 
   log.info(`Task #${taskId} Starting videoscan: ${options.scanUrl} (max ${options.maxPages || 50} pages)`);
 

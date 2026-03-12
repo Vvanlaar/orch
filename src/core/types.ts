@@ -65,6 +65,7 @@ export interface TaskContext {
   maxPages?: number;
   concurrency?: number;
   resumeFile?: string; // path to previous scan JSON for resume
+  delay?: number; // inter-batch delay in ms for rate limit throttling
 }
 
 export interface Config {
