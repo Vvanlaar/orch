@@ -1158,14 +1158,16 @@ app.post('/api/actions/fix-pr-comments', asyncHandler(async (req, res) => {
 
   let headBranch = branch;
   let baseBranchRef = baseBranch;
+  let headRepo: string | undefined;
 
-  if (!headBranch) {
-    try {
-      const prData = await getPull(owner, repoName, prNumber);
-      headBranch = prData.head.ref;
-      baseBranchRef = prData.base.ref;
-      log.info(`fix-pr-comments: Fetched branch info: ${headBranch} -> ${baseBranchRef}`);
-    } catch (err) {
+  try {
+    const prData = await getPull(owner, repoName, prNumber);
+    headBranch = headBranch || prData.head.ref;
+    baseBranchRef = baseBranchRef || prData.base.ref;
+    headRepo = prData.head.repo?.full_name;
+    log.info(`fix-pr-comments: Fetched branch info: ${headBranch} -> ${baseBranchRef} (head: ${headRepo})`);
+  } catch (err) {
+    if (!headBranch) {
       log.error('fix-pr-comments: Failed to fetch PR branch info:', err);
       res.status(400).json({ error: 'Failed to fetch PR branch info' });
       return;
@@ -1201,6 +1203,7 @@ app.post('/api/actions/fix-pr-comments', asyncHandler(async (req, res) => {
       url,
       branch: headBranch,
       baseBranch: baseBranchRef,
+      headRepo,
       reviewComments,
     });
 

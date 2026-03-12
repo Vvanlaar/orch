@@ -6,6 +6,7 @@ import { config, WORKSPACES_DIR } from './config.js';
 const log = createLogger('task-processor');
 import { createIssueComment, createReviewCommentReply, getReviewThreads, resolveReviewThread } from './github-api.js';
 import {
+  getAllTasks,
   getPendingTasks,
   getRunningCount,
   startTask,
@@ -36,6 +37,7 @@ import {
   createWorktree,
   removeWorktree,
   checkoutPRInWorktree,
+  findRemoteForRepo,
 } from './git-ops.js';
 import type { Task } from './types.js';
 
@@ -245,23 +247,29 @@ async function processPrCommentFix(task: Task): Promise<void> {
         throw new Error('Failed to commit changes');
       }
 
+      // Determine correct remote (fork PRs push to fork remote, not origin)
+      const pushRemote = task.context.headRepo
+        ? findRemoteForRepo(task.repoPath, task.context.headRepo)
+        : 'origin';
+      log.info(`Task #${task.id} Step 4: Pushing to remote "${pushRemote}" (headRepo: ${task.context.headRepo || 'same as origin'})`);
+
       // Pull latest from remote branch then push (avoids non-fast-forward rejection)
       const { execFileSync } = await import('child_process');
       try {
-        execFileSync('git', ['fetch', 'origin', targetBranch], { cwd: worktreePath, stdio: 'pipe' });
+        execFileSync('git', ['fetch', pushRemote, targetBranch], { cwd: worktreePath, stdio: 'pipe' });
         try {
-          execFileSync('git', ['rebase', `origin/${targetBranch}`], { cwd: worktreePath, stdio: 'pipe' });
+          execFileSync('git', ['rebase', `${pushRemote}/${targetBranch}`], { cwd: worktreePath, stdio: 'pipe' });
         } catch {
           // Rebase conflict — abort and try merge instead
           try { execFileSync('git', ['rebase', '--abort'], { cwd: worktreePath, stdio: 'pipe' }); } catch {}
           try {
-            execFileSync('git', ['merge', `origin/${targetBranch}`, '--no-edit'], { cwd: worktreePath, stdio: 'pipe' });
+            execFileSync('git', ['merge', `${pushRemote}/${targetBranch}`, '--no-edit'], { cwd: worktreePath, stdio: 'pipe' });
           } catch (mergeErr) {
             try { execFileSync('git', ['merge', '--abort'], { cwd: worktreePath, stdio: 'pipe' }); } catch {}
-            throw new Error(`Failed to merge with origin/${targetBranch}: ${mergeErr}`);
+            throw new Error(`Failed to merge with ${pushRemote}/${targetBranch}: ${mergeErr}`);
           }
         }
-        execFileSync('git', ['push', 'origin', `HEAD:${targetBranch}`], { cwd: worktreePath, stdio: 'pipe' });
+        execFileSync('git', ['push', pushRemote, `HEAD:${targetBranch}`], { cwd: worktreePath, stdio: 'pipe' });
       } catch (pushErr) {
         throw new Error(`Failed to push changes: ${pushErr}`);
       }
@@ -581,6 +589,15 @@ let intervalId: NodeJS.Timeout | null = null;
 
 export function startProcessor(intervalMs = 5000): void {
   if (intervalId) return;
+
+  // Mark orphaned running tasks as failed (from previous server crash/restart)
+  const allTasks = getAllTasks(500);
+  const orphaned = allTasks.filter(t => t.status === 'running');
+  for (const t of orphaned) {
+    failTask(t.id, 'Server restarted while task was running');
+    log.warn(`Marked orphaned task #${t.id} as failed`);
+  }
+
   log.info('Task processor started');
   intervalId = setInterval(() => {
     processQueue().catch(err => log.error('Queue processing error', err));

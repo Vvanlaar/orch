@@ -7,6 +7,26 @@ import { createLogger } from './logger.js';
 
 const log = createLogger('git-ops');
 
+/**
+ * Find the git remote name that matches a given "owner/repo" (e.g. "Vvanlaar/ovp6").
+ * Falls back to "origin" if no match found.
+ */
+export function findRemoteForRepo(repoPath: string, headRepo: string): string {
+  try {
+    const output = execFileSync('git', ['remote', '-v'], { cwd: repoPath, encoding: 'utf-8', stdio: 'pipe' });
+    const targetLower = headRepo.toLowerCase();
+    for (const line of output.split('\n')) {
+      const match = line.match(/^(\S+)\s+\S+[:/]([^/]+\/[^/]+?)(?:\.git)?\s+\(push\)/);
+      if (match && match[2].toLowerCase() === targetLower) {
+        return match[1];
+      }
+    }
+  } catch (err) {
+    log.warn('Failed to parse git remotes', { error: String(err) });
+  }
+  return 'origin';
+}
+
 export interface GitStatus {
   hasChanges: boolean;
   staged: string[];

@@ -49,6 +49,8 @@ export interface TaskContext {
     body: string;
     diffHunk?: string;
   }>;
+  // Fork info (for pushing to correct remote)
+  headRepo?: string; // "owner/repo" of the PR source (fork)
   // Retry
   retryOfTaskId?: number;
   retryError?: string;

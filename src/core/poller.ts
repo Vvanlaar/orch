@@ -149,6 +149,7 @@ async function pollMyPRReviewComments(repoFullName: string): Promise<void> {
         prNumber: pr.number,
         branch: pr.head.ref,
         baseBranch: pr.base.ref,
+        headRepo: pr.head.repo?.full_name,
         title: pr.title,
         body: pr.body || '',
         url: pr.html_url,
