@@ -796,8 +796,9 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
 
     // Print batch start
     const batchStart = visited.size - batch.length + 1;
+    const queued = queue.length;
     for (let i = 0; i < batch.length; i++) {
-      console.log(chalk.gray(`[${batchStart + i}/${maxPages}] `) + chalk.white(truncate(batch[i], 80)) + chalk.gray(" ..."));
+      console.log(chalk.gray(`[${batchStart + i}/${maxPages}] `) + chalk.dim(`(queue: ${queued}) `) + chalk.white(truncate(batch[i], 80)) + chalk.gray(" ..."));
     }
 
     // Scan all pages in batch concurrently
@@ -859,7 +860,9 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     if (Date.now() - lastProgressAt > 30_000) {
       const elapsed = (Date.now() - scanStartTime) / 60_000;
       const ppm = (visited.size / elapsed).toFixed(1);
-      console.log(chalk.cyan(`  ── ${ppm} pages/min | delay=${throttle.delay}ms | concurrency=${throttle.concurrency} | queue=${queue.length}`));
+      const remaining = Math.min(queue.length, maxPages - visited.size);
+      const etaMin = ppm > 0 ? (remaining / ppm).toFixed(1) : "?";
+      console.log(chalk.cyan(`  ── ${ppm} pages/min | queue=${queue.length} | ~${etaMin}min left | delay=${throttle.delay}ms | concurrency=${throttle.concurrency}`));
       lastProgressAt = Date.now();
     }
 
