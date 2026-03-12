@@ -1408,7 +1408,7 @@ app.post('/api/actions/start-videoscan', (req, res) => {
     scanUrl: url,
     maxPages: maxPages || 50,
     concurrency: concurrency || 6,
-    delay: delay || 0,
+    delay: delay ?? 200,
   });
   triggerUpdate();
   broadcastTasks();
@@ -1444,7 +1444,7 @@ app.post('/api/actions/resume-videoscan', (req, res) => {
     maxPages: maxPages || 200,
     concurrency: concurrency || 6,
     resumeFile: resumePath,
-    delay: delay || 0,
+    delay: delay ?? 200,
   });
   triggerUpdate();
   broadcastTasks();

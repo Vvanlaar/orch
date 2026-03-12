@@ -568,8 +568,7 @@ async function scanFirstPage(context, url, timeout) {
     throw createRateLimitError(rlReason);
   }
 
-  const cookiesAccepted = await acceptCookies(page);
-  if (cookiesAccepted) {
+  if (await acceptCookies(page)) {
     await page.goto(url, { waitUntil: "networkidle", timeout });
   }
 
@@ -586,12 +585,22 @@ async function scanFirstPage(context, url, timeout) {
   );
 
   await page.close();
-  return { detected, links, cookiesAccepted };
+  return { detected, links };
 }
 
 const DEFAULT_CONCURRENCY = 6;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function buildRateLimits(throttle) {
+  if (throttle.events.length === 0) return undefined;
+  return {
+    totalHits: throttle.rateLimitHits,
+    peakDelay: throttle.peakDelay,
+    minConcurrency: throttle.minConcurrency,
+    events: throttle.events.map(e => ({ time: new Date(e.time).toISOString(), url: e.url, reason: e.reason })),
+  };
+}
 
 function onRateLimit(throttle, url, reason) {
   throttle.rateLimitHits++;
@@ -614,7 +623,7 @@ function tryRecover(throttle) {
 
 // SIGINT/SIGTERM graceful shutdown
 let interrupted = false;
-function setupInterruptHandler(getState) {
+function setupInterruptHandler() {
   let signalCount = 0;
   const handler = (sig) => {
     signalCount++;
@@ -629,7 +638,7 @@ function setupInterruptHandler(getState) {
   process.on('SIGTERM', handler);
 }
 
-async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile = null, concurrency = DEFAULT_CONCURRENCY, delay = 0 } = {}) {
+async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile = null, concurrency = DEFAULT_CONCURRENCY, delay = 200 } = {}) {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     userAgent:
@@ -692,15 +701,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   }
   console.log(chalk.gray(`Max pages: ${maxPages}, Timeout per page: ${timeout}ms, Concurrency: ${concurrency}, Delay: ${delay}ms\n`));
 
-  // Graceful interrupt handler
-  setupInterruptHandler(() => ({
-    domain, results, pagesScanned: visited.size,
-    _state: { visited: [...visited], queue },
-    rateLimits: throttle.events.length > 0 ? {
-      totalHits: throttle.rateLimitHits, peakDelay: throttle.peakDelay,
-      minConcurrency: throttle.minConcurrency, events: throttle.events,
-    } : undefined,
-  }));
+  setupInterruptHandler();
 
   // Accept cookies on first page before parallel scanning
   const firstUrl = queue.shift();
@@ -839,19 +840,12 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
 
   await browser.close();
 
-  const rateLimits = throttle.events.length > 0 ? {
-    totalHits: throttle.rateLimitHits,
-    peakDelay: throttle.peakDelay,
-    minConcurrency: throttle.minConcurrency,
-    events: throttle.events.map(e => ({ time: new Date(e.time).toISOString(), url: e.url, reason: e.reason })),
-  } : undefined;
-
   return {
     domain,
     results,
     pagesScanned: visited.size,
     _state: { visited: [...visited], queue },
-    rateLimits,
+    rateLimits: buildRateLimits(throttle),
   };
 }
 
@@ -863,18 +857,14 @@ function detectPlayers(html, networkRequests) {
 
     // Check HTML content
     for (const pattern of config.patterns) {
-      if (pattern.test(html)) {
-        const match = html.match(pattern);
-        if (match) matches.push(`HTML: ${match[0].slice(0, 80)}`);
-      }
+      const match = html.match(pattern);
+      if (match) matches.push(`HTML: ${match[0].slice(0, 80)}`);
     }
 
     // Check network requests
     for (const scriptPattern of config.scripts) {
-      const matchingReqs = networkRequests.filter((r) => scriptPattern.test(r));
-      if (matchingReqs.length > 0) {
-        matches.push(`Network: ${matchingReqs[0].slice(0, 80)}`);
-      }
+      const match = networkRequests.find((r) => scriptPattern.test(r));
+      if (match) matches.push(`Network: ${match.slice(0, 80)}`);
     }
 
     if (matches.length > 0) {
@@ -1002,7 +992,7 @@ ${chalk.bold("Opties:")}
   --max-pages <n>       Max pagina's te scannen (standaard: 50)
   --timeout <ms>        Timeout per pagina in ms (standaard: 15000)
   --concurrency <n>     Pagina's tegelijk scannen (standaard: 6)
-  --delay <ms>          Vertraging tussen batches in ms (standaard: 0)
+  --delay <ms>          Vertraging tussen batches in ms (standaard: 200)
   --resume <json-file>  Hervat scan vanuit eerder resultaat
 
 ${chalk.bold("Voorbeelden:")}
@@ -1044,7 +1034,7 @@ async function main() {
   const maxPages = parseInt(args[args.indexOf("--max-pages") + 1]) || 50;
   const timeout = parseInt(args[args.indexOf("--timeout") + 1]) || 15000;
   const concurrency = parseInt(args[args.indexOf("--concurrency") + 1]) || DEFAULT_CONCURRENCY;
-  const delay = parseInt(args[args.indexOf("--delay") + 1]) || 0;
+  const delay = parseInt(args[args.indexOf("--delay") + 1]) || 200;
 
   try {
     const scanResult = await crawlSite(url, { maxPages, timeout, resumeFile, concurrency, delay });

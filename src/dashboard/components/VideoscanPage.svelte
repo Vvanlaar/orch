@@ -6,7 +6,7 @@
   let url = $state('');
   let maxPages = $state(50);
   let concurrency = $state(6);
-  let delay = $state(0);
+  let delay = $state(200);
   let starting = $state(false);
   let error = $state('');
 
