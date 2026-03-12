@@ -694,6 +694,9 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       }
     }
 
+    // maxPages is additive when resuming: scan N more pages beyond what's already visited
+    maxPages = visited.size + maxPages;
+
     console.log(chalk.yellow(`\nResuming scan of ${domain}`));
     console.log(chalk.yellow(`Previously scanned: ${visited.size} pages, Queue: ${queue.length} URLs`));
   } else {
