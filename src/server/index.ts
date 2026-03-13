@@ -1662,12 +1662,11 @@ app.post('/api/videoscans/import-digitoegankelijk', asyncHandler(async (req, res
   const headers = parseCsvLine(lines[0]);
   const nameIdx = headers.findIndex(h => /^naam/i.test(h));
   let urlIdx = headers.findIndex(h => /^url$/i.test(h));
-  if (urlIdx === -1) urlIdx = headers.findIndex(h => /\burl\b/i.test(h));
   const typeIdx = headers.findIndex(h => /site of app/i.test(h));
   const statusIdx = headers.findIndex(h => /^status/i.test(h));
 
-  // "Naam/URL" header means col 0 = name, col 1 = url (no separate URL header)
-  if (urlIdx === -1 && nameIdx !== -1 && /url/i.test(headers[nameIdx])) {
+  // "Naam/URL" combined header → col 0 = name, col 1 = url
+  if (urlIdx === -1 && nameIdx !== -1 && /\/url/i.test(headers[nameIdx])) {
     urlIdx = nameIdx + 1;
   }
 

@@ -91,6 +91,7 @@ export interface Config {
   };
   claude: {
     maxConcurrentTasks: number;
+    maxConcurrentVideoscans: number;
     timeout: number;
     terminalMode: boolean; // open tasks in separate terminal windows
     preferredTerminal: TerminalId;

@@ -9,6 +9,7 @@ import {
   getAllTasks,
   getPendingTasks,
   getRunningCount,
+  getRunningTasks,
   startTask,
   completeTask,
   failTask,
@@ -616,18 +617,23 @@ async function processTask(task: Task): Promise<void> {
 }
 
 export async function processQueue(): Promise<void> {
-  const [runningCount, allPending] = await Promise.all([
-    getRunningCount(),
-    getPendingTasks(config.claude.maxConcurrentTasks),
+  const [runningTasks, allPending] = await Promise.all([
+    getRunningTasks(),
+    getPendingTasks(config.claude.maxConcurrentTasks + config.claude.maxConcurrentVideoscans),
   ]);
-  const available = config.claude.maxConcurrentTasks - runningCount;
 
-  if (available <= 0) return;
+  let videoscanSlots = config.claude.maxConcurrentVideoscans - runningTasks.filter(t => t.type === 'videoscan').length;
+  let otherSlots = config.claude.maxConcurrentTasks - runningTasks.filter(t => t.type !== 'videoscan').length;
 
-  const pending = allPending.slice(0, available);
+  for (const task of allPending) {
+    if (task.type === 'videoscan') {
+      if (videoscanSlots <= 0) continue;
+      videoscanSlots--;
+    } else {
+      if (otherSlots <= 0) continue;
+      otherSlots--;
+    }
 
-  for (const task of pending) {
-    // Don't await - run concurrently
     processTask(task).catch((err) => {
       log.error(`Unhandled error in task #${task.id}`, err);
     });

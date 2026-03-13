@@ -26,6 +26,7 @@ export const config: Config = {
   },
   claude: {
     maxConcurrentTasks: parseInt(envOr('MAX_CONCURRENT_TASKS', '2')),
+    maxConcurrentVideoscans: parseInt(envOr('MAX_CONCURRENT_VIDEOSCANS', '5')),
     timeout: parseInt(envOr('CLAUDE_TIMEOUT', '900000')),
     terminalMode: envOr('CLAUDE_TERMINAL_MODE', 'false') === 'true',
     preferredTerminal: envOr('PREFERRED_TERMINAL', 'auto') as TerminalId,

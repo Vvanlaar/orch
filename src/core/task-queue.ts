@@ -194,6 +194,11 @@ export async function getRunningCount(): Promise<number> {
   return jsonGetRunningCount();
 }
 
+export async function getRunningTasks(): Promise<Task[]> {
+  const all = await getAllTasks(500);
+  return all.filter(t => t.status === 'running');
+}
+
 export async function getAllTasks(limit = 50): Promise<Task[]> {
   if (useDb) return dbGetAllTasks(limit);
   return jsonGetAllTasks(limit);
