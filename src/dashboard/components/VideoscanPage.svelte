@@ -17,6 +17,23 @@
   let activeTasks = $derived(videoscanTasks.filter(t => t.status === 'running' || t.status === 'pending'));
   let resumableScans = $derived(scans.filter(s => s.canResume));
 
+  let groupedScans = $derived.by(() => {
+    const groups = new Map<string, ScanSummary[]>();
+    for (const scan of scans) {
+      if (!groups.has(scan.domain)) groups.set(scan.domain, []);
+      groups.get(scan.domain)!.push(scan);
+    }
+    return groups;
+  });
+  let collapsedDomains = $state(new Set<string>());
+
+  function toggleDomain(domain: string) {
+    const next = new Set(collapsedDomains);
+    if (next.has(domain)) next.delete(domain);
+    else next.add(domain);
+    collapsedDomains = next;
+  }
+
   onMount(() => { fetchScans(); });
 
   async function handleStart() {
@@ -146,30 +163,45 @@
       <div class="empty">No scans yet. Start one above.</div>
     {:else}
       <div class="card-list" style="max-height:600px">
-        {#each scans as scan (scan.filename)}
-          <div class="item">
-            <div class="item-info">
-              <span class="item-title">{scan.domain}</span>
-              <span class="item-meta">
-                <span>{formatDate(scan.scanDate)}</span>
-                <span>{scan.pagesScanned} pages</span>
-                <span>{scan.pagesWithVideo} with video</span>
-                <span>{scan.uniquePlayers} players</span>
-              </span>
-            </div>
-            <div class="item-actions">
-              {#if scan.hasReport}
-                <a class="action-btn" href="/api/videoscans/files/{scan.filename.replace('.json', '.html')}" target="_blank">
-                  Report
-                </a>
-              {/if}
-              <a class="action-btn secondary" href="/api/videoscans/files/{scan.filename}" target="_blank" download>
-                JSON
-              </a>
-              {#if scan.canResume}
-                <button class="action-btn secondary" onclick={() => handleResume(scan)}>Resume</button>
-              {/if}
-            </div>
+        {#each [...groupedScans.entries()] as [domain, domainScans] (domain)}
+          <div class="domain-group">
+            <button class="domain-header" onclick={() => toggleDomain(domain)}>
+              <span class="domain-chevron" class:collapsed={collapsedDomains.has(domain)}>&#9662;</span>
+              <span class="domain-name">{domain}</span>
+              <span class="domain-count">{domainScans.length} scan{domainScans.length === 1 ? '' : 's'}</span>
+            </button>
+            {#if !collapsedDomains.has(domain)}
+              {#each domainScans as scan (scan.filename)}
+                <div class="item">
+                  <div class="item-info">
+                    <span class="item-meta">
+                      <span>{formatDate(scan.scanDate)}</span>
+                      <span>{scan.pagesScanned} pages</span>
+                      <span>{scan.pagesWithVideo} with video</span>
+                      <span>{scan.uniquePlayers} players</span>
+                    </span>
+                  </div>
+                  <div class="item-actions">
+                    {#if scan.hasPdf}
+                      <a class="action-btn" href="/api/videoscans/files/{scan.filename.replace('.json', '.pdf')}" target="_blank" download>
+                        PDF
+                      </a>
+                    {/if}
+                    {#if scan.hasReport}
+                      <a class="action-btn" href="/api/videoscans/files/{scan.filename.replace('.json', '.html')}" target="_blank">
+                        Report
+                      </a>
+                    {/if}
+                    <a class="action-btn secondary" href="/api/videoscans/files/{scan.filename}" target="_blank" download>
+                      JSON
+                    </a>
+                    {#if scan.canResume}
+                      <button class="action-btn secondary" onclick={() => handleResume(scan)}>Resume</button>
+                    {/if}
+                  </div>
+                </div>
+              {/each}
+            {/if}
           </div>
         {/each}
       </div>
@@ -302,5 +334,57 @@
     text-decoration: none;
     display: inline-flex;
     align-items: center;
+  }
+
+  .domain-group {
+    border-bottom: 1px solid #21262d;
+  }
+
+  .domain-group:last-child {
+    border-bottom: none;
+  }
+
+  .domain-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 18px;
+    background: #161b22;
+    border: none;
+    color: #c9d1d9;
+    cursor: pointer;
+    font-size: 13px;
+    font-family: 'IBM Plex Mono', monospace;
+    text-align: left;
+  }
+
+  .domain-header:hover {
+    background: #1c2128;
+  }
+
+  .domain-chevron {
+    font-size: 10px;
+    color: #8b949e;
+    transition: transform 0.15s;
+  }
+
+  .domain-chevron.collapsed {
+    transform: rotate(-90deg);
+  }
+
+  .domain-name {
+    font-weight: 600;
+    color: #58a6ff;
+  }
+
+  .domain-count {
+    color: #8b949e;
+    font-size: 11px;
+    margin-left: auto;
+  }
+
+  .domain-group .item {
+    padding-left: 36px;
   }
 </style>
