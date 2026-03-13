@@ -262,7 +262,8 @@
     padding-bottom: 16px;
     border-bottom: 1px solid var(--border-primary);
     background: linear-gradient(180deg, var(--bg-raised) 0%, transparent 100%);
-    padding: 16px 0 16px;
+    padding: 16px 20px;
+    border-radius: 10px;
   }
 
   h1 {
