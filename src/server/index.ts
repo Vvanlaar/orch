@@ -1522,23 +1522,33 @@ function parseCsvLine(line: string): string[] {
 }
 
 function ensureHttp(url: string): string {
-  return url.startsWith('http') ? url : `https://${url}`;
+  return /^https?:\/\//.test(url) ? url : `https://${url}`;
 }
 
 app.post('/api/videoscans/import-digitoegankelijk', asyncHandler(async (req, res) => {
   const { id } = req.body;
-  if (!id || typeof id !== 'number') {
-    res.status(400).json({ error: 'id (number) required' });
+  if (!Number.isInteger(id) || id < 1 || id > 999999) {
+    res.status(400).json({ error: 'id must be a positive integer' });
     return;
   }
 
   const csvUrl = `https://dashboard.digitoegankelijk.nl/organisaties/download/${id}`;
-  const csvRes = await fetch(csvUrl);
+  const csvRes = await fetch(csvUrl, { signal: AbortSignal.timeout(15_000) });
   if (!csvRes.ok) {
     res.status(502).json({ error: `Failed to fetch CSV: HTTP ${csvRes.status}` });
     return;
   }
+  const MAX_CSV_SIZE = 5 * 1024 * 1024;
+  const contentLength = parseInt(csvRes.headers.get('content-length') || '0', 10);
+  if (contentLength > MAX_CSV_SIZE) {
+    res.status(413).json({ error: 'CSV too large' });
+    return;
+  }
   const csvText = await csvRes.text();
+  if (csvText.length > MAX_CSV_SIZE) {
+    res.status(413).json({ error: 'CSV too large' });
+    return;
+  }
   const lines = csvText.split('\n').filter(l => l.trim());
   if (lines.length < 2) {
     res.status(400).json({ error: 'CSV has no data rows' });

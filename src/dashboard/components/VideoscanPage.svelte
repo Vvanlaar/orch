@@ -44,21 +44,25 @@
 
   onMount(() => { fetchScans(); });
 
+  async function handleDigiImport(orgId: number) {
+    importing = true;
+    error = '';
+    try {
+      const result = await importDigiToegankelijk(orgId);
+      importPreview = result;
+      selectedUrls = new Set(result.groups.flatMap(g => g.sites.map(s => s.url)));
+    } catch (err: any) {
+      error = err.message;
+    } finally {
+      importing = false;
+    }
+  }
+
   async function handleStart() {
     if (!url || importPreview) return;
     const digiMatch = url.match(digiPattern);
     if (digiMatch) {
-      importing = true;
-      error = '';
-      try {
-        const result = await importDigiToegankelijk(Number(digiMatch[1]));
-        importPreview = result;
-        selectedUrls = new Set(result.groups.flatMap(g => g.sites.map(s => s.url)));
-      } catch (err: any) {
-        error = err.message;
-      } finally {
-        importing = false;
-      }
+      await handleDigiImport(Number(digiMatch[1]));
       return;
     }
     starting = true;
@@ -97,23 +101,29 @@
   async function handleBulkStart() {
     if (!importPreview || bulkStarting) return;
     const urls = [...selectedUrls];
-    const total = urls.length;
     bulkStarting = true;
     bulkProgress = 0;
     error = '';
-    try {
-      await Promise.all(urls.map(async (scanUrl) => {
-        await startScan(scanUrl, maxPages, concurrency, delay);
-        bulkProgress++;
+    const errors: string[] = [];
+    const BATCH_SIZE = 5;
+    for (let i = 0; i < urls.length; i += BATCH_SIZE) {
+      const batch = urls.slice(i, i + BATCH_SIZE);
+      await Promise.all(batch.map(async (scanUrl) => {
+        try {
+          await startScan(scanUrl, maxPages, concurrency, delay);
+        } catch (err: any) {
+          errors.push(err.message);
+        }
+        bulkProgress = bulkProgress + 1;
       }));
-      dismissImport();
-      url = '';
-      setTimeout(() => fetchScans(), 2000);
-    } catch (err: any) {
-      error = err.message;
-    } finally {
-      bulkStarting = false;
     }
+    if (errors.length > 0) {
+      error = `${errors.length} scan(s) failed to start`;
+    }
+    dismissImport();
+    url = '';
+    setTimeout(() => fetchScans(), 2000);
+    bulkStarting = false;
   }
 
   async function handleResume(scan: ScanSummary) {
@@ -269,7 +279,7 @@
       <div class="digi-actions">
         {#if bulkStarting}
           <div class="digi-progress">
-            <div class="digi-progress-bar" style="width:{Math.round((bulkProgress / selectedCount) * 100)}%"></div>
+            <div class="digi-progress-bar" style="width:{selectedCount > 0 ? Math.round((bulkProgress / selectedCount) * 100) : 0}%"></div>
           </div>
           <span class="digi-progress-text">{bulkProgress} / {selectedCount}</span>
         {:else}
