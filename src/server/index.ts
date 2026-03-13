@@ -27,6 +27,9 @@ import { startPoller } from '../core/poller.js';
 import { getEffectiveRepoMapping, getScannedRepos } from '../core/repo-scanner.js';
 import { getAuthenticatedUser, getPull, listPullReviewComments, listOrgRepos } from '../core/github-api.js';
 import { approveSuggestion, completeTask, createTask, deleteTask, dismissSuggestion, failTask, getAllTasks, getAllTasksWithOutput, getTask, getTasksWithPids, retryTask, updateTaskRepoPath } from '../core/task-queue.js';
+import { initSettings } from '../core/settings.js';
+import { isSupabaseConfigured } from '../core/db/client.js';
+import { dbGetNotifications, dbInsertNotification } from '../core/db/notifications.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
 import { getVideoscanDir, listScans, mergeScans, generateReport } from '../core/videoscan-runner.js';
 import type { TerminalId } from '../core/types.js';
@@ -49,12 +52,17 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 
 const clients = new Set<WebSocket>();
 
-wss.on('connection', (ws) => {
+wss.on('connection', async (ws) => {
   clients.add(ws);
-  // Send current tasks with streaming output on connect
-  ws.send(JSON.stringify({ type: 'tasks', tasks: getAllTasksWithOutput(100) }));
-  // Send current orchestrator state
-  ws.send(JSON.stringify({ type: 'orchestrator', state: getOrchestratorState() }));
+  try {
+    // Send current tasks with streaming output on connect
+    const tasks = await getAllTasksWithOutput(100);
+    ws.send(JSON.stringify({ type: 'tasks', tasks }));
+    // Send current orchestrator state
+    ws.send(JSON.stringify({ type: 'orchestrator', state: getOrchestratorState() }));
+  } catch (err) {
+    log.error('Error sending initial WS data', err);
+  }
 
   ws.on('message', (data) => {
     try {
@@ -74,8 +82,8 @@ wss.on('connection', (ws) => {
 
 wss.on('error', (err) => log.error('WebSocket server error', err));
 
-export function broadcastTasks(): void {
-  const tasks = getAllTasksWithOutput(100);
+export async function broadcastTasks(): Promise<void> {
+  const tasks = await getAllTasksWithOutput(100);
   const message = JSON.stringify({ type: 'tasks', tasks });
   clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
@@ -134,24 +142,24 @@ app.use('/webhooks/github', githubRouter);
 app.use('/webhooks/ado', adoRouter);
 
 // API for dashboard
-app.get('/api/tasks', (_req, res) => {
-  const tasks = getAllTasks(100);
+app.get('/api/tasks', asyncHandler(async (_req, res) => {
+  const tasks = await getAllTasks(100);
   res.json(tasks);
-});
+}));
 
-app.get('/api/tasks/:id', (req, res) => {
-  const task = getTask(parseInt(req.params.id));
+app.get('/api/tasks/:id', asyncHandler(async (req, res) => {
+  const task = await getTask(parseInt(req.params.id));
   if (!task) {
     res.status(404).json({ error: 'Task not found' });
     return;
   }
   res.json(task);
-});
+}));
 
 // Stop running task
 app.post('/api/tasks/:id/stop', asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id as string);
-  const task = getTask(id);
+  const task = await getTask(id);
   if (!task) {
     res.status(404).json({ error: 'Task not found' });
     return;
@@ -161,27 +169,27 @@ app.post('/api/tasks/:id/stop', asyncHandler(async (req, res) => {
     return;
   }
   killTask(id);
-  failTask(id, 'Stopped by user');
-  broadcastTasks();
+  await failTask(id, 'Stopped by user');
+  await broadcastTasks();
   res.json({ success: true });
 }));
 
 // Delete task
 app.delete('/api/tasks/:id', asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id as string);
-  const success = deleteTask(id);
+  const success = await deleteTask(id);
   if (!success) {
     res.status(400).json({ error: 'Cannot delete task (not found or running)' });
     return;
   }
-  broadcastTasks();
+  await broadcastTasks();
   res.json({ success: true });
 }));
 
 // Retry failed task
-app.post('/api/tasks/:id/retry', (req, res) => {
+app.post('/api/tasks/:id/retry', asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id);
-  const task = getTask(id);
+  const task = await getTask(id);
   if (!task) {
     res.status(404).json({ error: 'Task not found' });
     return;
@@ -190,45 +198,45 @@ app.post('/api/tasks/:id/retry', (req, res) => {
     res.status(400).json({ error: 'Can only retry failed tasks' });
     return;
   }
-  const newTask = retryTask(id);
+  const newTask = await retryTask(id);
   if (!newTask) {
     res.status(500).json({ error: 'Failed to create retry task' });
     return;
   }
   triggerUpdate();
-  broadcastTasks();
+  await broadcastTasks();
   res.json({ taskId: newTask.id, message: `Retry task #${newTask.id} created (attempt ${newTask.context.retryCount})` });
-});
+}));
 
 // Approve suggestion
-app.post('/api/tasks/:id/approve', (req, res) => {
+app.post('/api/tasks/:id/approve', asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id);
   const { extraPrompt } = req.body || {};
-  const task = approveSuggestion(id, extraPrompt);
+  const task = await approveSuggestion(id, extraPrompt);
   if (!task) {
     res.status(400).json({ error: 'Task not found or not a suggestion' });
     return;
   }
   triggerUpdate();
-  broadcastTasks();
+  await broadcastTasks();
   res.json({ success: true, message: `Task #${id} approved` });
-});
+}));
 
 // Dismiss suggestion
-app.post('/api/tasks/:id/dismiss', (req, res) => {
+app.post('/api/tasks/:id/dismiss', asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id);
-  if (!dismissSuggestion(id)) {
+  if (!(await dismissSuggestion(id))) {
     res.status(400).json({ error: 'Task not found or not a suggestion' });
     return;
   }
-  broadcastTasks();
+  await broadcastTasks();
   res.json({ success: true, message: `Task #${id} dismissed` });
-});
+}));
 
 // Set repo path for needs-repo tasks
-app.put('/api/tasks/:id/repo-path', (req, res) => {
+app.put('/api/tasks/:id/repo-path', asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id);
-  const task = getTask(id);
+  const task = await getTask(id);
   if (!task) {
     res.status(404).json({ error: 'Task not found' });
     return;
@@ -242,16 +250,16 @@ app.put('/api/tasks/:id/repo-path', (req, res) => {
     res.status(400).json({ error: 'repoPath required' });
     return;
   }
-  updateTaskRepoPath(id, repoPath);
+  await updateTaskRepoPath(id, repoPath);
   triggerUpdate();
-  broadcastTasks();
+  await broadcastTasks();
   res.json({ success: true });
-});
+}));
 
 // Complete task manually (for terminal mode)
-app.post('/api/tasks/:id/complete', (req, res) => {
+app.post('/api/tasks/:id/complete', asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id);
-  const task = getTask(id);
+  const task = await getTask(id);
   if (!task) {
     res.status(404).json({ error: 'Task not found' });
     return;
@@ -260,10 +268,10 @@ app.post('/api/tasks/:id/complete', (req, res) => {
     res.status(400).json({ error: 'Task not running' });
     return;
   }
-  completeTask(id, req.body.result || 'Completed manually');
-  broadcastTasks();
+  await completeTask(id, req.body.result || 'Completed manually');
+  await broadcastTasks();
   res.json({ success: true });
-});
+}));
 
 function launchDetached(command: string, args: string[]): Promise<boolean> {
   return new Promise(resolve => {
@@ -431,7 +439,7 @@ function sendShellResult(res: express.Response, result: Awaited<ReturnType<typeo
 // Open terminal in task's repo directory (resolves worktree for PR/ticket tasks)
 app.post('/api/tasks/:id/terminal', asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id as string);
-  const task = getTask(id);
+  const task = await getTask(id);
   if (!task) {
     res.status(404).json({ error: 'Task not found' });
     return;
@@ -581,9 +589,9 @@ function parseCimDate(cimDate: string): string | null {
 }
 
 // Process management - only shows processes spawned by Orch tasks
-app.get('/api/processes', (_req, res) => {
+app.get('/api/processes', asyncHandler(async (_req, res) => {
   try {
-    const tasksWithPids = getTasksWithPids();
+    const tasksWithPids = await getTasksWithPids();
     if (tasksWithPids.length === 0) {
       res.json([]);
       return;
@@ -621,7 +629,7 @@ app.get('/api/processes', (_req, res) => {
     log.error('Process list error', err);
     res.json([]);
   }
-});
+}));
 
 app.post('/api/processes/:pid/kill', (req, res) => {
   const pid = parseInt(req.params.pid);
@@ -632,8 +640,8 @@ app.post('/api/processes/:pid/kill', (req, res) => {
   }
 });
 
-app.post('/api/processes/kill-old', (_req, res) => {
-  const tasksWithPids = getTasksWithPids();
+app.post('/api/processes/kill-old', asyncHandler(async (_req, res) => {
+  const tasksWithPids = await getTasksWithPids();
   const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
 
   let killed = 0;
@@ -644,10 +652,10 @@ app.post('/api/processes/kill-old', (_req, res) => {
     }
   }
   res.json({ success: true, message: `Killed ${killed} Orch process(es) older than 2 hours` });
-});
+}));
 
-app.post('/api/processes/kill-all', (_req, res) => {
-  const tasksWithPids = getTasksWithPids();
+app.post('/api/processes/kill-all', asyncHandler(async (_req, res) => {
+  const tasksWithPids = await getTasksWithPids();
   let killed = 0;
   for (const task of tasksWithPids) {
     if (task.pid && killProcessByPid(task.pid, true)) {
@@ -655,7 +663,7 @@ app.post('/api/processes/kill-all', (_req, res) => {
     }
   }
   res.json({ success: true, message: `Killed ${killed} Orch process(es)` });
-});
+}));
 
 app.get('/api/repos', (_req, res) => {
   const repos = getScannedRepos();
@@ -1053,7 +1061,7 @@ app.get('/api/claude/usage', asyncHandler(async (_req, res) => {
 }));
 
 // Trigger actions from dashboard
-app.post('/api/actions/review-pr', (req, res) => {
+app.post('/api/actions/review-pr', asyncHandler(async (req, res) => {
   const { repo, prNumber, source, title, url, branch, baseBranch } = req.body;
   const resolved = resolveRepoPath(repo) ?? autoClone(repo, source || 'github');
 
@@ -1062,7 +1070,7 @@ app.post('/api/actions/review-pr', (req, res) => {
     return;
   }
 
-  const task = createTask('pr-review', repo, resolved.repoPath, {
+  const task = await createTask('pr-review', repo, resolved.repoPath, {
     source: source || 'github',
     event: 'manual.pr-review',
     prNumber,
@@ -1072,9 +1080,9 @@ app.post('/api/actions/review-pr', (req, res) => {
     baseBranch,
   });
   triggerUpdate();
-  broadcastTasks();
+  await broadcastTasks();
   res.json({ taskId: task.id, message: 'PR review task created' });
-});
+}));
 
 app.post('/api/actions/checkout-pr-worktree', asyncHandler(async (req, res) => {
   const { repo, branch } = req.body as { repo: string; prNumber: number; branch?: string };
@@ -1094,7 +1102,7 @@ app.post('/api/actions/checkout-pr-worktree', asyncHandler(async (req, res) => {
   }
 }));
 
-app.post('/api/actions/analyze-workitem', (req, res) => {
+app.post('/api/actions/analyze-workitem', asyncHandler(async (req, res) => {
   const { id, title, project, url, type, repositories } = req.body;
   const repoMapping = getEffectiveRepoMapping();
 
@@ -1134,7 +1142,7 @@ app.post('/api/actions/analyze-workitem', (req, res) => {
   }
 
   const taskType = type?.toLowerCase().includes('bug') ? 'issue-fix' : 'code-gen';
-  const task = createTask(taskType, repoName, repoPath, {
+  const task = await createTask(taskType, repoName, repoPath, {
     source: 'ado',
     event: 'manual.workitem',
     workItemId: id,
@@ -1142,9 +1150,9 @@ app.post('/api/actions/analyze-workitem', (req, res) => {
     url,
   });
   triggerUpdate();
-  broadcastTasks();
+  await broadcastTasks();
   res.json({ taskId: task.id, message: `${taskType} task created` });
-});
+}));
 
 app.post('/api/actions/fix-pr-comments', asyncHandler(async (req, res) => {
   const { repo, prNumber, source, title, url, branch, baseBranch } = req.body;
@@ -1196,7 +1204,7 @@ app.post('/api/actions/fix-pr-comments', asyncHandler(async (req, res) => {
       diffHunk: c.diff_hunk,
     }));
 
-    const task = createTask('pr-comment-fix', repo, resolved.repoPath, {
+    const task = await createTask('pr-comment-fix', repo, resolved.repoPath, {
       source: source || 'github',
       event: 'manual.fix-pr-comments',
       prNumber,
@@ -1209,7 +1217,7 @@ app.post('/api/actions/fix-pr-comments', asyncHandler(async (req, res) => {
     });
 
     triggerUpdate();
-    broadcastTasks();
+    await broadcastTasks();
     res.json({ taskId: task.id, message: `PR comment fix task created (${unresolvedComments.length} comments)` });
   } catch (err) {
     log.error('fix-pr-comments failed', err);
@@ -1217,7 +1225,7 @@ app.post('/api/actions/fix-pr-comments', asyncHandler(async (req, res) => {
   }
 }));
 
-app.post('/api/actions/test-workitem', (req, res) => {
+app.post('/api/actions/test-workitem', asyncHandler(async (req, res) => {
   const { id, title, project, url, githubPrUrl, testNotes, body, repositories, selectedRepo } = req.body;
   const repoMapping = getEffectiveRepoMapping();
 
@@ -1298,7 +1306,7 @@ app.post('/api/actions/test-workitem', (req, res) => {
     log.info(`test-workitem: ${mode}`);
   }
 
-  const task = createTask('testing', repoName, repoPath, {
+  const task = await createTask('testing', repoName, repoPath, {
     source: 'ado',
     event: 'manual.testing',
     workItemId: id,
@@ -1311,12 +1319,12 @@ app.post('/api/actions/test-workitem', (req, res) => {
     ghRepoRef: remoteOnly ? ghRepoRef : undefined,
   });
   triggerUpdate();
-  broadcastTasks();
+  await broadcastTasks();
   const mode = remoteOnly ? ' (remote-only mode)' : '';
   res.json({ taskId: task.id, message: `Testing task created${mode} - terminal will open shortly` });
-});
+}));
 
-app.post('/api/actions/review-resolution', (req, res) => {
+app.post('/api/actions/review-resolution', asyncHandler(async (req, res) => {
   const { id, title, project, url, resolution, githubPrUrl, testNotes, body, repositories } = req.body;
   const repoMapping = getEffectiveRepoMapping();
 
@@ -1375,7 +1383,7 @@ app.post('/api/actions/review-resolution', (req, res) => {
     return;
   }
 
-  const task = createTask('resolution-review', repoName, repoPath, {
+  const task = await createTask('resolution-review', repoName, repoPath, {
     source: 'ado',
     event: 'manual.resolution-review',
     workItemId: id,
@@ -1387,13 +1395,13 @@ app.post('/api/actions/review-resolution', (req, res) => {
     testNotes,
   });
   triggerUpdate();
-  broadcastTasks();
+  await broadcastTasks();
   res.json({ taskId: task.id, message: 'Resolution review task created' });
-});
+}));
 
 // --- Videoscan API ---
 
-app.post('/api/actions/start-videoscan', (req, res) => {
+app.post('/api/actions/start-videoscan', asyncHandler(async (req, res) => {
   const { url, maxPages, concurrency, delay } = req.body;
   if (!url || typeof url !== 'string') {
     res.status(400).json({ error: 'url required' });
@@ -1401,7 +1409,7 @@ app.post('/api/actions/start-videoscan', (req, res) => {
   }
   try { new URL(url); } catch { res.status(400).json({ error: 'Invalid URL' }); return; }
 
-  const task = createTask('videoscan', url, getVideoscanDir(), {
+  const task = await createTask('videoscan', url, getVideoscanDir(), {
     source: 'github', // placeholder — videoscan has no source
     event: 'videoscan',
     title: `Videoscan: ${new URL(url).hostname}`,
@@ -1411,11 +1419,11 @@ app.post('/api/actions/start-videoscan', (req, res) => {
     delay: delay ?? 200,
   });
   triggerUpdate();
-  broadcastTasks();
+  await broadcastTasks();
   res.json({ taskId: task.id, message: `Videoscan task #${task.id} created` });
-});
+}));
 
-app.post('/api/actions/resume-videoscan', (req, res) => {
+app.post('/api/actions/resume-videoscan', asyncHandler(async (req, res) => {
   const { filename, maxPages, concurrency, delay } = req.body;
   if (!filename || typeof filename !== 'string') {
     res.status(400).json({ error: 'filename required' });
@@ -1436,7 +1444,7 @@ app.post('/api/actions/resume-videoscan', (req, res) => {
   const domain = scanData.domain || 'unknown';
   const scanUrl = `https://www.${domain}`;
 
-  const task = createTask('videoscan', scanUrl, getVideoscanDir(), {
+  const task = await createTask('videoscan', scanUrl, getVideoscanDir(), {
     source: 'github',
     event: 'videoscan-resume',
     title: `Resume videoscan: ${domain}`,
@@ -1447,9 +1455,9 @@ app.post('/api/actions/resume-videoscan', (req, res) => {
     delay: delay ?? 200,
   });
   triggerUpdate();
-  broadcastTasks();
+  await broadcastTasks();
   res.json({ taskId: task.id, message: `Resume task #${task.id} created` });
-});
+}));
 
 app.get('/api/videoscans', (_req, res) => {
   res.json(listScans());
@@ -1628,31 +1636,31 @@ app.get('/api/orchestrator/state', (_req, res) => {
   res.json(getOrchestratorState());
 });
 
-app.post('/api/orchestrator/:id/accept', (req, res) => {
-  const result = acceptAction(req.params.id);
+app.post('/api/orchestrator/:id/accept', asyncHandler(async (req, res) => {
+  const result = await acceptAction(req.params.id);
   if (!result) return res.status(404).json({ error: 'Action not found or already handled' });
-  broadcastTasks();
+  await broadcastTasks();
   res.json(result);
-});
+}));
 
-app.post('/api/orchestrator/:id/dismiss', (req, res) => {
+app.post('/api/orchestrator/:id/dismiss', asyncHandler(async (req, res) => {
   const reason = req.body?.reason;
-  const ok = dismissAction(req.params.id, reason);
+  const ok = await dismissAction(req.params.id, reason);
   if (!ok) return res.status(404).json({ error: 'Action not found or already handled' });
   res.json({ ok: true });
-});
+}));
 
-app.get('/api/orchestrator/rules', (_req, res) => {
-  const rules = loadOrchestratorRules();
+app.get('/api/orchestrator/rules', asyncHandler(async (_req, res) => {
+  const rules = await loadOrchestratorRules();
   res.json({ rules });
-});
+}));
 
-app.post('/api/orchestrator/rules', (req, res) => {
+app.post('/api/orchestrator/rules', asyncHandler(async (req, res) => {
   const { rules } = req.body;
   if (typeof rules !== 'string') return res.status(400).json({ error: 'rules string required' });
-  saveOrchestratorRules(rules);
+  await saveOrchestratorRules(rules);
   res.json({ ok: true });
-});
+}));
 
 app.post('/api/orchestrator/chat', asyncHandler(async (req, res) => {
   const { question } = req.body;
@@ -1678,6 +1686,12 @@ app.get('/api/errors', (_req, res) => {
 
 app.get('/api/notifications', asyncHandler(async (_req, res) => {
   try {
+    if (isSupabaseConfigured()) {
+      const entries = await dbGetNotifications(200);
+      // Flatten data back into top-level for compatibility
+      res.json(entries.map(e => ({ id: e.id, type: e.type, timestamp: e.created_at, ...e.data })));
+      return;
+    }
     if (!existsSync(notificationLogPath)) return res.json([]);
     const content = await readFile(notificationLogPath, 'utf-8');
     const lines = content.split('\n').filter(Boolean);
@@ -1691,20 +1705,24 @@ app.get('/api/notifications', asyncHandler(async (_req, res) => {
   }
 }));
 
-app.post('/api/notifications/incoming', (req, res) => {
+app.post('/api/notifications/incoming', asyncHandler(async (req, res) => {
   const notification = req.body;
   if (!notification || typeof notification.id !== 'string' || !notification.type || !notification.timestamp) {
     return res.status(400).json({ error: 'invalid notification' });
   }
-  // Persist to JSONL
-  try { appendFileSync(notificationLogPath, JSON.stringify(notification) + '\n'); } catch {}
+  // Persist to DB or JSONL
+  if (isSupabaseConfigured()) {
+    try { await dbInsertNotification(notification); } catch (err) { log.error('Failed to insert notification to DB', err); }
+  } else {
+    try { appendFileSync(notificationLogPath, JSON.stringify(notification) + '\n'); } catch {}
+  }
   // Broadcast to WebSocket clients
   const message = JSON.stringify({ type: 'notification', notification });
   clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) client.send(message);
   });
   res.json({ ok: true });
-});
+}));
 
 // SPA catch-all: serve index.html for non-API routes (client-side routing)
 if (hasDashboardBuild) {
@@ -1735,9 +1753,13 @@ server.listen(config.server.port, () => {
     }
   }
 
-  setTaskUpdateCallback(broadcastTasks);
+  setTaskUpdateCallback(() => { broadcastTasks().catch(err => log.error('broadcastTasks error', err)); });
   setOutputCallback(broadcastOutput);
-  startProcessor();
+
+  // Initialize settings from DB, then start processor
+  initSettings()
+    .then(() => startProcessor())
+    .catch(err => log.error('Startup error', err));
 
   // Wire orchestrator broadcasts
   setOrchestratorUpdateCallback((orchState) => {
@@ -1762,7 +1784,7 @@ server.listen(config.server.port, () => {
   });
 
   if (config.polling.enabled) {
-    startPoller(config.polling.intervalMs);
+    startPoller(config.polling.intervalMs).catch(err => log.error('Poller start error', err));
   }
 
   startNtfyListener();

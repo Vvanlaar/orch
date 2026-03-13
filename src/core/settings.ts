@@ -3,6 +3,8 @@ import { join } from 'path';
 import { execSync } from 'child_process';
 import type { Terminal, TerminalId } from './types.js';
 import { config } from './config.js';
+import { isSupabaseConfigured } from './db/client.js';
+import { dbGetSetting, dbSetSetting } from './db/settings.js';
 
 const SETTINGS_FILE = join(process.cwd(), '.orch-settings.json');
 
@@ -31,6 +33,8 @@ const KNOWN_TERMINALS: Terminal[] = [
   { id: 'tmux', name: 'tmux', cmd: 'tmux' },
 ];
 
+// ── JSON fallback ──
+
 function loadSettings(): Settings {
   try {
     if (existsSync(SETTINGS_FILE)) {
@@ -46,25 +50,59 @@ function saveSettings(settings: Settings): void {
   writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
 }
 
+// ── Cached in-memory settings (avoid async in hot path) ──
+// Settings are loaded from DB on startup and cached. Writes go to both cache and DB.
+let cachedSettings: Settings | null = null;
+
+export async function initSettings(): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    cachedSettings = loadSettings();
+    return;
+  }
+  try {
+    const [terminal, interactive] = await Promise.all([
+      dbGetSetting('preferredTerminal') as Promise<TerminalId | null>,
+      dbGetSetting('terminalInteractiveSession') as Promise<boolean | null>,
+    ]);
+    cachedSettings = {
+      preferredTerminal: terminal ?? undefined,
+      terminalInteractiveSession: interactive ?? undefined,
+    };
+  } catch {
+    cachedSettings = loadSettings(); // fallback to file
+  }
+}
+
+function getSettings(): Settings {
+  if (!cachedSettings) cachedSettings = loadSettings();
+  return cachedSettings;
+}
+
 export function getTerminalPreference(): TerminalId {
-  const settings = loadSettings();
-  return settings.preferredTerminal ?? config.claude.preferredTerminal;
+  return getSettings().preferredTerminal ?? config.claude.preferredTerminal;
 }
 
 export function setTerminalPreference(terminal: TerminalId): void {
-  const settings = loadSettings();
+  const settings = getSettings();
   settings.preferredTerminal = terminal;
-  saveSettings(settings);
+  cachedSettings = settings;
+  if (isSupabaseConfigured()) {
+    dbSetSetting('preferredTerminal', terminal).catch(() => {});
+  }
+  saveSettings(settings); // also save to file as fallback
 }
 
 export function getTerminalInteractiveSession(): boolean {
-  const settings = loadSettings();
-  return settings.terminalInteractiveSession ?? true;
+  return getSettings().terminalInteractiveSession ?? true;
 }
 
 export function setTerminalInteractiveSession(interactive: boolean): void {
-  const settings = loadSettings();
+  const settings = getSettings();
   settings.terminalInteractiveSession = interactive;
+  cachedSettings = settings;
+  if (isSupabaseConfigured()) {
+    dbSetSetting('terminalInteractiveSession', interactive).catch(() => {});
+  }
   saveSettings(settings);
 }
 

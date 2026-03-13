@@ -3,6 +3,8 @@ import { join } from 'path';
 import { runClaude } from './claude-runner.js';
 import type { TaskType } from './types.js';
 import { createLogger } from './logger.js';
+import { isSupabaseConfigured } from './db/client.js';
+import { dbLoadFeedbackLog, dbAppendFeedback, dbGetUnprocessedFeedback, dbMarkFeedbackProcessed, dbLoadOrchestratorRules, dbSaveOrchestratorRules } from './db/feedback.js';
 
 const log = createLogger('orch-feedback');
 
@@ -31,7 +33,11 @@ export interface FeedbackEntry {
   processed: boolean;
 }
 
-export function loadFeedbackLog(): FeedbackEntry[] {
+const useDb = isSupabaseConfigured();
+
+// ── JSON fallback functions ──
+
+function jsonLoadFeedbackLog(): FeedbackEntry[] {
   const fp = feedbackPath();
   if (!existsSync(fp)) return [];
   try {
@@ -41,18 +47,18 @@ export function loadFeedbackLog(): FeedbackEntry[] {
   }
 }
 
-export function appendFeedback(entry: Omit<FeedbackEntry, 'id' | 'timestamp' | 'processed'>): void {
-  const log = loadFeedbackLog();
-  log.push({
+function jsonAppendFeedback(entry: Omit<FeedbackEntry, 'id' | 'timestamp' | 'processed'>): void {
+  const entries = jsonLoadFeedbackLog();
+  entries.push({
     ...entry,
     id: `fb-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     timestamp: new Date().toISOString(),
     processed: false,
   });
-  writeFileSync(feedbackPath(), JSON.stringify(log, null, 2));
+  writeFileSync(feedbackPath(), JSON.stringify(entries, null, 2));
 }
 
-export function loadOrchestratorRules(): string | null {
+function jsonLoadOrchestratorRules(): string | null {
   const fp = rulesPath();
   if (!existsSync(fp)) return null;
   try {
@@ -62,28 +68,60 @@ export function loadOrchestratorRules(): string | null {
   }
 }
 
-export function saveOrchestratorRules(content: string): void {
+function jsonSaveOrchestratorRules(content: string): void {
   writeFileSync(rulesPath(), content);
 }
 
-export function getUnprocessedFeedback(): FeedbackEntry[] {
-  return loadFeedbackLog().filter(e => !e.processed);
+function jsonGetUnprocessedFeedback(): FeedbackEntry[] {
+  return jsonLoadFeedbackLog().filter(e => !e.processed);
 }
 
-export function markFeedbackProcessed(ids: string[]): void {
-  const log = loadFeedbackLog();
+function jsonMarkFeedbackProcessed(ids: string[]): void {
+  const entries = jsonLoadFeedbackLog();
   const idSet = new Set(ids);
-  for (const entry of log) {
+  for (const entry of entries) {
     if (idSet.has(entry.id)) entry.processed = true;
   }
-  writeFileSync(feedbackPath(), JSON.stringify(log, null, 2));
+  writeFileSync(feedbackPath(), JSON.stringify(entries, null, 2));
+}
+
+// ── Public async API ──
+
+export async function loadFeedbackLog(): Promise<FeedbackEntry[]> {
+  if (useDb) return dbLoadFeedbackLog();
+  return jsonLoadFeedbackLog();
+}
+
+export async function appendFeedback(entry: Omit<FeedbackEntry, 'id' | 'timestamp' | 'processed'>): Promise<void> {
+  if (useDb) return dbAppendFeedback(entry);
+  jsonAppendFeedback(entry);
+}
+
+export async function loadOrchestratorRules(): Promise<string | null> {
+  if (useDb) return dbLoadOrchestratorRules();
+  return jsonLoadOrchestratorRules();
+}
+
+export async function saveOrchestratorRules(content: string): Promise<void> {
+  if (useDb) return dbSaveOrchestratorRules(content);
+  jsonSaveOrchestratorRules(content);
+}
+
+export async function getUnprocessedFeedback(): Promise<FeedbackEntry[]> {
+  if (useDb) return dbGetUnprocessedFeedback();
+  return jsonGetUnprocessedFeedback();
+}
+
+export async function markFeedbackProcessed(ids: string[]): Promise<void> {
+  if (useDb) return dbMarkFeedbackProcessed(ids);
+  jsonMarkFeedbackProcessed(ids);
 }
 
 export async function distillFeedback(): Promise<void> {
-  const unprocessed = getUnprocessedFeedback();
+  const unprocessed = await getUnprocessedFeedback();
   if (unprocessed.length === 0) return;
 
-  const existingRules = loadOrchestratorRules();
+  const existingRules = await loadOrchestratorRules();
 
   const feedbackLines = unprocessed.map(e => {
     if (e.type === 'dismiss') {
@@ -123,8 +161,8 @@ Output ONLY the markdown rules (no fences, no explanation).`;
   try {
     const result = await runClaude(syntheticTask, prompt, { allowEdits: false });
     if (result.success && result.output.trim()) {
-      saveOrchestratorRules(result.output.trim());
-      markFeedbackProcessed(unprocessed.map(e => e.id));
+      await saveOrchestratorRules(result.output.trim());
+      await markFeedbackProcessed(unprocessed.map(e => e.id));
       log.info(`Distilled ${unprocessed.length} feedback entries into rules`);
     }
   } catch (err) {

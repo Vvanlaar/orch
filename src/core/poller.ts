@@ -12,9 +12,9 @@ const log = createLogger('poller');
 
 const suggestionMode = !!process.env.NTFY_COMMAND_TOPIC;
 
-function createTaskOrSuggestion(type: Parameters<typeof createTask>[0], repo: string, repoPath: string, context: TaskContext): Task {
+async function createTaskOrSuggestion(type: Parameters<typeof createTask>[0], repo: string, repoPath: string, context: TaskContext): Promise<Task> {
   if (suggestionMode) {
-    const task = createSuggestion(type, repo, repoPath, context);
+    const task = await createSuggestion(type, repo, repoPath, context);
     sendNtfySuggestion(task).catch(() => {});
     return task;
   }
@@ -65,8 +65,8 @@ const taskTypeToPollerType: Record<string, string> = {
   'pr-comment-fix': 'review-comment',
 };
 
-function initProcessedFromDb(): number {
-  const tasks = getAllTasks(500);
+async function initProcessedFromDb(): Promise<number> {
+  const tasks = await getAllTasks(500);
   for (const task of tasks) {
     const id = task.context.prNumber || task.context.issueNumber || task.context.workItemId;
     if (id) {
@@ -160,7 +160,7 @@ async function pollMyPRReviewComments(repoFullName: string): Promise<void> {
         markProcessed(key);
         continue;
       }
-      createTaskOrSuggestion('pr-comment-fix', repoFullName, repoPath, context);
+      await createTaskOrSuggestion('pr-comment-fix', repoFullName, repoPath, context);
       markProcessed(key);
       log.info(`Created pr-comment-fix ${suggestionMode ? 'suggestion' : 'task'} for ${repoFullName}#${pr.number} (${unresolvedComments.length} comments)`);
       triggerUpdate();
@@ -202,7 +202,7 @@ async function pollGitHubRepo(repoFullName: string): Promise<void> {
         markProcessed(key);
         continue;
       }
-      createTaskOrSuggestion('pr-review', repoFullName, repoPath, context);
+      await createTaskOrSuggestion('pr-review', repoFullName, repoPath, context);
       markProcessed(key);
       log.info(`Created PR review ${suggestionMode ? 'suggestion' : 'task'} for ${repoFullName}#${pr.number}`);
       triggerUpdate();
@@ -237,7 +237,7 @@ async function pollGitHubRepo(repoFullName: string): Promise<void> {
         url: issue.html_url,
       };
 
-      createTaskOrSuggestion('issue-fix', repoFullName, repoPath, context);
+      await createTaskOrSuggestion('issue-fix', repoFullName, repoPath, context);
       markProcessed(key);
       log.info(`Created issue-fix ${suggestionMode ? 'suggestion' : 'task'} for ${repoFullName}#${issue.number}`);
       triggerUpdate();
@@ -282,7 +282,7 @@ async function pollAdoRepo(project: string, repoName: string, localPath: string)
         markProcessed(key);
         continue;
       }
-      createTaskOrSuggestion('pr-review', repoFullName, localPath, context);
+      await createTaskOrSuggestion('pr-review', repoFullName, localPath, context);
       markProcessed(key);
       log.info(`Created PR review ${suggestionMode ? 'suggestion' : 'task'} for ${repoFullName}!${pr.pullRequestId}`);
       triggerUpdate();
@@ -316,11 +316,11 @@ async function pollAll(): Promise<void> {
 let pollInterval: NodeJS.Timeout | null = null;
 let started = false;
 
-export function startPoller(intervalMs = 60000): void {
+export async function startPoller(intervalMs = 60000): Promise<void> {
   if (started) return;
   started = true;
 
-  const tasksFromDb = initProcessedFromDb();
+  const tasksFromDb = await initProcessedFromDb();
   log.info(`Started (interval: ${intervalMs / 1000}s, ${tasksFromDb} tasks from DB)`);
 
   // If no tasks in DB, do a silent seed pass first to avoid creating tasks for all existing items

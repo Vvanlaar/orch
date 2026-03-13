@@ -74,9 +74,9 @@ async function extractAndStoreLearning(failedTask: Task, successTask: Task): Pro
 }
 
 // Trigger learning extraction if this was a successful retry
-function triggerLearningExtraction(task: Task): void {
+async function triggerLearningExtraction(task: Task): Promise<void> {
   if (!task.context.retryOfTaskId) return;
-  const failedTask = getTask(task.context.retryOfTaskId);
+  const failedTask = await getTask(task.context.retryOfTaskId);
   if (!failedTask) return;
 
   extractAndStoreLearning(failedTask, task).catch(err => {
@@ -92,7 +92,7 @@ claudeEmitter.on('output', (taskId: number, chunk: string) => {
 
 // Wire up PID tracking
 claudeEmitter.on('pid', (taskId: number, pid: number) => {
-  updateTaskPid(taskId, pid);
+  updateTaskPid(taskId, pid).catch(err => log.error(`Failed to update PID for task #${taskId}`, err));
   log.info(`Task #${taskId} Process started with PID ${pid}`);
 });
 
@@ -151,33 +151,33 @@ async function replyToReviewComment(
 
 async function processPrCommentFix(task: Task): Promise<void> {
   log.info(`Task #${task.id} Processing PR comment fix for ${task.repo}#${task.context.prNumber}`);
-  startTask(task.id);
+  await startTask(task.id);
   notifyUpdate();
 
   const comments = task.context.reviewComments || [];
   if (comments.length === 0) {
-    completeTask(task.id, 'No review comments to fix');
+    await completeTask(task.id, 'No review comments to fix');
     notifyUpdate();
     return;
   }
 
   const targetBranch = task.context.branch;
   if (!targetBranch) {
-    failTask(task.id, 'No branch specified for PR');
+    await failTask(task.id, 'No branch specified for PR');
     notifyUpdate();
     return;
   }
 
   const prNumber = task.context.prNumber;
   if (!prNumber) {
-    failTask(task.id, 'No PR number specified');
+    await failTask(task.id, 'No PR number specified');
     notifyUpdate();
     return;
   }
 
   const worktreePath = checkoutPRInWorktree(task.repoPath, prNumber, targetBranch);
   if (!worktreePath) {
-    failTask(task.id, `Failed to create worktree for PR #${prNumber}`);
+    await failTask(task.id, `Failed to create worktree for PR #${prNumber}`);
     notifyUpdate();
     return;
   }
@@ -330,15 +330,15 @@ async function processPrCommentFix(task: Task): Promise<void> {
     }
 
     const resultSummary = `Fixed ${comments.length} review comment(s) and pushed to ${targetBranch}\n\n${fixResult.output}`;
-    completeTask(task.id, resultSummary);
+    await completeTask(task.id, resultSummary);
     log.info(`Task #${task.id} Completed successfully`);
-    triggerLearningExtraction(task);
+    await triggerLearningExtraction(task);
     removeWorktree(task.repoPath, worktreePath);
     notifyUpdate();
 
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
-    failTask(task.id, error);
+    await failTask(task.id, error);
     log.error(`Task #${task.id} Error: ${error}`);
     // Keep worktree on failure so user can inspect via terminal button (retry reuses it)
     log.warn(`Task #${task.id} Worktree preserved at ${worktreePath}`);
@@ -349,13 +349,13 @@ async function processPrCommentFix(task: Task): Promise<void> {
 async function processVideoscan(task: Task): Promise<void> {
   const ctx = task.context;
   if (!ctx.scanUrl) {
-    failTask(task.id, 'No scanUrl in task context');
+    await failTask(task.id, 'No scanUrl in task context');
     notifyUpdate();
     return;
   }
 
   clearStreamingOutput(task.id);
-  startTask(task.id);
+  await startTask(task.id);
   notifyUpdate();
 
   try {
@@ -372,13 +372,13 @@ async function processVideoscan(task: Task): Promise<void> {
       if (result.jsonFile) parts.push(`JSON: ${result.jsonFile}`);
       if (result.htmlFile) parts.push(`Report: ${result.htmlFile}`);
       if (result.pdfFile) parts.push(`PDF: ${result.pdfFile}`);
-      completeTask(task.id, parts.join('\n'));
+      await completeTask(task.id, parts.join('\n'));
     } else {
-      failTask(task.id, result.error || 'Videoscan failed');
+      await failTask(task.id, result.error || 'Videoscan failed');
     }
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
-    failTask(task.id, error);
+    await failTask(task.id, error);
   }
   notifyUpdate();
 }
@@ -503,11 +503,11 @@ async function processTask(task: Task): Promise<void> {
     const resolvedPath = resolveOrCloneRepo(task);
     if (!resolvedPath) {
       log.warn(`Task #${task.id} Repo not found and clone failed; waiting for user input`);
-      updateTaskStatus(task.id, 'needs-repo');
+      await updateTaskStatus(task.id, 'needs-repo');
       notifyUpdate();
       return;
     }
-    updateTaskRepoPath(task.id, resolvedPath, false);
+    await updateTaskRepoPath(task.id, resolvedPath, false);
     task.repoPath = resolvedPath;
   }
 
@@ -522,7 +522,7 @@ async function processTask(task: Task): Promise<void> {
   }
 
   clearStreamingOutput(task.id);
-  startTask(task.id);
+  await startTask(task.id);
   notifyUpdate();
 
   // Determine if this task type should allow code edits
@@ -550,7 +550,7 @@ async function processTask(task: Task): Promise<void> {
     if (config.claude.terminalMode || forceTerminal || getTerminalInteractiveSession()) {
       const termResult = await runClaudeInTerminal(task.id, task, prompt, { allowEdits });
       if (!termResult.success) {
-        failTask(task.id, termResult.error || 'Failed to open terminal');
+        await failTask(task.id, termResult.error || 'Failed to open terminal');
         notifyUpdate();
       }
       // Task stays "running" - user must manually complete/fail via dashboard
@@ -591,18 +591,18 @@ async function processTask(task: Task): Promise<void> {
       }
 
       const resultWithPr = prUrl ? `${result.output}\n\nPR: ${prUrl}` : result.output;
-      completeTask(task.id, resultWithPr);
+      await completeTask(task.id, resultWithPr);
       log.info(`Task #${task.id} completed${prUrl ? ` (PR: ${prUrl})` : ''}`);
-      triggerLearningExtraction(task);
+      await triggerLearningExtraction(task);
       notifyUpdate();
     } else {
-      failTask(task.id, result.error || 'Unknown error');
+      await failTask(task.id, result.error || 'Unknown error');
       log.error(`Task #${task.id} failed: ${result.error}`);
       notifyUpdate();
     }
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
-    failTask(task.id, error);
+    await failTask(task.id, error);
     log.error(`Task #${task.id} error: ${error}`);
     notifyUpdate();
   } finally {
@@ -613,12 +613,15 @@ async function processTask(task: Task): Promise<void> {
 }
 
 export async function processQueue(): Promise<void> {
-  const runningCount = getRunningCount();
+  const [runningCount, allPending] = await Promise.all([
+    getRunningCount(),
+    getPendingTasks(config.claude.maxConcurrentTasks),
+  ]);
   const available = config.claude.maxConcurrentTasks - runningCount;
 
   if (available <= 0) return;
 
-  const pending = getPendingTasks(available);
+  const pending = allPending.slice(0, available);
 
   for (const task of pending) {
     // Don't await - run concurrently
@@ -630,14 +633,14 @@ export async function processQueue(): Promise<void> {
 
 let intervalId: NodeJS.Timeout | null = null;
 
-export function startProcessor(intervalMs = 5000): void {
+export async function startProcessor(intervalMs = 5000): Promise<void> {
   if (intervalId) return;
 
   // Mark orphaned running tasks as failed (from previous server crash/restart)
-  const allTasks = getAllTasks(500);
+  const allTasks = await getAllTasks(500);
   const orphaned = allTasks.filter(t => t.status === 'running');
   for (const t of orphaned) {
-    failTask(t.id, 'Server restarted while task was running');
+    await failTask(t.id, 'Server restarted while task was running');
     log.warn(`Marked orphaned task #${t.id} as failed`);
   }
 

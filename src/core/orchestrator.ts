@@ -67,14 +67,14 @@ async function gatherWorkData(): Promise<GatheredData> {
   ]);
 
   const notifications = notificationGetter?.() ?? [];
-  const existingTasks = getAllTasks(50);
+  const existingTasks = await getAllTasks(50);
 
   return { adoWorkItems, githubPRs, prComments, resolvedItems, reviewedItems, notifications, existingTasks };
 }
 
 // --- Prompt Builders ---
 
-function buildOrchestratorPrompt(data: GatheredData): string {
+async function buildOrchestratorPrompt(data: GatheredData): Promise<string> {
   const sections: string[] = [];
 
   sections.push('# Work Data Analysis\n');
@@ -145,7 +145,7 @@ function buildOrchestratorPrompt(data: GatheredData): string {
   }
 
   // Inject user preferences/rules from feedback distillation
-  const rules = loadOrchestratorRules();
+  const rules = await loadOrchestratorRules();
   if (rules) {
     sections.push('## User Preferences & Rules (MUST follow)\n');
     sections.push(rules);
@@ -183,7 +183,7 @@ If there is nothing actionable, return an empty array: []`);
   return sections.join('\n');
 }
 
-function buildChatPrompt(data: GatheredData, question: string): string {
+async function buildChatPrompt(data: GatheredData, question: string): Promise<string> {
   const sections: string[] = [];
 
   sections.push('# Work Context\n');
@@ -221,7 +221,7 @@ function buildChatPrompt(data: GatheredData, question: string): string {
   }
 
   // Inject user preferences/rules
-  const chatRules = loadOrchestratorRules();
+  const chatRules = await loadOrchestratorRules();
   if (chatRules) {
     sections.push('## User Preferences & Rules (MUST follow)\n');
     sections.push(chatRules);
@@ -260,7 +260,7 @@ export async function runOrchestrator(): Promise<void> {
     };
     broadcast();
 
-    const prompt = buildOrchestratorPrompt(data);
+    const prompt = await buildOrchestratorPrompt(data);
     const syntheticTask = {
       id: -1,
       type: 'docs' as TaskType,
@@ -303,7 +303,8 @@ export async function runOrchestrator(): Promise<void> {
     broadcast();
 
     // Fire-and-forget: distill feedback if enough unprocessed entries
-    if (getUnprocessedFeedback().length >= 3) {
+    const unprocessed = await getUnprocessedFeedback();
+    if (unprocessed.length >= 3) {
       distillFeedback().catch(err => log.error('Background distillation error', err));
     }
   } catch (err) {
@@ -322,7 +323,7 @@ export async function runChatQuery(question: string): Promise<string> {
 
   try {
     const data = await gatherWorkData();
-    const prompt = buildChatPrompt(data, question);
+    const prompt = await buildChatPrompt(data, question);
 
     const syntheticTask = {
       id: -2,
@@ -339,7 +340,7 @@ export async function runChatQuery(question: string): Promise<string> {
 
     // Detect correction patterns in user question (negative directive + action verb)
     if (/\b(don'?t|stop|never|ignore|skip|no more)\b.*\b(suggest|recommend|create|add)\b/i.test(question)) {
-      appendFeedback({ type: 'chat-correction', chatContext: question });
+      await appendFeedback({ type: 'chat-correction', chatContext: question });
     }
 
     const assistantMsg: ChatMessage = { role: 'assistant', content: answer, timestamp: new Date().toISOString() };
@@ -354,7 +355,7 @@ export async function runChatQuery(question: string): Promise<string> {
   }
 }
 
-export function acceptAction(actionId: string): { taskId: number } | null {
+export async function acceptAction(actionId: string): Promise<{ taskId: number } | null> {
   const idx = state.actions.findIndex(a => a.id === actionId);
   if (idx === -1 || state.actions[idx].accepted || state.actions[idx].dismissed) return null;
 
@@ -364,7 +365,7 @@ export function acceptAction(actionId: string): { taskId: number } | null {
   const repoMapping = config.repos.mapping || {};
   const repoPath = repoMapping[action.repo] || (config.repos.baseDir ? `${config.repos.baseDir}/${action.repo.split('/').pop()}` : process.cwd());
 
-  const task = createTask(
+  const task = await createTask(
     action.taskType as TaskType,
     action.repo,
     repoPath,
@@ -377,7 +378,7 @@ export function acceptAction(actionId: string): { taskId: number } | null {
     }
   );
 
-  appendFeedback({
+  await appendFeedback({
     type: 'accept',
     actionId: action.id,
     actionTitle: action.title,
@@ -394,12 +395,12 @@ export function acceptAction(actionId: string): { taskId: number } | null {
   return { taskId: task.id };
 }
 
-export function dismissAction(actionId: string, reason?: string): boolean {
+export async function dismissAction(actionId: string, reason?: string): Promise<boolean> {
   const idx = state.actions.findIndex(a => a.id === actionId);
   if (idx === -1 || state.actions[idx].accepted || state.actions[idx].dismissed) return false;
 
   const action = state.actions[idx];
-  appendFeedback({
+  await appendFeedback({
     type: 'dismiss',
     actionId: action.id,
     actionTitle: action.title,
