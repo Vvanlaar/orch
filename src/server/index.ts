@@ -150,7 +150,7 @@ app.get('/api/tasks', asyncHandler(async (_req, res) => {
 }));
 
 app.get('/api/tasks/:id', asyncHandler(async (req, res) => {
-  const task = await getTask(parseInt(req.params.id));
+  const task = await getTask(parseInt(req.params.id as string));
   if (!task) {
     res.status(404).json({ error: 'Task not found' });
     return;
@@ -190,7 +190,7 @@ app.delete('/api/tasks/:id', asyncHandler(async (req, res) => {
 
 // Retry failed task
 app.post('/api/tasks/:id/retry', asyncHandler(async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = parseInt(req.params.id as string);
   const task = await getTask(id);
   if (!task) {
     res.status(404).json({ error: 'Task not found' });
@@ -212,7 +212,7 @@ app.post('/api/tasks/:id/retry', asyncHandler(async (req, res) => {
 
 // Approve suggestion
 app.post('/api/tasks/:id/approve', asyncHandler(async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = parseInt(req.params.id as string);
   const { extraPrompt } = req.body || {};
   const task = await approveSuggestion(id, extraPrompt);
   if (!task) {
@@ -226,7 +226,7 @@ app.post('/api/tasks/:id/approve', asyncHandler(async (req, res) => {
 
 // Dismiss suggestion
 app.post('/api/tasks/:id/dismiss', asyncHandler(async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = parseInt(req.params.id as string);
   if (!(await dismissSuggestion(id))) {
     res.status(400).json({ error: 'Task not found or not a suggestion' });
     return;
@@ -237,7 +237,7 @@ app.post('/api/tasks/:id/dismiss', asyncHandler(async (req, res) => {
 
 // Set repo path for needs-repo tasks
 app.put('/api/tasks/:id/repo-path', asyncHandler(async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = parseInt(req.params.id as string);
   const task = await getTask(id);
   if (!task) {
     res.status(404).json({ error: 'Task not found' });
@@ -260,7 +260,7 @@ app.put('/api/tasks/:id/repo-path', asyncHandler(async (req, res) => {
 
 // Complete task manually (for terminal mode)
 app.post('/api/tasks/:id/complete', asyncHandler(async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = parseInt(req.params.id as string);
   const task = await getTask(id);
   if (!task) {
     res.status(404).json({ error: 'Task not found' });
@@ -1651,9 +1651,21 @@ app.post('/api/videoscans/import-digitoegankelijk', asyncHandler(async (req, res
 
   const headers = parseCsvLine(lines[0]);
   const nameIdx = headers.findIndex(h => /^naam/i.test(h));
-  const urlIdx = headers.findIndex(h => /^url/i.test(h));
+  let urlIdx = headers.findIndex(h => /^url$/i.test(h));
+  if (urlIdx === -1) urlIdx = headers.findIndex(h => /\burl\b/i.test(h));
   const typeIdx = headers.findIndex(h => /site of app/i.test(h));
   const statusIdx = headers.findIndex(h => /^status/i.test(h));
+
+  // "Naam/URL" header means col 0 = name, col 1 = url (no separate URL header)
+  if (urlIdx === -1 && nameIdx !== -1 && /url/i.test(headers[nameIdx])) {
+    urlIdx = nameIdx + 1;
+  }
+
+  // Last resort: find first column whose data looks like a URL
+  if (urlIdx === -1) {
+    const sample = parseCsvLine(lines[1]);
+    urlIdx = sample.findIndex(f => /^https?:\/\//i.test(f));
+  }
 
   if (urlIdx === -1) {
     res.status(400).json({ error: 'CSV missing URL column' });
@@ -1723,7 +1735,7 @@ app.get('/api/orchestrator/state', (_req, res) => {
 });
 
 app.post('/api/orchestrator/:id/accept', asyncHandler(async (req, res) => {
-  const result = await acceptAction(req.params.id);
+  const result = await acceptAction(req.params.id as string);
   if (!result) return res.status(404).json({ error: 'Action not found or already handled' });
   await broadcastTasks();
   res.json(result);
@@ -1731,7 +1743,7 @@ app.post('/api/orchestrator/:id/accept', asyncHandler(async (req, res) => {
 
 app.post('/api/orchestrator/:id/dismiss', asyncHandler(async (req, res) => {
   const reason = req.body?.reason;
-  const ok = await dismissAction(req.params.id, reason);
+  const ok = await dismissAction(req.params.id as string, reason);
   if (!ok) return res.status(404).json({ error: 'Action not found or already handled' });
   res.json({ ok: true });
 }));
