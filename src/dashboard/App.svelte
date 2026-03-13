@@ -13,17 +13,15 @@
   import { fetchCurrentUser } from './stores/currentUser.svelte';
   import { fetchNotifications } from './stores/notifications.svelte';
   import { fetchOrchestratorState } from './stores/orchestrator.svelte';
-  import { readPreference, writePreference } from './lib/preferences';
   import NotificationSidebar from './components/NotificationSidebar.svelte';
   import OrchestratorPanel from './components/OrchestratorPanel.svelte';
   import OrchestratorChat from './components/OrchestratorChat.svelte';
   import ToastContainer from './components/ToastContainer.svelte';
   import VideoscanPage from './components/VideoscanPage.svelte';
+  import DashboardOverview from './components/DashboardOverview.svelte';
+  import { getRoute } from './lib/router.svelte';
 
-  let currentPage = $state<'dashboard' | 'videoscan'>(
-    readPreference('currentPage', 'dashboard', (v): v is 'dashboard' | 'videoscan' =>
-      v === 'dashboard' || v === 'videoscan')
-  );
+  let route = $derived(getRoute());
 
   function refreshAll(refresh = false) {
     fetchPRs(refresh);
@@ -49,10 +47,10 @@
 </script>
 
 <div class="container">
-  <Header {refreshAll} {currentPage} onNavigate={(page) => { currentPage = page; writePreference('currentPage', page); }} />
-  {#if currentPage === 'videoscan'}
+  <Header {refreshAll} />
+  {#if route === '/videoscan'}
     <VideoscanPage />
-  {:else}
+  {:else if route === '/tickets'}
     <WorkItems />
     <OrchestratorPanel />
     <div class="bottom-grid">
@@ -64,6 +62,8 @@
         <TestingAssignment />
       </div>
     </div>
+  {:else}
+    <DashboardOverview />
   {/if}
 </div>
 <NotificationSidebar />

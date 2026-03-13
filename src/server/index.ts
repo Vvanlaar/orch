@@ -28,7 +28,7 @@ import { getEffectiveRepoMapping, getScannedRepos } from '../core/repo-scanner.j
 import { getAuthenticatedUser, getPull, listPullReviewComments, listOrgRepos } from '../core/github-api.js';
 import { approveSuggestion, completeTask, createTask, deleteTask, dismissSuggestion, failTask, getAllTasks, getAllTasksWithOutput, getTask, getTasksWithPids, retryTask, updateTaskRepoPath } from '../core/task-queue.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
-import { getVideoscanDir, listScans } from '../core/videoscan-runner.js';
+import { getVideoscanDir, listScans, mergeScans, generateReport } from '../core/videoscan-runner.js';
 import type { TerminalId } from '../core/types.js';
 import { getCurrentAdoUser, getMyAdoWorkItems, getMyGitHubPRs, getMyResolvedWorkItems, getResolvedWithPRComments, getReviewedItemsInSprint, getTeamMembers, getWorkItemsBySprints, type OwnerFilter } from '../core/user-items.js';
 import { startNtfyListener } from '../core/ntfy-listener.js';
@@ -105,12 +105,12 @@ app.use(express.json());
 const distDashboard = process.env.DASHBOARD_DIR || join(__dirname, '../../dist/dashboard');
 const oldDashboard = join(__dirname, '../dashboard/index.old.html');
 
-if (existsSync(join(distDashboard, 'index.html'))) {
-  // Serve built Svelte dashboard
+const dashboardIndexPath = join(distDashboard, 'index.html');
+const hasDashboardBuild = existsSync(dashboardIndexPath);
+
+if (hasDashboardBuild) {
+  // Serve built Svelte dashboard static assets
   app.use(express.static(distDashboard));
-  app.get('/', (_req, res) => {
-    res.sendFile(join(distDashboard, 'index.html'));
-  });
 } else if (existsSync(oldDashboard)) {
   // Fallback to old vanilla JS dashboard
   app.get('/', (_req, res) => {
@@ -1455,6 +1455,20 @@ app.get('/api/videoscans', (_req, res) => {
   res.json(listScans());
 });
 
+app.post('/api/videoscans/merge', (req, res) => {
+  const { filenames } = req.body;
+  if (!Array.isArray(filenames) || filenames.length < 2) {
+    res.status(400).json({ error: 'Need at least 2 filenames to merge' });
+    return;
+  }
+  try {
+    const result = mergeScans(filenames);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.get('/api/videoscans/files/:filename', (req, res) => {
   const { filename } = req.params;
   if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
@@ -1470,10 +1484,22 @@ app.get('/api/videoscans/files/:filename', (req, res) => {
     res.type('html').sendFile(filePath);
   } else if (filename.endsWith('.json')) {
     res.type('json').sendFile(filePath);
+  } else if (filename.endsWith('.pdf')) {
+    res.type('pdf').sendFile(filePath);
   } else {
     res.status(400).json({ error: 'Unsupported file type' });
   }
 });
+
+app.post('/api/videoscans/generate-report', asyncHandler(async (req, res) => {
+  const { filename } = req.body;
+  if (!filename || typeof filename !== 'string') {
+    res.status(400).json({ error: 'filename required' });
+    return;
+  }
+  const result = await generateReport(filename);
+  res.json(result);
+}));
 
 // --- Orchestrator API ---
 
@@ -1572,6 +1598,14 @@ app.post('/api/notifications/incoming', (req, res) => {
   });
   res.json({ ok: true });
 });
+
+// SPA catch-all: serve index.html for non-API routes (client-side routing)
+if (hasDashboardBuild) {
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api/') || req.path.startsWith('/ws')) return next();
+    res.sendFile(dashboardIndexPath);
+  });
+}
 
 // Error middleware (must be after all routes)
 app.use(expressErrorMiddleware);

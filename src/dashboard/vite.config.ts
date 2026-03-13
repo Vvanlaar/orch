@@ -10,6 +10,7 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [tailwindcss(), svelte()],
     root: '.',
+    appType: 'spa',
     build: {
       outDir: '../../dist/dashboard',
       emptyOutDir: true,

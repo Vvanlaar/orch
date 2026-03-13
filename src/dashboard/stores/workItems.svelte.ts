@@ -164,6 +164,14 @@ export function getResolvedWithComments() {
   return resolvedWithComments;
 }
 
+export function getPRs() {
+  return prs;
+}
+
+export function getWorkItems() {
+  return workItems;
+}
+
 export async function fetchResolvedWithComments(refresh = false) {
   try {
     const url = refresh ? '/api/my/resolved-with-comments?refresh=true' : '/api/my/resolved-with-comments';

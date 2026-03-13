@@ -371,6 +371,7 @@ async function processVideoscan(task: Task): Promise<void> {
       const parts = [`Scan complete`];
       if (result.jsonFile) parts.push(`JSON: ${result.jsonFile}`);
       if (result.htmlFile) parts.push(`Report: ${result.htmlFile}`);
+      if (result.pdfFile) parts.push(`PDF: ${result.pdfFile}`);
       completeTask(task.id, parts.join('\n'));
     } else {
       failTask(task.id, result.error || 'Videoscan failed');

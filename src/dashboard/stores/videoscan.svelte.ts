@@ -6,6 +6,7 @@ export interface ScanSummary {
   pagesWithVideo: number;
   uniquePlayers: number;
   hasReport: boolean;
+  hasPdf: boolean;
   canResume: boolean;
 }
 
@@ -44,4 +45,16 @@ export function startScan(url: string, maxPages: number, concurrency: number, de
 
 export function resumeScan(filename: string, maxPages: number, concurrency: number, delay: number) {
   return postJson('/api/actions/resume-videoscan', { filename, maxPages, concurrency, delay });
+}
+
+export async function regenerateReport(filename: string) {
+  const result = await postJson('/api/videoscans/generate-report', { filename });
+  await fetchScans();
+  return result;
+}
+
+export async function mergeDomainScans(filenames: string[]) {
+  const result = await postJson('/api/videoscans/merge', { filenames });
+  await fetchScans();
+  return result;
 }

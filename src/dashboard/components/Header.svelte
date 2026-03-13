@@ -7,16 +7,17 @@
   import { getNotificationState, toggleSidebar } from '../stores/notifications.svelte';
   import { triggerOrchestration, toggleChat } from '../stores/orchestrator.svelte';
   import { getSearchQuery, setSearchQuery } from '../stores/search.svelte';
+  import { getRoute, navigate, type Route } from '../lib/router.svelte';
   import type { TerminalId } from '../lib/types';
   import { onMount } from 'svelte';
 
   interface Props {
     refreshAll: (refresh?: boolean) => void;
-    currentPage: 'dashboard' | 'videoscan';
-    onNavigate: (page: 'dashboard' | 'videoscan') => void;
   }
 
-  let { refreshAll, currentPage, onNavigate }: Props = $props();
+  let { refreshAll }: Props = $props();
+
+  let currentRoute = $derived(getRoute());
 
   let connectionState = $derived(getConnectionState());
   let usage = $derived(getUsage());
@@ -111,8 +112,9 @@
   />
   <div class="header-right">
     <nav class="nav-tabs">
-      <button class="nav-tab" class:active={currentPage === 'dashboard'} onclick={() => onNavigate('dashboard')}>Dashboard</button>
-      <button class="nav-tab" class:active={currentPage === 'videoscan'} onclick={() => onNavigate('videoscan')}>Videoscan</button>
+      <a class="nav-tab" class:active={currentRoute === '/'} href="/" onclick={(e) => { e.preventDefault(); navigate('/'); }}>Dashboard</a>
+      <a class="nav-tab" class:active={currentRoute === '/tickets'} href="/tickets" onclick={(e) => { e.preventDefault(); navigate('/tickets'); }}>Tickets</a>
+      <a class="nav-tab" class:active={currentRoute === '/videoscan'} href="/videoscan" onclick={(e) => { e.preventDefault(); navigate('/videoscan'); }}>Videoscan</a>
     </nav>
     <div class="usage-bars" title={updatedAt}>
       <span>5h</span>
@@ -302,6 +304,7 @@
     font-weight: 500;
     font-family: 'IBM Plex Sans', system-ui, sans-serif;
     transition: all 0.15s;
+    text-decoration: none;
   }
 
   .nav-tab:hover {

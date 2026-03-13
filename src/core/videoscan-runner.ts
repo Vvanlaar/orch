@@ -9,7 +9,11 @@ import { createLogger } from './logger.js';
 const log = createLogger('videoscan-runner');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const VIDEOSCAN_DIR = process.env.VIDEOSCAN_DIR || join(__dirname, '../../videoscans');
+const PROJECT_ROOT = join(__dirname, '../../');
+const VIDEOSCAN_DIR = process.env.VIDEOSCAN_DIR || join(PROJECT_ROOT, 'videoscans');
+
+// report.mjs is always in src/ (not compiled to dist/)
+const REPORT_SCRIPT = join(PROJECT_ROOT, 'src/videoscan/report.mjs');
 
 // Ensure output directory exists
 mkdirSync(VIDEOSCAN_DIR, { recursive: true });
@@ -38,8 +42,7 @@ export interface VideoscanOptions {
 }
 
 export async function runVideoscan(taskId: number, options: VideoscanOptions): Promise<VideoscanResult> {
-  const scanScript = join(__dirname, '../videoscan/scan.mjs');
-  const reportScript = join(__dirname, '../videoscan/report.mjs');
+  const scanScript = join(PROJECT_ROOT, 'src/videoscan/scan.mjs');
 
   if (!existsSync(scanScript)) {
     return { success: false, error: `scan.mjs not found at ${scanScript}` };
@@ -110,7 +113,7 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
       // Generate HTML report
       claudeEmitter.emit('output', taskId, '\nGenerating HTML report...\n');
       try {
-        const reportProc = spawn('node', [reportScript, jsonFile], {
+        const reportProc = spawn('node', [REPORT_SCRIPT, jsonFile], {
           cwd: VIDEOSCAN_DIR,
           shell: true,
         });
@@ -163,6 +166,32 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
 
     proc.on('error', (err) => fail(err.message));
   });
+}
+
+export async function generateReport(jsonFilename: string): Promise<{ htmlFile?: string; pdfFile?: string }> {
+  const jsonPath = join(VIDEOSCAN_DIR, jsonFilename);
+  if (!existsSync(jsonPath)) throw new Error(`JSON file not found: ${jsonFilename}`);
+
+  // Generate HTML
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn('node', [REPORT_SCRIPT, jsonFilename], { cwd: VIDEOSCAN_DIR, shell: true });
+    proc.on('close', (code) => code === 0 ? resolve() : reject(new Error(`report.mjs exited with code ${code}`)));
+    proc.on('error', reject);
+  });
+
+  const htmlFile = jsonFilename.replace('.json', '.html');
+  const htmlPath = join(VIDEOSCAN_DIR, htmlFile);
+  if (!existsSync(htmlPath)) return {};
+
+  // Generate PDF
+  let pdfFile: string | undefined;
+  try {
+    pdfFile = await generatePdf(htmlPath);
+  } catch (err) {
+    log.warn(`PDF generation failed for ${jsonFilename}: ${err}`);
+  }
+
+  return { htmlFile, pdfFile };
 }
 
 async function generatePdf(htmlPath: string): Promise<string> {
@@ -221,7 +250,7 @@ interface ScanData {
   pagesScanned: number;
   pagesWithVideo: number;
   uniquePlayers: number;
-  playerSummary: Record<string, number>;
+  playerSummary: Record<string, { count: number; pages: string[] }>;
   details: ScanDetail[];
   _state: { visited: string[]; queue: string[] };
 }
@@ -265,11 +294,14 @@ export function mergeScans(filenames: string[]): MergeResult {
     }
   }
 
-  // Recalculate player summary
-  const playerCounts = new Map<string, number>();
+  // Recalculate player summary with { count, pages } structure
+  const playerMap = new Map<string, { count: number; pages: string[] }>();
   for (const detail of mergedDetails) {
     for (const p of detail.players) {
-      playerCounts.set(p.name, (playerCounts.get(p.name) || 0) + 1);
+      const entry = playerMap.get(p.name) || { count: 0, pages: [] };
+      entry.count++;
+      entry.pages.push(detail.url);
+      playerMap.set(p.name, entry);
     }
   }
 
@@ -282,8 +314,8 @@ export function mergeScans(filenames: string[]): MergeResult {
     scanDate: latestDate,
     pagesScanned: visitedSet.size,
     pagesWithVideo: mergedDetails.length,
-    uniquePlayers: playerCounts.size,
-    playerSummary: Object.fromEntries(playerCounts),
+    uniquePlayers: playerMap.size,
+    playerSummary: Object.fromEntries(playerMap),
     details: mergedDetails,
     _state: { visited: [...visitedSet], queue: [...queueSet] },
   };
