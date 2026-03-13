@@ -89,6 +89,14 @@
     }
   }
 
+  // Tab accent colors
+  function tabAccent(route: string): string {
+    if (route === '/') return '#f59e0b';
+    if (route === '/tickets') return '#3b82f6';
+    if (route === '/videoscan') return '#06b6d4';
+    return '#5e7389';
+  }
+
   onMount(() => {
     fetchTerminalConfig();
     document.addEventListener('click', handleClickOutside);
@@ -112,9 +120,9 @@
   />
   <div class="header-right">
     <nav class="nav-tabs">
-      <a class="nav-tab" class:active={currentRoute === '/'} href="/" onclick={(e) => { e.preventDefault(); navigate('/'); }}>Dashboard</a>
-      <a class="nav-tab" class:active={currentRoute === '/tickets'} href="/tickets" onclick={(e) => { e.preventDefault(); navigate('/tickets'); }}>Tickets</a>
-      <a class="nav-tab" class:active={currentRoute === '/videoscan'} href="/videoscan" onclick={(e) => { e.preventDefault(); navigate('/videoscan'); }}>Videoscan</a>
+      <a class="nav-tab" class:active={currentRoute === '/'} href="/" onclick={(e) => { e.preventDefault(); navigate('/'); }} style={currentRoute === '/' ? `border-bottom-color: ${tabAccent('/')}; color: ${tabAccent('/')}` : ''}>Dashboard</a>
+      <a class="nav-tab" class:active={currentRoute === '/tickets'} href="/tickets" onclick={(e) => { e.preventDefault(); navigate('/tickets'); }} style={currentRoute === '/tickets' ? `border-bottom-color: ${tabAccent('/tickets')}; color: ${tabAccent('/tickets')}` : ''}>Tickets</a>
+      <a class="nav-tab" class:active={currentRoute === '/videoscan'} href="/videoscan" onclick={(e) => { e.preventDefault(); navigate('/videoscan'); }} style={currentRoute === '/videoscan' ? `border-bottom-color: ${tabAccent('/videoscan')}; color: ${tabAccent('/videoscan')}` : ''}>Videoscan</a>
     </nav>
     <div class="usage-bars" title={updatedAt}>
       <span>5h</span>
@@ -251,44 +259,48 @@
     justify-content: space-between;
     align-items: center;
     margin-bottom: 20px;
-    padding-bottom: 16px;
-    border-bottom: 1px solid #2a313b;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-primary);
+    padding: 16px 20px;
+    border-radius: 10px;
+    box-shadow: var(--shadow-card);
   }
 
   h1 {
     font-size: 18px;
     font-weight: 700;
     letter-spacing: -0.02em;
-    color: #e6edf3;
+    color: var(--text-heading);
     flex-shrink: 0;
   }
 
   .global-search {
     flex: 1;
     max-width: 340px;
-    background: #0d1117;
-    border: 1px solid #2a313b;
+    background: var(--bg-deep);
+    border: 1px solid var(--border-primary);
     border-radius: 6px;
-    color: #c9d1d9;
+    color: var(--text-primary);
     padding: 6px 10px;
     font-size: 12px;
     font-family: 'IBM Plex Mono', monospace;
-    transition: border-color 0.15s;
+    transition: border-color 0.15s, box-shadow 0.15s;
   }
 
   .global-search:focus {
     outline: none;
-    border-color: #1f4a85;
+    border-color: var(--info);
+    box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.15);
   }
 
   .global-search::placeholder {
-    color: #6e7681;
+    color: var(--text-dim);
   }
 
   .nav-tabs {
     display: flex;
     gap: 2px;
-    background: #161b22;
+    background: var(--bg-surface);
     border-radius: 6px;
     padding: 2px;
   }
@@ -296,7 +308,8 @@
   .nav-tab {
     background: transparent;
     border: none;
-    color: #8b949e;
+    border-bottom: 2px solid transparent;
+    color: var(--text-muted);
     padding: 4px 12px;
     border-radius: 4px;
     cursor: pointer;
@@ -308,12 +321,12 @@
   }
 
   .nav-tab:hover {
-    color: #c9d1d9;
+    color: var(--text-primary);
   }
 
   .nav-tab.active {
-    background: #2a313b;
-    color: #e6edf3;
+    background: var(--bg-raised);
+    color: var(--text-heading);
   }
 
   .header-right {
@@ -327,13 +340,13 @@
     gap: 6px;
     align-items: center;
     font-size: 11px;
-    color: #8b949e;
+    color: var(--text-muted);
     font-family: 'IBM Plex Mono', monospace;
   }
 
   .usage-bars progress {
     width: 52px;
-    height: 6px;
+    height: 4px;
   }
 
   .spacer {
@@ -347,7 +360,7 @@
 
   .updated-at {
     font-size: 9px;
-    color: #6e7681;
+    color: var(--text-dim);
     margin-left: 4px;
   }
 
@@ -356,12 +369,12 @@
     align-items: center;
     gap: 6px;
     font-size: 11px;
-    color: #8b949e;
+    color: var(--text-muted);
     user-select: none;
   }
 
   .toggle-wrap input {
-    accent-color: #238636;
+    accent-color: var(--success);
     cursor: pointer;
   }
 
@@ -370,20 +383,20 @@
     align-items: center;
     gap: 6px;
     font-size: 12px;
-    color: #8b949e;
+    color: var(--text-muted);
   }
 
   .status-dot {
     width: 7px;
     height: 7px;
     border-radius: 50%;
-    background: #3fb950;
-    box-shadow: 0 0 6px rgba(63, 185, 80, 0.4);
+    background: var(--success);
+    box-shadow: 0 0 8px rgba(52, 211, 153, 0.5);
   }
 
   .status-dot.disconnected {
-    background: #f85149;
-    box-shadow: 0 0 6px rgba(248, 81, 73, 0.4);
+    background: var(--danger);
+    box-shadow: 0 0 8px rgba(248, 81, 73, 0.5);
   }
 
   .settings-container {
@@ -391,20 +404,20 @@
   }
 
   .settings-btn {
-    background: #2a313b;
-    border: 1px solid #353d47;
+    background: var(--bg-raised);
+    border: 1px solid var(--border-bright);
     border-radius: 6px;
     padding: 6px 8px;
     cursor: pointer;
-    color: #8b949e;
+    color: var(--text-muted);
     display: flex;
     align-items: center;
     transition: all 0.15s;
   }
 
   .settings-btn:hover {
-    background: #353d47;
-    color: #c9d1d9;
+    background: var(--bg-overlay);
+    color: var(--text-primary);
   }
 
   .settings-dropdown {
@@ -412,12 +425,12 @@
     top: 100%;
     right: 0;
     margin-top: 8px;
-    background: #161b22;
-    border: 1px solid #2a313b;
+    background: var(--bg-overlay);
+    border: 1px solid var(--border-primary);
     border-radius: 10px;
     min-width: 280px;
     z-index: 100;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow-elevated);
   }
 
   .dropdown-header {
@@ -425,16 +438,16 @@
     justify-content: space-between;
     align-items: center;
     padding: 10px 12px;
-    border-bottom: 1px solid #2a313b;
+    border-bottom: 1px solid var(--border-primary);
     font-size: 11px;
     font-weight: 600;
-    color: #8b949e;
+    color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
 
   .analyze-btn {
-    background: #238636;
+    background: #1a7f37;
     color: white;
     border: none;
     border-radius: 4px;
@@ -447,7 +460,7 @@
   }
 
   .analyze-btn:hover:not(:disabled) {
-    background: #2ea043;
+    background: #22943e;
   }
 
   .analyze-btn:disabled {
@@ -468,7 +481,7 @@
     background: transparent;
     border: none;
     border-radius: 6px;
-    color: #c9d1d9;
+    color: var(--text-primary);
     font-size: 12px;
     cursor: pointer;
     text-align: left;
@@ -477,34 +490,34 @@
   }
 
   .terminal-option:hover:not(:disabled) {
-    background: #2a313b;
+    background: var(--bg-raised);
   }
 
   .terminal-option.selected {
-    background: #122a4a;
+    background: var(--info-bg);
   }
 
   .terminal-option.unavailable {
-    color: #6e7681;
+    color: var(--text-dim);
     cursor: not-allowed;
   }
 
   .unavailable-badge {
     font-size: 9px;
-    color: #8b949e;
-    background: #2a313b;
+    color: var(--text-muted);
+    background: var(--bg-raised);
     padding: 2px 6px;
     border-radius: 3px;
     font-weight: 500;
   }
 
   .check {
-    color: #3fb950;
+    color: var(--success);
   }
 
   .no-terminals {
     padding: 12px;
-    color: #6e7681;
+    color: var(--text-dim);
     font-size: 11px;
     text-align: center;
   }
@@ -524,17 +537,17 @@
 
   .cred-label {
     font-size: 9px;
-    color: #8b949e;
+    color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
     font-weight: 600;
   }
 
   .cred-field input {
-    background: #0d1117;
-    border: 1px solid #2a313b;
+    background: var(--bg-deep);
+    border: 1px solid var(--border-primary);
     border-radius: 4px;
-    color: #c9d1d9;
+    color: var(--text-primary);
     padding: 5px 8px;
     font-size: 11px;
     font-family: 'IBM Plex Mono', monospace;
@@ -543,7 +556,7 @@
 
   .cred-field input:focus {
     outline: none;
-    border-color: #1f4a85;
+    border-color: var(--info);
   }
 
   .gh-auth-section {
@@ -556,27 +569,27 @@
 
   .gh-hint {
     font-size: 10px;
-    color: #6e7681;
+    color: var(--text-dim);
     font-style: italic;
   }
 
   .gh-status {
     font-size: 11px;
-    color: #3fb950;
+    color: var(--success);
     font-weight: 500;
   }
 
   .gh-connected {
     font-size: 10px;
-    color: #3fb950;
+    color: var(--success);
     font-weight: 500;
   }
 
   .gh-signin-btn {
-    background: #2a313b;
-    border: 1px solid #353d47;
+    background: var(--bg-raised);
+    border: 1px solid var(--border-bright);
     border-radius: 6px;
-    color: #c9d1d9;
+    color: var(--text-primary);
     padding: 4px 10px;
     font-size: 11px;
     cursor: pointer;
@@ -585,7 +598,7 @@
   }
 
   .gh-signin-btn:hover {
-    background: #353d47;
+    background: var(--bg-overlay);
   }
 
   .gh-code-flow {
@@ -599,8 +612,8 @@
     font-size: 18px;
     font-weight: 700;
     letter-spacing: 3px;
-    color: #58a6ff;
-    background: #122a4a;
+    color: var(--info);
+    background: var(--info-bg);
     padding: 6px 12px;
     border-radius: 6px;
     font-family: 'IBM Plex Mono', monospace;
@@ -608,14 +621,14 @@
 
   .gh-link {
     font-size: 11px;
-    color: #58a6ff;
+    color: var(--info);
   }
 
   .gh-cancel-btn {
     background: transparent;
-    border: 1px solid #353d47;
+    border: 1px solid var(--border-bright);
     border-radius: 4px;
-    color: #8b949e;
+    color: var(--text-muted);
     padding: 2px 8px;
     font-size: 10px;
     cursor: pointer;
@@ -624,17 +637,17 @@
   }
 
   .gh-cancel-btn:hover {
-    color: #c9d1d9;
+    color: var(--text-primary);
   }
 
   .gh-error {
     font-size: 11px;
-    color: #f85149;
+    color: var(--danger);
   }
 
   .orch-btn,
   .chat-btn {
-    background: #22163c;
+    background: #1a1030;
     border: 1px solid #3b2460;
     border-radius: 6px;
     padding: 6px 8px;
@@ -647,33 +660,33 @@
 
   .orch-btn:hover,
   .chat-btn:hover {
-    background: #3b2460;
+    background: #2a1850;
     color: #d2a8ff;
   }
 
   .notif-btn {
     position: relative;
-    background: #2a313b;
-    border: 1px solid #353d47;
+    background: #2a1508;
+    border: 1px solid #5c3610;
     border-radius: 6px;
     padding: 6px 8px;
     cursor: pointer;
-    color: #8b949e;
+    color: #f97316;
     display: flex;
     align-items: center;
     transition: all 0.15s;
   }
 
   .notif-btn:hover {
-    background: #353d47;
-    color: #c9d1d9;
+    background: #3a1f0c;
+    color: #fb923c;
   }
 
   .notif-badge-count {
     position: absolute;
     top: -5px;
     right: -5px;
-    background: #da3633;
+    background: var(--danger);
     color: #fff;
     font-size: 9px;
     font-weight: 700;

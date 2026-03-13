@@ -7,6 +7,7 @@ export interface ScanSummary {
   uniquePlayers: number;
   hasReport: boolean;
   hasPdf: boolean;
+  hasPreview: boolean;
   canResume: boolean;
 }
 
@@ -51,6 +52,34 @@ export async function regenerateReport(filename: string) {
   const result = await postJson('/api/videoscans/generate-report', { filename });
   await fetchScans();
   return result;
+}
+
+export async function regeneratePreview(filename: string) {
+  const result = await postJson('/api/videoscans/generate-preview', { filename });
+  await fetchScans();
+  return result;
+}
+
+export interface DigiImportSite {
+  name: string;
+  url: string;
+  status: string;
+}
+
+export interface DigiImportGroup {
+  rootDomain: string;
+  sites: DigiImportSite[];
+}
+
+export interface DigiImportResult {
+  orgName: string;
+  totalSites: number;
+  skippedApps: number;
+  groups: DigiImportGroup[];
+}
+
+export async function importDigiToegankelijk(id: number): Promise<DigiImportResult> {
+  return postJson('/api/videoscans/import-digitoegankelijk', { id });
 }
 
 export async function mergeDomainScans(filenames: string[]) {

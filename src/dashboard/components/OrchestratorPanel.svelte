@@ -192,6 +192,7 @@
 <style>
   .orch-panel {
     margin-bottom: 20px;
+    border-left-color: #8b5cf6 !important;
   }
 
   .orch-panel h2 {
@@ -207,12 +208,12 @@
   }
 
   .orch-run-btn {
-    background: #6e40c9 !important;
+    background: #7c3aed !important;
     font-size: 11px !important;
   }
 
   .orch-run-btn:hover:not(:disabled) {
-    background: #8957e5 !important;
+    background: #8b5cf6 !important;
   }
 
   .status-badge {
@@ -226,18 +227,18 @@
 
   .status-badge.gathering,
   .status-badge.analyzing {
-    background: #122a4a;
-    color: #58a6ff;
+    background: #1a1030;
+    color: #a78bfa;
   }
 
   .status-badge.ready {
-    background: #123620;
-    color: #3fb950;
+    background: var(--success-bg);
+    color: var(--success);
   }
 
   .status-badge.error {
-    background: #361414;
-    color: #f85149;
+    background: var(--danger-bg);
+    color: var(--danger);
   }
 
   .data-summary {
@@ -245,8 +246,8 @@
     gap: 12px;
     padding: 8px 18px;
     font-size: 11px;
-    color: #8b949e;
-    border-bottom: 1px solid #21262d;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border-subtle);
     flex-wrap: wrap;
   }
 
@@ -255,15 +256,15 @@
     align-items: center;
     gap: 10px;
     padding: 24px 18px;
-    color: #8b949e;
+    color: var(--text-muted);
     font-size: 13px;
   }
 
   .spinner {
     width: 14px;
     height: 14px;
-    border: 2px solid #2a313b;
-    border-top-color: #58a6ff;
+    border: 2px solid var(--bg-raised);
+    border-top-color: #a78bfa;
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
   }
@@ -277,17 +278,17 @@
     align-items: center;
     justify-content: space-between;
     padding: 16px 18px;
-    color: #f85149;
+    color: var(--danger);
     font-size: 12px;
   }
 
   .orch-action {
-    border-bottom: 1px solid #21262d;
+    border-bottom: 1px solid var(--border-subtle);
     transition: background 0.1s;
   }
 
   .orch-action:hover {
-    background: #1c2128;
+    background: var(--bg-raised);
   }
 
   .orch-action.accepted {
@@ -314,29 +315,29 @@
   }
 
   .priority-high {
-    background: #361414 !important;
-    color: #f85149 !important;
+    background: var(--danger-bg) !important;
+    color: var(--danger) !important;
   }
 
   .priority-medium {
-    background: #362210 !important;
-    color: #f0883e !important;
+    background: var(--warning-bg) !important;
+    color: var(--warning) !important;
   }
 
   .priority-low {
-    background: #2a313b !important;
-    color: #8b949e !important;
+    background: var(--bg-raised) !important;
+    color: var(--text-muted) !important;
   }
 
   .source {
-    background: #22163c !important;
+    background: #1a1030 !important;
     color: #a371f7 !important;
   }
 
   .action-title {
     font-size: 13px;
     font-weight: 500;
-    color: #e6edf3;
+    color: var(--text-heading);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -344,14 +345,14 @@
 
   .action-meta {
     font-size: 11px;
-    color: #8b949e;
+    color: var(--text-muted);
     margin-top: 2px;
     display: flex;
     gap: 10px;
   }
 
   .source-link {
-    color: #58a6ff;
+    color: var(--info);
     text-decoration: none;
   }
 
@@ -368,14 +369,14 @@
 
   .accepted-label {
     font-size: 11px;
-    color: #3fb950;
+    color: var(--success);
     font-weight: 500;
   }
 
   .expand-btn {
     background: transparent;
-    border: 1px solid #353d47;
-    color: #8b949e;
+    border: 1px solid var(--border-bright);
+    color: var(--text-muted);
     width: 24px;
     height: 24px;
     border-radius: 4px;
@@ -388,8 +389,8 @@
   }
 
   .expand-btn:hover {
-    background: #2a313b;
-    color: #c9d1d9;
+    background: var(--bg-raised);
+    color: var(--text-primary);
   }
 
   .action-detail {
@@ -398,7 +399,7 @@
   }
 
   .detail-label {
-    color: #8b949e;
+    color: var(--text-muted);
     font-size: 10px;
     font-weight: 600;
     text-transform: uppercase;
@@ -408,14 +409,14 @@
   }
 
   .detail-text {
-    color: #c9d1d9;
+    color: var(--text-primary);
     line-height: 1.5;
   }
 
   .prompt-text {
     font-family: 'IBM Plex Mono', monospace;
     font-size: 11px;
-    background: #0d1117;
+    background: var(--bg-deep);
     padding: 8px 10px;
     border-radius: 6px;
     white-space: pre-wrap;
@@ -431,9 +432,9 @@
   }
 
   .dismiss-reason-input {
-    background: #0d1117;
-    border: 1px solid #353d47;
-    color: #c9d1d9;
+    background: var(--bg-deep);
+    border: 1px solid var(--border-bright);
+    color: var(--text-primary);
     border-radius: 4px;
     padding: 3px 8px;
     font-size: 11px;
@@ -442,24 +443,24 @@
   }
 
   .dismiss-reason-input:focus {
-    border-color: #58a6ff;
+    border-color: #8b5cf6;
   }
 
   .dismissed-section {
-    border-top: 1px solid #21262d;
+    border-top: 1px solid var(--border-subtle);
     padding: 8px 18px;
   }
 
   .dismissed-item {
     font-size: 11px;
-    color: #484f58;
+    color: var(--text-dim);
     padding: 2px 0;
     text-decoration: line-through;
   }
 
   .dismiss-reason {
     font-style: italic;
-    color: #484f58;
+    color: var(--text-dim);
     text-decoration: none;
   }
 </style>

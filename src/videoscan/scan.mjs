@@ -95,6 +95,34 @@ const DETECTORS = {
     ],
     scripts: [/pingvp\.com/i],
   },
+  Hihaho: {
+    patterns: [/player\.hihaho\.com/i, /hihaho\.com\/embed/i, /hihaho\.com/i],
+    scripts: [/hihaho\.com/i],
+  },
+  "Ivory Media Player": {
+    patterns: [/ivoryvideo\.com/i, /ivory-player/i, /ivorymediaplayer/i],
+    scripts: [/ivoryvideo\.com/i],
+  },
+  OpenGemeenten: {
+    patterns: [/opengemeenten\.nl/i, /AccessibleMediaPlayer/i, /opengemeenten/i],
+    scripts: [/opengemeenten/i],
+  },
+  Rijksoverheidsplayer: {
+    patterns: [
+      /platformrijksoverheidonline\.nl/i,
+      /mediatheek\.rijksoverheid/i,
+      /rijksoverheid\.nl\/[^"]*video/i,
+    ],
+    scripts: [/platformrijksoverheidonline/i],
+  },
+  "Vixy Video": {
+    patterns: [
+      /platform\.vixyvideo\.com/i,
+      /vixyvideo\.com/i,
+      /vixy\.nl/i,
+    ],
+    scripts: [/vixyvideo\.com/i],
+  },
 
   // ── Major platforms ─────────────────────────────────────────────
   YouTube: {
@@ -320,6 +348,7 @@ const DETECTOR_TIER = {
   // Tier 1: Enterprise / OVP
   "Blue Billywig": 1, Brightcove: 1, "JW Player": 1, Kaltura: 1,
   Wistia: 1, Vidyard: 1, Flowplayer: 1, Panopto: 1, PingVP: 1,
+  Hihaho: 1, "Ivory Media Player": 1, OpenGemeenten: 1, Rijksoverheidsplayer: 1, "Vixy Video": 1,
   // Tier 2: Major platforms
   YouTube: 2, Vimeo: 2, DailyMotion: 2, TikTok: 2, Instagram: 2,
   "Facebook Video": 2, "X (Twitter)": 2, LinkedIn: 2, Twitch: 2,

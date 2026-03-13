@@ -105,7 +105,7 @@
     position: fixed;
     inset: 0;
     z-index: 199;
-    background: rgba(0, 0, 0, 0.3);
+    background: rgba(0, 0, 0, 0.4);
   }
 
   .sidebar {
@@ -114,12 +114,12 @@
     right: 0;
     width: 380px;
     height: 100vh;
-    background: #161b22;
-    border-left: 1px solid #2a313b;
+    background: var(--bg-surface);
+    border-left: 1px solid var(--border-primary);
     z-index: 200;
     display: flex;
     flex-direction: column;
-    box-shadow: -8px 0 32px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow-elevated);
   }
 
   .sidebar-header {
@@ -127,7 +127,7 @@
     justify-content: space-between;
     align-items: center;
     padding: 16px 18px;
-    border-bottom: 1px solid #2a313b;
+    border-bottom: 1px solid var(--border-primary);
   }
 
   .sidebar-title {
@@ -135,13 +135,13 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: #8b949e;
+    color: #f97316;
   }
 
   .close-btn {
     background: none;
     border: none;
-    color: #8b949e;
+    color: var(--text-muted);
     font-size: 18px;
     cursor: pointer;
     padding: 0 4px;
@@ -149,22 +149,22 @@
   }
 
   .close-btn:hover {
-    color: #c9d1d9;
+    color: var(--text-primary);
   }
 
   .sidebar-filters {
     display: flex;
     gap: 6px;
     padding: 10px 18px;
-    border-bottom: 1px solid #2a313b;
+    border-bottom: 1px solid var(--border-primary);
   }
 
   .search-input {
     flex: 1;
-    background: #0d1117;
-    border: 1px solid #2a313b;
+    background: var(--bg-deep);
+    border: 1px solid var(--border-primary);
     border-radius: 6px;
-    color: #c9d1d9;
+    color: var(--text-primary);
     padding: 6px 10px;
     font-size: 11px;
     font-family: 'IBM Plex Sans', system-ui, sans-serif;
@@ -173,14 +173,14 @@
 
   .search-input:focus {
     outline: none;
-    border-color: #1f4a85;
+    border-color: #f97316;
   }
 
   .repo-select {
-    background: #0d1117;
-    border: 1px solid #2a313b;
+    background: var(--bg-deep);
+    border: 1px solid var(--border-primary);
     border-radius: 6px;
-    color: #c9d1d9;
+    color: var(--text-primary);
     padding: 6px 8px;
     font-size: 11px;
     max-width: 140px;
@@ -194,12 +194,12 @@
 
   .notif-item {
     padding: 12px 18px;
-    border-bottom: 1px solid #21262d;
+    border-bottom: 1px solid var(--border-subtle);
     transition: background 0.1s;
   }
 
   .notif-item:hover {
-    background: #1c2128;
+    background: var(--bg-raised);
   }
 
   .notif-top {
@@ -214,33 +214,33 @@
     font-weight: 600;
     padding: 2px 8px;
     border-radius: 4px;
-    background: #361414;
-    color: #f85149;
+    background: var(--danger-bg);
+    color: var(--danger);
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
 
   .notif-badge.plan-ready {
-    background: #122a4a;
-    color: #58a6ff;
+    background: var(--info-bg);
+    color: var(--info);
   }
 
   .notif-time {
     font-size: 10px;
-    color: #8b949e;
+    color: var(--text-muted);
     font-family: 'IBM Plex Mono', monospace;
   }
 
   .notif-name {
     font-size: 13px;
     font-weight: 600;
-    color: #e6edf3;
+    color: var(--text-heading);
     margin-bottom: 4px;
   }
 
   .notif-msg {
     font-size: 11px;
-    color: #8b949e;
+    color: var(--text-muted);
     line-height: 1.5;
     margin-bottom: 6px;
     word-break: break-word;
@@ -250,16 +250,16 @@
     display: flex;
     gap: 10px;
     font-size: 10px;
-    color: #6e7681;
+    color: var(--text-dim);
     margin-bottom: 6px;
     font-family: 'IBM Plex Mono', monospace;
   }
 
   .copy-btn {
-    background: #2a313b;
-    border: 1px solid #353d47;
+    background: var(--bg-raised);
+    border: 1px solid var(--border-bright);
     border-radius: 4px;
-    color: #8b949e;
+    color: var(--text-muted);
     padding: 3px 8px;
     font-size: 10px;
     cursor: pointer;
@@ -268,14 +268,14 @@
   }
 
   .copy-btn:hover {
-    background: #353d47;
-    color: #c9d1d9;
+    background: var(--bg-overlay);
+    color: var(--text-primary);
   }
 
   .empty-state {
     padding: 48px 18px;
     text-align: center;
-    color: #6e7681;
+    color: var(--text-dim);
     font-size: 12px;
   }
 </style>

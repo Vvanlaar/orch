@@ -6,3 +6,8 @@ orch-tasks.json
 desktop/build/
 desktop/artifacts/
 .workspaces/
+.playwright-mcp/
+.orch-feedback.json
+orch-server.log
+videoscans/
+*.png

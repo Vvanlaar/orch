@@ -39,6 +39,11 @@ export const config: Config = {
     enabled: envOr('POLLING_ENABLED', 'true') === 'true',
     intervalMs: parseInt(envOr('POLLING_INTERVAL_MS', '60000')),
   },
+  supabase: {
+    url: envOr('SUPABASE_URL', ''),
+    serviceRoleKey: envOr('SUPABASE_SERVICE_ROLE_KEY', ''),
+    machineId: envOr('MACHINE_ID', ''),
+  },
 };
 
 export const WORKSPACES_DIR = path.resolve(

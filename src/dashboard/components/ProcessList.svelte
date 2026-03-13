@@ -115,29 +115,32 @@
   }
 
   .kill-old {
-    background: #7a4510 !important;
-    color: #f0883e !important;
+    background: var(--warning-bg) !important;
+    color: var(--warning) !important;
+    border: 1px solid #5c3610;
   }
 
   .kill-old:hover {
-    background: #8b5011 !important;
+    background: #3a1f0c !important;
   }
 
   .kill-all {
-    background: #5c1010 !important;
-    color: #f85149 !important;
+    background: var(--danger-bg) !important;
+    color: var(--danger) !important;
+    border: 1px solid #5c1010;
   }
 
   .kill-all:hover {
-    background: #6e1212 !important;
+    background: #3a0f0f !important;
   }
 
   .kill-btn {
-    background: #5c1010 !important;
-    color: #f85149 !important;
+    background: var(--danger-bg) !important;
+    color: var(--danger) !important;
+    border: 1px solid #5c1010;
   }
 
   .kill-btn:hover {
-    background: #6e1212 !important;
+    background: #3a0f0f !important;
   }
 </style>

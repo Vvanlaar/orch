@@ -6,6 +6,7 @@
  * Usage: node report.mjs <scan-json-file> [--social <social-json>]
  */
 import { readFileSync, writeFileSync } from "fs";
+import { AUDIT_DATA, SCANNER_TO_AUDIT } from "./audit-data.mjs";
 
 const BB_BLUE = "#1a3a5c";
 const BB_LIGHT_BLUE = "#4a90d9";
@@ -77,6 +78,202 @@ function generatePieChartSVG(data, size = 200) {
       <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${paths.join("")}</svg>
       <div>${legend}</div>
     </div>`;
+}
+
+function generateAuditSection(playerSummary) {
+  const playerNames = Object.keys(playerSummary || {});
+  const auditMatches = [];
+  for (const name of playerNames) {
+    const auditName = SCANNER_TO_AUDIT[name];
+    if (auditName && AUDIT_DATA.players[auditName]) {
+      auditMatches.push({ scanName: name, auditName, ...AUDIT_DATA.players[auditName] });
+    }
+  }
+
+  if (auditMatches.length === 0) return "";
+
+  const failCount = auditMatches.filter((m) => m.status === "fail").length;
+  const hasBB = playerNames.includes("Blue Billywig");
+
+  const rows = auditMatches
+    .sort((a, b) => a.findings - b.findings)
+    .map((m) => {
+      const isPass = m.status === "pass";
+      const rowBg = isPass ? "#f0faf4" : "white";
+      const badge = isPass
+        ? `<span style="background:#2ecc71;color:white;padding:2px 8px;border-radius:10px;font-size:12px;font-weight:600">Voldoet</span>`
+        : `<span style="background:#e74c3c;color:white;padding:2px 8px;border-radius:10px;font-size:12px;font-weight:600">Voldoet niet</span>`;
+      return `<tr style="background:${rowBg}">
+        <td style="padding:10px 16px;border-bottom:1px solid #eee">${m.auditName}</td>
+        <td style="padding:10px 16px;border-bottom:1px solid #eee;text-align:center">${m.findings}</td>
+        <td style="padding:10px 16px;border-bottom:1px solid #eee;text-align:center">${m.failedSC}</td>
+        <td style="padding:10px 16px;border-bottom:1px solid #eee;text-align:center">${badge}</td>
+      </tr>`;
+    }).join("");
+
+  const summaryText = failCount > 0
+    ? `Van de ${auditMatches.length} gevonden player${auditMatches.length > 1 ? "s" : ""} voldoe${failCount === 1 ? "t" : "n"} <strong>${failCount}</strong> niet aan WCAG 2.2.`
+    : `Alle ${auditMatches.length} gevonden players voldoen aan WCAG 2.2.`;
+
+  const noBBNote = !hasBB && failCount > 0
+    ? `<div class="risk-card" style="margin-top:16px"><strong>Let op</strong><br>Geen van de gevonden videospelers voldoet volledig aan WCAG 2.2.</div>`
+    : "";
+
+  return `
+    <h2>Audit resultaten gevonden players</h2>
+    <p style="font-size:14px;color:#666">
+      ${summaryText}
+      <br>Bron: <a href="${AUDIT_DATA.url}" style="color:#4a90d9">${AUDIT_DATA.source} audit</a> (${AUDIT_DATA.method}, ${AUDIT_DATA.date})
+    </p>
+    <table>
+      <thead>
+        <tr>
+          <th>Videospeler</th>
+          <th style="text-align:center">Bevindingen</th>
+          <th style="text-align:center">Afgekeurde criteria</th>
+          <th style="text-align:center">Status</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+    ${noBBNote}`;
+}
+
+function generatePreviewReport(scanData) {
+  const { domain, scanDate, pagesScanned, playerSummary, details } = scanData;
+  const orgName = domain.replace(/^www\./, "").replace(/\.\w+$/, "");
+  const orgNameCap = orgName.charAt(0).toUpperCase() + orgName.slice(1);
+  const dateStr = new Date(scanDate).toLocaleDateString("nl-NL", { year: "numeric", month: "long", day: "numeric" });
+
+  const players = Object.entries(playerSummary || {});
+  const totalVideos = players.reduce((s, [, v]) => s + v.count, 0);
+  const pagesWithVideo = scanData.pagesWithVideo || details?.length || 0;
+  const playerNames = players.map(([n]) => n);
+
+  // Pie chart
+  const pieData = players
+    .sort((a, b) => b[1].count - a[1].count)
+    .map(([name, data]) => ({ label: name, value: data.count }));
+
+  // Privacy flags
+  const trackerPlayers = playerNames.filter((p) =>
+    ["YouTube", "Vimeo", "Instagram", "TikTok", "Facebook Video", "X (Twitter)"].includes(p)
+  );
+
+  // Audit accessibility flags
+  const auditMatches = [];
+  for (const name of playerNames) {
+    const auditName = SCANNER_TO_AUDIT[name];
+    if (auditName && AUDIT_DATA.players[auditName]) {
+      auditMatches.push({ name: auditName, ...AUDIT_DATA.players[auditName] });
+    }
+  }
+  const auditFail = auditMatches.filter((m) => m.status === "fail").length;
+
+  return `<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Video Quick Scan Preview - ${orgNameCap}</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', -apple-system, sans-serif; color: #333; background: #f5f5f5; line-height: 1.5; }
+    .page {
+      background: white; max-width: 900px; margin: 0 auto;
+      padding: 40px 48px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); position: relative;
+    }
+    .page::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 4px; background: ${BB_LIGHT_BLUE}; }
+    h1 { font-size: 28px; font-weight: 800; color: ${BB_BLUE}; }
+    h2 { font-size: 18px; font-weight: 700; color: ${BB_BLUE}; margin: 20px 0 8px; }
+    .bb-logo { font-weight: 800; color: ${BB_BLUE}; font-size: 18px; }
+    .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0; }
+    .stat-card { background: ${BB_ACCENT}; border-radius: 10px; padding: 14px; text-align: center; }
+    .stat-card .number { font-size: 28px; font-weight: 800; color: ${BB_BLUE}; }
+    .stat-card .label { font-size: 12px; color: #666; margin-top: 2px; }
+    .flag { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; margin: 4px 4px 4px 0; }
+    .flag-red { background: #fff5f5; color: #c0392b; border: 1px solid #f5c6cb; }
+    .flag-orange { background: #fff8f0; color: #e67e22; border: 1px solid #fde2c8; }
+    .cta-bar { background: linear-gradient(135deg, ${BB_BLUE} 0%, #2a5a8c 100%); color: white; padding: 20px 24px; border-radius: 12px; margin-top: 20px; display: flex; justify-content: space-between; align-items: center; }
+    .cta-btn { display: inline-block; background: ${BB_ORANGE}; color: white; padding: 10px 24px; border-radius: 6px; text-decoration: none; font-weight: 700; font-size: 14px; }
+    @media print { body { background: white; } .page { box-shadow: none; margin: 0; } }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div>
+        <h1>Video Quick Scan</h1>
+        <div style="color:#666;font-size:15px">${orgNameCap} — ${dateStr}</div>
+      </div>
+      <div class="bb-logo" style="font-size:22px">Blue Billywig</div>
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="number">${pagesScanned}</div>
+        <div class="label">Pagina's gescand</div>
+      </div>
+      <div class="stat-card">
+        <div class="number">${pagesWithVideo}</div>
+        <div class="label">Pagina's met video</div>
+      </div>
+      <div class="stat-card">
+        <div class="number">${players.length}</div>
+        <div class="label">Videospelers</div>
+      </div>
+      <div class="stat-card">
+        <div class="number">${totalVideos}</div>
+        <div class="label">Video-embeds</div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:32px;flex-wrap:wrap">
+      <div style="flex:1;min-width:240px">
+        <h2>Gevonden players</h2>
+        ${generatePieChartSVG(pieData, 180)}
+      </div>
+      <div style="flex:1;min-width:240px">
+        ${trackerPlayers.length > 0 ? `
+        <h2>Privacy</h2>
+        <div>
+          ${trackerPlayers.map((p) => `<span class="flag flag-red">⚠ ${p}</span>`).join("")}
+        </div>
+        <p style="font-size:13px;color:#666;margin-top:8px">
+          ${trackerPlayers.length} player${trackerPlayers.length > 1 ? "s" : ""} met third-party tracking / data buiten EU.
+        </p>
+        ` : ""}
+
+        ${auditMatches.length > 0 ? `
+        <h2>Toegankelijkheid</h2>
+        <div>
+          ${auditFail > 0
+            ? `<span class="flag flag-orange">⚠ ${auditFail} van ${auditMatches.length} players niet WCAG-conform</span>`
+            : `<span class="flag" style="background:#f0faf4;color:#27ae60;border:1px solid #c3e6cb">✓ Alle players WCAG-conform</span>`}
+        </div>
+        <p style="font-size:13px;color:#666;margin-top:8px">
+          Bron: ${AUDIT_DATA.source} audit (${AUDIT_DATA.date})
+        </p>
+        ` : ""}
+      </div>
+    </div>
+
+    <div class="cta-bar">
+      <div>
+        <div style="font-weight:700;font-size:16px">Benieuwd naar het volledige rapport?</div>
+        <div style="font-size:14px;opacity:0.85;margin-top:4px">Privacy-analyse, toegankelijkheidsdetails en aanbevelingen.</div>
+      </div>
+      <a class="cta-btn" href="https://www.bluebillywig.com/nl/demo/">Plan een afspraak</a>
+    </div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px;padding-top:8px;border-top:1px solid #eee;font-size:12px;color:#999">
+      <span>Video Quick Scan — ${domain}</span>
+      <span class="bb-logo" style="font-size:14px">Blue Billywig</span>
+    </div>
+  </div>
+</body>
+</html>`;
 }
 
 function generateReport(scanData, socialData) {
@@ -609,15 +806,17 @@ function generateReport(scanData, socialData) {
     <h1>Voor iedereen toegankelijk?</h1>
     <p>
       Wist je dat als je video's wilt embedden op je eigen website,
-      je videospeler aan de <strong>55 succescriteria</strong> van de WCAG 2.1 AA
+      je videospeler aan de <strong>55 succescriteria</strong> van de WCAG 2.2 AA
       moet voldoen om een A-status te behalen?
     </p>
+
+    ${generateAuditSection(playerSummary)}
 
     <h2>Wat is er nodig voor toegankelijkheid?</h2>
 
     <h3 style="font-style:italic">Techniek</h3>
     <div style="display:flex;flex-wrap:wrap;gap:8px;margin:12px 0">
-      ${["Tekstalternatief", "Transcriptie", "Gebarentolk", "WCAG 2.1 AA Video player", "Ondertiteling", "Toetsenbordbediening", "Audiodescriptie", "Schermlezerondersteuning", "Bestanden downloaden"]
+      ${["Tekstalternatief", "Transcriptie", "Gebarentolk", "WCAG 2.2 AA Video player", "Ondertiteling", "Toetsenbordbediening", "Audiodescriptie", "Schermlezerondersteuning", "Bestanden downloaden"]
         .map(
           (t) =>
             `<span style="display:inline-block;border:2px solid #ddd;border-radius:8px;padding:6px 14px;font-size:14px">${t}</span>`
@@ -722,20 +921,26 @@ function formatNumber(n) {
 // ── Main ──
 const args = process.argv.slice(2);
 if (args.length === 0) {
-  console.log("Gebruik: node report.mjs <scan-json-file> [--social <social-json>]");
+  console.log("Gebruik: node report.mjs <scan-json-file> [--social <social-json>] [--preview]");
   process.exit(0);
 }
 
 const scanFile = args[0];
 const scanData = JSON.parse(readFileSync(scanFile, "utf-8"));
 
-let socialData = null;
-const socialIdx = args.indexOf("--social");
-if (socialIdx !== -1 && args[socialIdx + 1]) {
-  socialData = JSON.parse(readFileSync(args[socialIdx + 1], "utf-8"));
+if (args.includes("--preview")) {
+  const html = generatePreviewReport(scanData);
+  const outFile = scanFile.replace(".json", "-preview.html");
+  writeFileSync(outFile, html);
+  console.log(`Preview rapport gegenereerd: ${outFile}`);
+} else {
+  let socialData = null;
+  const socialIdx = args.indexOf("--social");
+  if (socialIdx !== -1 && args[socialIdx + 1]) {
+    socialData = JSON.parse(readFileSync(args[socialIdx + 1], "utf-8"));
+  }
+  const html = generateReport(scanData, socialData);
+  const outFile = scanFile.replace(".json", ".html");
+  writeFileSync(outFile, html);
+  console.log(`Rapport gegenereerd: ${outFile}`);
 }
-
-const html = generateReport(scanData, socialData);
-const outFile = scanFile.replace(".json", ".html");
-writeFileSync(outFile, html);
-console.log(`Rapport gegenereerd: ${outFile}`);

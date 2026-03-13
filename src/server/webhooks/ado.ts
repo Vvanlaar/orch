@@ -39,7 +39,7 @@ function getBranchPrefix(workItemType: string): string {
   return 'maintenance';
 }
 
-adoRouter.post('/', (req: Request, res: Response) => {
+adoRouter.post('/', async (req: Request, res: Response) => {
   try {
     const body = req.body;
     const eventType = body.eventType as string;
@@ -68,7 +68,7 @@ adoRouter.post('/', (req: Request, res: Response) => {
       };
 
       const repoFullName = `${project}/${repo.name}`;
-      const task = createTask('pr-review', repoFullName, repoPath, context);
+      const task = await createTask('pr-review', repoFullName, repoPath, context);
       log.info(`Created PR review task #${task.id} for ${repoFullName}!${resource.pullRequestId}`);
       triggerUpdate();
 
@@ -118,7 +118,7 @@ adoRouter.post('/', (req: Request, res: Response) => {
         branch: `${branchPrefix}/${workItemId}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30)}`,
       };
 
-      const task = createTask(taskType, repoName, repoPath, context);
+      const task = await createTask(taskType, repoName, repoPath, context);
       log.info(`Created ${taskType} task #${task.id} for work item #${workItemId}`);
       triggerUpdate();
 
@@ -156,7 +156,7 @@ adoRouter.post('/', (req: Request, res: Response) => {
       };
 
       const repoFullName = `${project}/${repo?.name || 'unknown'}`;
-      const task = createTask('pipeline-fix', repoFullName, repoPath, context);
+      const task = await createTask('pipeline-fix', repoFullName, repoPath, context);
       log.info(`Created pipeline-fix task #${task.id} for build ${resource.buildNumber}`);
       triggerUpdate();
 

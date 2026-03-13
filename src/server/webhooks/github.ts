@@ -35,7 +35,7 @@ function resolveRepoPath(fullName: string): string | null {
   return path.resolve(config.repos.baseDir, repoName);
 }
 
-githubRouter.post('/', (req: Request, res: Response) => {
+githubRouter.post('/', async (req: Request, res: Response) => {
   try {
     const signature = req.headers['x-hub-signature-256'] as string | undefined;
     const event = req.headers['x-github-event'] as string;
@@ -73,7 +73,7 @@ githubRouter.post('/', (req: Request, res: Response) => {
           url: pr.html_url,
         };
 
-        const task = createTask('pr-review', repo, repoPath, context);
+        const task = await createTask('pr-review', repo, repoPath, context);
         log.info(`Created PR review task #${task.id} for ${repo}#${pr.number}`);
         triggerUpdate();
 
@@ -104,7 +104,7 @@ githubRouter.post('/', (req: Request, res: Response) => {
           url: issue.html_url,
         };
 
-        const task = createTask('issue-fix', repo, repoPath, context);
+        const task = await createTask('issue-fix', repo, repoPath, context);
         log.info(`Created issue-fix task #${task.id} for ${repo}#${issue.number}`);
         triggerUpdate();
 

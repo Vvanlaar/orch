@@ -5,6 +5,8 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { chromium } from 'playwright';
 import { claudeEmitter } from './claude-runner.js';
 import { createLogger } from './logger.js';
+import { isSupabaseConfigured } from './db/client.js';
+import { dbListScans } from './db/videoscans.js';
 
 const log = createLogger('videoscan-runner');
 
@@ -194,6 +196,30 @@ export async function generateReport(jsonFilename: string): Promise<{ htmlFile?:
   return { htmlFile, pdfFile };
 }
 
+export async function generatePreview(jsonFilename: string): Promise<{ htmlFile?: string; pdfFile?: string }> {
+  const jsonPath = join(VIDEOSCAN_DIR, jsonFilename);
+  if (!existsSync(jsonPath)) throw new Error(`JSON file not found: ${jsonFilename}`);
+
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn('node', [REPORT_SCRIPT, jsonFilename, '--preview'], { cwd: VIDEOSCAN_DIR, shell: true });
+    proc.on('close', (code) => code === 0 ? resolve() : reject(new Error(`report.mjs --preview exited with code ${code}`)));
+    proc.on('error', reject);
+  });
+
+  const htmlFile = jsonFilename.replace('.json', '-preview.html');
+  const htmlPath = join(VIDEOSCAN_DIR, htmlFile);
+  if (!existsSync(htmlPath)) return {};
+
+  let pdfFile: string | undefined;
+  try {
+    pdfFile = await generatePdf(htmlPath);
+  } catch (err) {
+    log.warn(`Preview PDF generation failed for ${jsonFilename}: ${err}`);
+  }
+
+  return { htmlFile, pdfFile };
+}
+
 async function generatePdf(htmlPath: string): Promise<string> {
   const pdfPath = htmlPath.replace('.html', '.pdf');
   const browser = await chromium.launch();
@@ -353,10 +379,11 @@ export interface ScanSummary {
   uniquePlayers: number;
   hasReport: boolean;
   hasPdf: boolean;
+  hasPreview: boolean;
   canResume: boolean;
 }
 
-export function listScans(): ScanSummary[] {
+function listScansFromDisk(): ScanSummary[] {
   try {
     const files = readdirSync(VIDEOSCAN_DIR)
       .filter(f => f.startsWith('videoscan-') && f.endsWith('.json'))
@@ -367,6 +394,7 @@ export function listScans(): ScanSummary[] {
         const data = JSON.parse(readFileSync(join(VIDEOSCAN_DIR, filename), 'utf-8'));
         const htmlFile = filename.replace('.json', '.html');
         const pdfFile = filename.replace('.json', '.pdf');
+        const previewFile = filename.replace('.json', '-preview.html');
         return {
           filename,
           domain: data.domain || 'unknown',
@@ -376,6 +404,7 @@ export function listScans(): ScanSummary[] {
           uniquePlayers: data.uniquePlayers || Object.keys(data.playerSummary || {}).length,
           hasReport: existsSync(join(VIDEOSCAN_DIR, htmlFile)),
           hasPdf: existsSync(join(VIDEOSCAN_DIR, pdfFile)),
+          hasPreview: existsSync(join(VIDEOSCAN_DIR, previewFile)),
           canResume: (data._state?.queue?.length || 0) > 0,
         };
       } catch {
@@ -388,6 +417,7 @@ export function listScans(): ScanSummary[] {
           uniquePlayers: 0,
           hasReport: false,
           hasPdf: false,
+          hasPreview: false,
           canResume: false,
         };
       }
@@ -395,4 +425,15 @@ export function listScans(): ScanSummary[] {
   } catch {
     return [];
   }
+}
+
+export async function listScans(): Promise<ScanSummary[]> {
+  if (isSupabaseConfigured()) {
+    try {
+      return await dbListScans();
+    } catch {
+      return listScansFromDisk();
+    }
+  }
+  return listScansFromDisk();
 }

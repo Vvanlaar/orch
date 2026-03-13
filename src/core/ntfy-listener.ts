@@ -51,13 +51,13 @@ async function handleMessage(text: string): Promise<void> {
   }
 
   if (cmd.action === 'approve-all') {
-    const suggestions = getPendingSuggestions();
+    const suggestions = await getPendingSuggestions();
     if (suggestions.length === 0) {
       await sendNtfyConfirmation('No pending suggestions');
       return;
     }
     for (const s of suggestions) {
-      approveSuggestion(s.id);
+      await approveSuggestion(s.id);
     }
     triggerUpdate();
     await sendNtfyConfirmation(`Approved ${suggestions.length} suggestion(s)`);
@@ -65,19 +65,19 @@ async function handleMessage(text: string): Promise<void> {
     return;
   }
 
-  const task = getTask(cmd.id!);
+  const task = await getTask(cmd.id!);
   if (!task || task.status !== 'suggestion') {
     await sendNtfyConfirmation(`Task #${cmd.id} not found or not a suggestion`);
     return;
   }
 
   if (cmd.action === 'dismiss') {
-    dismissSuggestion(cmd.id!);
+    await dismissSuggestion(cmd.id!);
     triggerUpdate();
     await sendNtfyConfirmation(`Task #${cmd.id} dismissed`);
     log.info(`Dismissed #${cmd.id}`);
   } else {
-    approveSuggestion(cmd.id!, cmd.extra);
+    await approveSuggestion(cmd.id!, cmd.extra);
     triggerUpdate();
     const note = cmd.extra ? ` with note: ${cmd.extra}` : '';
     await sendNtfyConfirmation(`Task #${cmd.id} approved${note}`);

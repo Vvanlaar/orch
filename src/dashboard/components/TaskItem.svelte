@@ -140,7 +140,7 @@
   }
 </script>
 
-<div class="task-wrapper">
+<div class="task-wrapper" class:running={isRunning}>
   <div class="task task-row" onclick={handleToggle} role="button" tabindex="0" onkeydown={(e) => e.key === 'Enter' && handleToggle()}>
     <div class="task-id">#{task.id}</div>
     <div class="task-status {task.status}">{task.status}</div>
@@ -205,8 +205,14 @@
 
 <style>
   .task-wrapper {
-    border-bottom: 1px solid #21262d;
+    border-bottom: 1px solid var(--border-subtle);
     overflow-x: hidden;
+    border-left: 2px solid transparent;
+    transition: border-left-color 0.2s;
+  }
+
+  .task-wrapper.running {
+    border-left-color: var(--success);
   }
 
   .task-wrapper:last-child {
@@ -225,12 +231,12 @@
   }
 
   .task:hover {
-    background: #1c2128;
+    background: var(--bg-raised);
   }
 
   .task-id {
     font-family: 'IBM Plex Mono', monospace;
-    color: #8b949e;
+    color: var(--text-muted);
     font-size: 12px;
   }
 
@@ -244,38 +250,38 @@
   }
 
   .task-status.pending {
-    background: #362210;
-    color: #f0883e;
+    background: var(--warning-bg);
+    color: var(--warning);
   }
 
   .task-status.running {
-    background: #122a4a;
-    color: #58a6ff;
+    background: var(--info-bg);
+    color: var(--info);
   }
 
   .task-status.completed {
-    background: #123620;
-    color: #3fb950;
+    background: var(--success-bg);
+    color: var(--success);
   }
 
   .task-status.failed {
-    background: #361414;
-    color: #f85149;
+    background: var(--danger-bg);
+    color: var(--danger);
   }
 
   .task-status.needs-repo {
-    background: #2a313b;
-    color: #8b949e;
+    background: var(--bg-raised);
+    color: var(--text-muted);
   }
 
   .task-status.suggestion {
-    background: #22163c;
+    background: #1a1030;
     color: #a371f7;
   }
 
   .task-status.dismissed {
-    background: #2a313b;
-    color: #8b949e;
+    background: var(--bg-raised);
+    color: var(--text-muted);
   }
 
   .task-info {
@@ -284,7 +290,7 @@
 
   .task-type {
     font-size: 10px;
-    color: #8b949e;
+    color: var(--text-muted);
     letter-spacing: 0.02em;
   }
 
@@ -294,12 +300,12 @@
     text-overflow: ellipsis;
     font-size: 12px;
     font-weight: 500;
-    color: #e6edf3;
+    color: var(--text-heading);
   }
 
   .task-time {
     font-size: 11px;
-    color: #8b949e;
+    color: var(--text-muted);
     font-family: 'IBM Plex Mono', monospace;
   }
 
@@ -310,23 +316,26 @@
   }
 
   .done-btn {
-    background: #3fb950 !important;
+    background: var(--success) !important;
+    color: #000 !important;
   }
 
   .stop-btn {
-    background: #f85149 !important;
+    background: var(--danger) !important;
   }
 
   .retry-btn {
-    background: #f0883e !important;
+    background: var(--warning) !important;
+    color: #000 !important;
   }
 
   .approve-btn {
-    background: #3fb950 !important;
+    background: var(--success) !important;
+    color: #000 !important;
   }
 
   .dismiss-btn {
-    background: #8b949e !important;
+    background: var(--text-muted) !important;
   }
 
   .retry-btn:hover {
@@ -336,15 +345,15 @@
   .task-output {
     font-family: 'IBM Plex Mono', 'Consolas', monospace;
     font-size: 11px;
-    background: #0d1117;
+    background: var(--bg-deep);
     padding: 12px 18px;
     max-height: 400px;
     overflow-y: auto;
     overflow-x: hidden;
     white-space: pre-wrap;
     word-break: break-word;
-    color: #8b949e;
-    border-top: 1px solid #21262d;
+    color: var(--text-muted);
+    border-top: 1px solid var(--border-subtle);
     display: none;
   }
 
@@ -353,19 +362,19 @@
   }
 
   .task-output .chunk {
-    color: #c9d1d9;
+    color: var(--text-primary);
   }
 
   .task-output .no-output {
-    color: #6e7681;
+    color: var(--text-dim);
   }
 
   .steer-input {
     display: none;
     padding: 8px 18px;
     gap: 8px;
-    border-top: 1px solid #21262d;
-    background: #161b22;
+    border-top: 1px solid var(--border-subtle);
+    background: var(--bg-surface);
   }
 
   .steer-input.visible {
@@ -374,9 +383,9 @@
 
   .steer-input input {
     flex: 1;
-    background: #0d1117;
-    border: 1px solid #2a313b;
-    color: #c9d1d9;
+    background: var(--bg-deep);
+    border: 1px solid var(--border-primary);
+    color: var(--text-primary);
     padding: 6px 10px;
     border-radius: 6px;
     font-family: 'IBM Plex Mono', 'Consolas', monospace;
@@ -386,7 +395,7 @@
 
   .steer-input input:focus {
     outline: none;
-    border-color: #1f4a85;
+    border-color: #10b981;
   }
 
   .repo-path-input {
@@ -394,21 +403,21 @@
     align-items: center;
     gap: 8px;
     padding: 8px 18px;
-    border-top: 1px solid #21262d;
-    background: #161b22;
+    border-top: 1px solid var(--border-subtle);
+    background: var(--bg-surface);
   }
 
   .repo-label {
     font-size: 11px;
-    color: #8b949e;
+    color: var(--text-muted);
     white-space: nowrap;
   }
 
   .repo-path-input input {
     flex: 1;
-    background: #0d1117;
-    border: 1px solid #2a313b;
-    color: #c9d1d9;
+    background: var(--bg-deep);
+    border: 1px solid var(--border-primary);
+    color: var(--text-primary);
     padding: 6px 10px;
     border-radius: 6px;
     font-family: 'IBM Plex Mono', 'Consolas', monospace;
@@ -418,6 +427,6 @@
 
   .repo-path-input input:focus {
     outline: none;
-    border-color: #1f4a85;
+    border-color: #10b981;
   }
 </style>

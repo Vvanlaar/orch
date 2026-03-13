@@ -101,6 +101,11 @@ export interface Config {
     enabled: boolean;
     intervalMs: number;
   };
+  supabase: {
+    url: string;
+    serviceRoleKey: string;
+    machineId: string;
+  };
 }
 
 // --- Orchestrator types ---

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getScans, fetchScans, startScan, resumeScan, mergeDomainScans, regenerateReport, isLoading, type ScanSummary } from '../stores/videoscan.svelte';
+  import { getScans, fetchScans, startScan, resumeScan, mergeDomainScans, regenerateReport, regeneratePreview, isLoading, importDigiToegankelijk, type ScanSummary, type DigiImportResult } from '../stores/videoscan.svelte';
   import { getTasks, getTaskOutput, isExpanded, toggleExpanded } from '../stores/tasks.svelte';
 
   let url = $state('');
@@ -44,8 +44,27 @@
 
   onMount(() => { fetchScans(); });
 
+  async function handleDigiImport(orgId: number) {
+    importing = true;
+    error = '';
+    try {
+      const result = await importDigiToegankelijk(orgId);
+      importPreview = result;
+      selectedUrls = new Set(result.groups.flatMap(g => g.sites.map(s => s.url)));
+    } catch (err: any) {
+      error = err.message;
+    } finally {
+      importing = false;
+    }
+  }
+
   async function handleStart() {
-    if (!url) return;
+    if (!url || importPreview) return;
+    const digiMatch = url.match(digiPattern);
+    if (digiMatch) {
+      await handleDigiImport(Number(digiMatch[1]));
+      return;
+    }
     starting = true;
     error = '';
     try {
@@ -59,6 +78,54 @@
     }
   }
 
+  function toggleSiteUrl(siteUrl: string) {
+    toggleDomainGroup([siteUrl]);
+  }
+
+  function toggleDomainGroup(urls: string[]) {
+    const allSelected = urls.every(u => selectedUrls.has(u));
+    const next = new Set(selectedUrls);
+    for (const u of urls) {
+      if (allSelected) next.delete(u);
+      else next.add(u);
+    }
+    selectedUrls = next;
+  }
+
+  function dismissImport() {
+    importPreview = null;
+    selectedUrls = new Set();
+    bulkProgress = 0;
+  }
+
+  async function handleBulkStart() {
+    if (!importPreview || bulkStarting) return;
+    const urls = [...selectedUrls];
+    bulkStarting = true;
+    bulkProgress = 0;
+    error = '';
+    const errors: string[] = [];
+    const BATCH_SIZE = 5;
+    for (let i = 0; i < urls.length; i += BATCH_SIZE) {
+      const batch = urls.slice(i, i + BATCH_SIZE);
+      await Promise.all(batch.map(async (scanUrl) => {
+        try {
+          await startScan(scanUrl, maxPages, concurrency, delay);
+        } catch (err: any) {
+          errors.push(err.message);
+        }
+        bulkProgress = bulkProgress + 1;
+      }));
+    }
+    if (errors.length > 0) {
+      error = `${errors.length} scan(s) failed to start`;
+    }
+    dismissImport();
+    url = '';
+    setTimeout(() => fetchScans(), 2000);
+    bulkStarting = false;
+  }
+
   async function handleResume(scan: ScanSummary) {
     try {
       await resumeScan(scan.filename, maxPages, concurrency, delay);
@@ -69,7 +136,17 @@
   }
 
   let generating = $state<string | null>(null);
+  let generatingPreview = $state<string | null>(null);
   let merging = $state(false);
+
+  // DigiToegankelijk import state
+  let importPreview = $state<DigiImportResult | null>(null);
+  let selectedUrls = $state(new Set<string>());
+  let importing = $state(false);
+  let bulkStarting = $state(false);
+  let bulkProgress = $state(0);
+
+  const digiPattern = /^https?:\/\/dashboard\.digitoegankelijk\.nl\/organisaties\/(\d+)/;
 
   async function handleMerge(domainScans: ScanSummary[]) {
     if (merging) return;
@@ -92,6 +169,18 @@
       error = err.message;
     } finally {
       generating = null;
+    }
+  }
+
+  async function handleGeneratePreview(scan: ScanSummary) {
+    if (generatingPreview) return;
+    generatingPreview = scan.filename;
+    try {
+      await regeneratePreview(scan.filename);
+    } catch (err: any) {
+      error = err.message;
+    } finally {
+      generatingPreview = null;
     }
   }
 
@@ -118,14 +207,16 @@
           <input
             type="url"
             class="cmd-input"
-            placeholder="https://example.com — scan for video players"
+            placeholder="https://example.com or DigiToegankelijk organisation URL"
             bind:value={url}
             onkeydown={(e) => e.key === 'Enter' && handleStart()}
           />
         </div>
-        <button class="cmd-go" onclick={handleStart} disabled={starting || !url}>
+        <button class="cmd-go" onclick={handleStart} disabled={starting || importing || !url}>
           {#if starting}
             <span class="spinner"></span> Scanning
+          {:else if importing}
+            <span class="spinner"></span> Importing
           {:else}
             <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
             Launch
@@ -153,6 +244,67 @@
     </div>
     <div class="scan-line"></div>
   </div>
+
+  <!-- DigiToegankelijk Import Preview -->
+  {#if importPreview}
+    {@const selectedCount = selectedUrls.size}
+    <div class="digi-preview">
+      <div class="digi-header">
+        <div class="digi-title">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 0 1-9 9m9-9a9 9 0 0 0-9-9m9 9H3m9 9a9 9 0 0 1-9-9m9 9c1.66 0 3-4.03 3-9s-1.34-9-3-9m0 18c-1.66 0-3-4.03-3-9s1.34-9 3-9m-9 9a9 9 0 0 1 9-9"/></svg>
+          <span>{importPreview.orgName}</span>
+        </div>
+        <button class="digi-dismiss" onclick={dismissImport} aria-label="Dismiss import">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="digi-summary">
+        <span class="digi-chip">{importPreview.totalSites} sites</span>
+        {#if importPreview.skippedApps > 0}
+          <span class="digi-chip muted">{importPreview.skippedApps} apps skipped</span>
+        {/if}
+        <span class="digi-chip accent">{selectedCount} selected</span>
+      </div>
+      <div class="digi-groups">
+        {#each importPreview.groups as group (group.rootDomain)}
+          {@const groupUrls = group.sites.map(s => s.url)}
+          {@const allChecked = groupUrls.every(u => selectedUrls.has(u))}
+          <div class="digi-group">
+            <button class="digi-group-head" onclick={() => toggleDomainGroup(groupUrls)}>
+              <span class="digi-check" class:checked={allChecked}>{allChecked ? '✓' : ''}</span>
+              <span class="digi-domain">{group.rootDomain}</span>
+              <span class="digi-count">{group.sites.length}</span>
+            </button>
+            <div class="digi-sites">
+              {#each group.sites as site (site.url)}
+                <label class="digi-site">
+                  <input type="checkbox" checked={selectedUrls.has(site.url)} onchange={() => toggleSiteUrl(site.url)} />
+                  <span class="digi-site-name">{site.name || site.url}</span>
+                  {#if site.status}
+                    <span class="digi-status">{site.status}</span>
+                  {/if}
+                </label>
+              {/each}
+            </div>
+          </div>
+        {/each}
+      </div>
+      <div class="digi-actions">
+        {#if bulkStarting}
+          <div class="digi-progress">
+            <div class="digi-progress-bar" style="width:{selectedCount > 0 ? Math.round((bulkProgress / selectedCount) * 100) : 0}%"></div>
+          </div>
+          <span class="digi-progress-text">{bulkProgress} / {selectedCount}</span>
+        {:else}
+          <button class="cmd-go" onclick={handleBulkStart} disabled={selectedCount === 0}>
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+            Start {selectedCount} scans
+          </button>
+          <button class="digi-cancel" onclick={dismissImport}>Cancel</button>
+        {/if}
+      </div>
+    </div>
+  {/if}
 
   <!-- Stats Strip -->
   {#if scans.length > 0}
@@ -247,10 +399,18 @@
                         {#if scan.hasReport}
                           <a class="sb rpt" href="/api/videoscans/files/{scan.filename.replace('.json', '.html')}" target="_blank">Report</a>
                         {/if}
+                        {#if scan.hasPreview}
+                          <a class="sb prv" href="/api/videoscans/files/{scan.filename.replace('.json', '-preview.html')}" target="_blank">Preview</a>
+                        {/if}
                         <a class="sb" href="/api/videoscans/files/{scan.filename}" target="_blank" download>JSON</a>
                         {#if !scan.hasReport}
                           <button class="sb" onclick={() => handleGenerateReport(scan)} disabled={generating === scan.filename}>
                             {generating === scan.filename ? '...' : 'Gen'}
+                          </button>
+                        {/if}
+                        {#if scan.hasReport && !scan.hasPreview}
+                          <button class="sb prv" onclick={() => handleGeneratePreview(scan)} disabled={generatingPreview === scan.filename}>
+                            {generatingPreview === scan.filename ? '...' : 'Teaser'}
                           </button>
                         {/if}
                         {#if scan.canResume}
@@ -875,6 +1035,16 @@
     border-color: var(--accent);
   }
 
+  .sb.prv {
+    border-color: rgba(168, 85, 247, 0.3);
+    color: #c084fc;
+  }
+
+  .sb.prv:hover {
+    background: rgba(168, 85, 247, 0.1);
+    border-color: #a855f7;
+  }
+
   .sb.res {
     border-color: rgba(245, 158, 11, 0.3);
     color: var(--warning);
@@ -1086,6 +1256,250 @@
   .side-out::-webkit-scrollbar-thumb {
     background: var(--border);
     border-radius: 2px;
+  }
+
+  /* === DigiToegankelijk Import Preview === */
+  .digi-preview {
+    background: linear-gradient(145deg, var(--surface), var(--surface-deep));
+    border: 1px solid var(--accent-dim);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .digi-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .digi-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--accent-bright);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .digi-title svg {
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+
+  .digi-dismiss {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    transition: color 0.15s, background 0.15s;
+  }
+
+  .digi-dismiss:hover {
+    color: var(--text);
+    background: var(--surface-raised);
+  }
+
+  .digi-summary {
+    display: flex;
+    gap: 8px;
+    padding: 10px 18px;
+    border-bottom: 1px solid var(--border-subtle);
+    flex-wrap: wrap;
+  }
+
+  .digi-chip {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 6px;
+    background: var(--surface-raised);
+    color: var(--text);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .digi-chip.muted {
+    color: var(--text-muted);
+  }
+
+  .digi-chip.accent {
+    background: var(--accent-dim);
+    color: var(--accent-bright);
+  }
+
+  .digi-groups {
+    max-height: 400px;
+    overflow-y: auto;
+  }
+
+  .digi-groups::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  .digi-groups::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .digi-groups::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 2px;
+  }
+
+  .digi-group {
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .digi-group:last-child {
+    border-bottom: none;
+  }
+
+  .digi-group-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 18px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--text);
+    text-align: left;
+    transition: background 0.1s;
+  }
+
+  .digi-group-head:hover {
+    background: var(--surface-raised);
+  }
+
+  .digi-check {
+    width: 16px;
+    height: 16px;
+    border: 1.5px solid var(--border);
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    color: var(--accent-bright);
+    flex-shrink: 0;
+    transition: border-color 0.15s, background 0.15s;
+  }
+
+  .digi-check.checked {
+    border-color: var(--accent);
+    background: var(--accent-dim);
+  }
+
+  .digi-domain {
+    font-weight: 600;
+    color: var(--accent-bright);
+  }
+
+  .digi-count {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--text-muted);
+    background: var(--surface-deep);
+    padding: 1px 7px;
+    border-radius: 8px;
+  }
+
+  .digi-sites {
+    padding: 0 18px 6px 42px;
+  }
+
+  .digi-site {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 0;
+    font-size: 11px;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+
+  .digi-site:hover {
+    color: var(--text);
+  }
+
+  .digi-site input[type="checkbox"] {
+    accent-color: var(--accent);
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+  }
+
+  .digi-site-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .digi-status {
+    margin-left: auto;
+    font-size: 9px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+    padding: 1px 6px;
+    background: var(--surface-deep);
+    border-radius: 4px;
+  }
+
+  .digi-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 18px;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .digi-cancel {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    transition: border-color 0.15s, color 0.15s;
+  }
+
+  .digi-cancel:hover {
+    border-color: var(--text-muted);
+    color: var(--text);
+  }
+
+  .digi-progress {
+    flex: 1;
+    height: 6px;
+    background: var(--surface-deep);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .digi-progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--accent-bright));
+    border-radius: 3px;
+    transition: width 0.3s;
+  }
+
+  .digi-progress-text {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent-bright);
+    font-family: 'IBM Plex Mono', monospace;
+    white-space: nowrap;
   }
 
   /* === Responsive === */

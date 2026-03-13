@@ -69,6 +69,7 @@
     border-radius: 8px;
     border: 1px solid;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(8px);
     animation: slide-in 0.2s ease-out;
   }
 
@@ -87,7 +88,7 @@
   .toast-close {
     background: none;
     border: none;
-    color: #8b949e;
+    color: var(--text-muted);
     font-size: 16px;
     cursor: pointer;
     padding: 0 2px;
@@ -96,7 +97,7 @@
   }
 
   .toast-close:hover {
-    color: #c9d1d9;
+    color: var(--text-primary);
   }
 
   .confirm-overlay {
@@ -116,18 +117,18 @@
   }
 
   .confirm-panel {
-    background: #161b22;
-    border: 1px solid #2a313b;
+    background: var(--bg-overlay);
+    border: 1px solid var(--border-primary);
     border-radius: 10px;
     padding: 20px 24px;
     max-width: 400px;
     width: 90%;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow-elevated);
   }
 
   .confirm-msg {
     font-size: 13px;
-    color: #e6edf3;
+    color: var(--text-heading);
     line-height: 1.5;
     margin-bottom: 16px;
   }
@@ -150,21 +151,21 @@
   }
 
   .confirm-btn.cancel {
-    background: #2a313b;
-    color: #8b949e;
+    background: var(--bg-raised);
+    color: var(--text-muted);
   }
 
   .confirm-btn.cancel:hover {
-    background: #353d47;
-    color: #c9d1d9;
+    background: var(--bg-overlay);
+    color: var(--text-primary);
   }
 
   .confirm-btn.ok {
-    background: #238636;
-    color: #fff;
+    background: var(--success);
+    color: #000;
   }
 
   .confirm-btn.ok:hover {
-    background: #2ea043;
+    background: #22c55e;
   }
 </style>
