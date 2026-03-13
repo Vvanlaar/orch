@@ -475,9 +475,9 @@ function generateReport(scanData, socialData) {
           <tr>
             <td><strong>${name}</strong></td>
             <td>${data.count}</td>
-            <td style="font-size:13px;color:#666">${data.pages
+            <td style="font-size:13px">${data.pages
               .slice(0, 2)
-              .map((u) => truncateUrl(u, 50))
+              .map((u) => `<a href="${u}" target="_blank" style="color:${BB_LIGHT_BLUE};text-decoration:none">${truncateUrl(u, 50)}</a>`)
               .join("<br>")}</td>
           </tr>`
           )

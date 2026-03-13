@@ -1,7 +1,8 @@
 import { spawn, ChildProcess } from 'child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
+import { chromium } from 'playwright';
 import { claudeEmitter } from './claude-runner.js';
 import { createLogger } from './logger.js';
 
@@ -24,6 +25,7 @@ export interface VideoscanResult {
   success: boolean;
   jsonFile?: string;
   htmlFile?: string;
+  pdfFile?: string;
   error?: string;
 }
 
@@ -123,14 +125,29 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
           claudeEmitter.emit('output', taskId, `[stderr] ${d.toString()}`);
         });
 
-        reportProc.on('close', (reportCode) => {
-          resolved = true;
+        reportProc.on('close', async (reportCode) => {
           const htmlFile = jsonFile.replace('.json', '.html');
-          const htmlExists = existsSync(join(VIDEOSCAN_DIR, htmlFile));
+          const htmlPath = join(VIDEOSCAN_DIR, htmlFile);
+          const htmlExists = existsSync(htmlPath);
+
+          // Generate PDF from HTML report
+          let pdfFile: string | undefined;
+          if (htmlExists) {
+            claudeEmitter.emit('output', taskId, 'Generating PDF report...\n');
+            try {
+              pdfFile = await generatePdf(htmlPath);
+              claudeEmitter.emit('output', taskId, `PDF generated: ${pdfFile}\n`);
+            } catch (err) {
+              claudeEmitter.emit('output', taskId, `[warn] PDF generation failed: ${err}\n`);
+            }
+          }
+
+          resolved = true;
           resolve({
             success: true,
             jsonFile,
             htmlFile: htmlExists ? htmlFile : undefined,
+            pdfFile,
           });
         });
 
@@ -146,6 +163,26 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
 
     proc.on('error', (err) => fail(err.message));
   });
+}
+
+async function generatePdf(htmlPath: string): Promise<string> {
+  const pdfPath = htmlPath.replace('.html', '.pdf');
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.goto(pathToFileURL(htmlPath).href, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(1000); // let CSS/fonts settle
+    await page.pdf({
+      path: pdfPath,
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '0', bottom: '0', left: '0', right: '0' },
+    });
+  } finally {
+    await browser.close();
+  }
+  const filename = pdfPath.split(/[/\\]/).pop()!;
+  return filename;
 }
 
 function findLatestScanFile(): string | undefined {
@@ -168,6 +205,113 @@ export function killVideoscan(taskId: number): boolean {
   return true;
 }
 
+export interface MergeResult {
+  filename: string;
+  archivedFiles: string[];
+}
+
+interface ScanDetail {
+  url: string;
+  players: { name: string; evidence: string[] }[];
+}
+
+interface ScanData {
+  domain: string;
+  scanDate: string;
+  pagesScanned: number;
+  pagesWithVideo: number;
+  uniquePlayers: number;
+  playerSummary: Record<string, number>;
+  details: ScanDetail[];
+  _state: { visited: string[]; queue: string[] };
+}
+
+export function mergeScans(filenames: string[]): MergeResult {
+  if (filenames.length < 2) throw new Error('Need at least 2 scans to merge');
+
+  const scansData = filenames.map(f => {
+    const path = join(VIDEOSCAN_DIR, f);
+    if (!existsSync(path)) throw new Error(`File not found: ${f}`);
+    return JSON.parse(readFileSync(path, 'utf-8')) as ScanData;
+  });
+
+  // Verify same domain
+  const domains = new Set(scansData.map(d => d.domain));
+  if (domains.size > 1) throw new Error(`Cannot merge scans from different domains: ${[...domains].join(', ')}`);
+
+  // Merge details — dedupe by URL, keep entry with more players
+  const detailMap = new Map<string, ScanDetail>();
+  for (const scan of scansData) {
+    for (const detail of scan.details) {
+      const existing = detailMap.get(detail.url);
+      if (!existing || detail.players.length > existing.players.length) {
+        detailMap.set(detail.url, detail);
+      }
+    }
+  }
+  const mergedDetails = [...detailMap.values()];
+
+  // Merge visited URLs (union)
+  const visitedSet = new Set<string>();
+  for (const scan of scansData) {
+    for (const url of (scan._state?.visited || [])) visitedSet.add(url);
+  }
+
+  // Merge queue (union minus visited)
+  const queueSet = new Set<string>();
+  for (const scan of scansData) {
+    for (const url of (scan._state?.queue || [])) {
+      if (!visitedSet.has(url)) queueSet.add(url);
+    }
+  }
+
+  // Recalculate player summary
+  const playerCounts = new Map<string, number>();
+  for (const detail of mergedDetails) {
+    for (const p of detail.players) {
+      playerCounts.set(p.name, (playerCounts.get(p.name) || 0) + 1);
+    }
+  }
+
+  // Use latest scan date
+  const latestDate = scansData.reduce((latest, s) =>
+    s.scanDate > latest ? s.scanDate : latest, scansData[0].scanDate);
+
+  const merged: ScanData = {
+    domain: scansData[0].domain,
+    scanDate: latestDate,
+    pagesScanned: visitedSet.size,
+    pagesWithVideo: mergedDetails.length,
+    uniquePlayers: playerCounts.size,
+    playerSummary: Object.fromEntries(playerCounts),
+    details: mergedDetails,
+    _state: { visited: [...visitedSet], queue: [...queueSet] },
+  };
+
+  // Write merged file
+  const ts = latestDate.replace(/[:.]/g, '-').replace('Z', '');
+  const mergedFilename = `videoscan-${merged.domain}-${ts}-merged.json`;
+  writeFileSync(join(VIDEOSCAN_DIR, mergedFilename), JSON.stringify(merged, null, 2));
+
+  // Archive source files (move to archived/ subdir)
+  const archiveDir = join(VIDEOSCAN_DIR, 'archived');
+  mkdirSync(archiveDir, { recursive: true });
+  const archived: string[] = [];
+  for (const f of filenames) {
+    // Move JSON + associated HTML/PDF
+    for (const ext of ['.json', '.html', '.pdf']) {
+      const src = join(VIDEOSCAN_DIR, f.replace('.json', ext));
+      if (existsSync(src)) {
+        renameSync(src, join(archiveDir, f.replace('.json', ext)));
+        archived.push(f.replace('.json', ext));
+      }
+    }
+  }
+
+  log.info(`Merged ${filenames.length} scans into ${mergedFilename} (${merged.pagesScanned} pages, ${merged.pagesWithVideo} with video)`);
+  return { filename: mergedFilename, archivedFiles: archived };
+}
+
 export interface ScanSummary {
   filename: string;
   domain: string;
@@ -176,6 +320,7 @@ export interface ScanSummary {
   pagesWithVideo: number;
   uniquePlayers: number;
   hasReport: boolean;
+  hasPdf: boolean;
   canResume: boolean;
 }
 
@@ -189,6 +334,7 @@ export function listScans(): ScanSummary[] {
       try {
         const data = JSON.parse(readFileSync(join(VIDEOSCAN_DIR, filename), 'utf-8'));
         const htmlFile = filename.replace('.json', '.html');
+        const pdfFile = filename.replace('.json', '.pdf');
         return {
           filename,
           domain: data.domain || 'unknown',
@@ -197,6 +343,7 @@ export function listScans(): ScanSummary[] {
           pagesWithVideo: data.pagesWithVideo || data.details?.length || 0,
           uniquePlayers: data.uniquePlayers || Object.keys(data.playerSummary || {}).length,
           hasReport: existsSync(join(VIDEOSCAN_DIR, htmlFile)),
+          hasPdf: existsSync(join(VIDEOSCAN_DIR, pdfFile)),
           canResume: (data._state?.queue?.length || 0) > 0,
         };
       } catch {
@@ -208,6 +355,7 @@ export function listScans(): ScanSummary[] {
           pagesWithVideo: 0,
           uniquePlayers: 0,
           hasReport: false,
+          hasPdf: false,
           canResume: false,
         };
       }
