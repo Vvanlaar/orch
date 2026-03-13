@@ -647,6 +647,20 @@ const DEFAULT_CONCURRENCY = 6;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+function createThrottleState(delay, concurrency) {
+  return {
+    delay,
+    concurrency,
+    baseDelay: delay,
+    baseConcurrency: concurrency,
+    rateLimitHits: 0,
+    cooldownUntil: 0,
+    events: [],
+    peakDelay: delay,
+    minConcurrency: concurrency,
+  };
+}
+
 function buildRateLimits(throttle) {
   if (throttle.events.length === 0) return undefined;
   return {
@@ -707,18 +721,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   let queue = [normalizeUrl(startUrl, startUrl)];
   let results = [];
 
-  // Throttle state
-  const throttle = {
-    delay,
-    concurrency,
-    baseDelay: delay,
-    baseConcurrency: concurrency,
-    rateLimitHits: 0,
-    cooldownUntil: 0,
-    events: [],
-    peakDelay: delay,
-    minConcurrency: concurrency,
-  };
+  const throttle = createThrottleState(delay, concurrency);
   const retryCount = new Map();
   const MAX_RETRIES = 2;
 
@@ -936,6 +939,113 @@ function detectPlayers(html, networkRequests) {
   return filterToHighestTier(found);
 }
 
+// ── Explicit URL scanning (no crawl) ────────────────────────────────
+
+async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_CONCURRENCY, delay = 200 } = {}) {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    viewport: { width: 1920, height: 1080 },
+  });
+
+  const baseUrl = new URL(urls[0]);
+  const domain = baseUrl.hostname.replace(/^www\./, "");
+  const results = [];
+
+  const throttle = createThrottleState(delay, concurrency);
+  const retryCount = new Map();
+  const MAX_RETRIES = 2;
+
+  console.log(chalk.blue(`\nScanning ${urls.length} explicit URLs (domain: ${domain})`));
+  console.log(chalk.gray(`Timeout per page: ${timeout}ms, Concurrency: ${concurrency}, Delay: ${delay}ms\n`));
+
+  setupInterruptHandler();
+
+  // First URL: accept cookies
+  const firstUrl = urls[0];
+  process.stdout.write(chalk.gray(`[1/${urls.length}] `) + chalk.white(truncate(firstUrl, 80)) + " ");
+  try {
+    const { detected } = await scanFirstPage(context, firstUrl, timeout);
+    if (detected.length > 0) {
+      console.log(chalk.green(`  [${detected.map((d) => d.player).join(", ")}]`));
+    } else {
+      console.log(chalk.gray("  -"));
+    }
+    results.push({ url: firstUrl, players: detected });
+  } catch (err) {
+    if (err._rateLimit) {
+      onRateLimit(throttle, firstUrl, err._rateLimit);
+      console.log(chalk.yellow(`  ⚠ Rate-limited`));
+      results.push({ url: firstUrl, players: [], error: `Rate limited: ${err._rateLimit}` });
+    } else {
+      console.log(chalk.red(`  ERROR: ${err.message.slice(0, 60)}`));
+      results.push({ url: firstUrl, players: [], error: err.message });
+    }
+  }
+
+  // Remaining URLs in batches
+  const remaining = urls.slice(1);
+  let batchNum = 0;
+
+  while (remaining.length > 0 && !interrupted) {
+    if (batchNum > 0 && throttle.delay > 0) await sleep(throttle.delay);
+    batchNum++;
+
+    const batch = remaining.splice(0, throttle.concurrency);
+
+    for (let i = 0; i < batch.length; i++) {
+      const idx = results.length + i + 1;
+      console.log(chalk.gray(`[${idx}/${urls.length}] `) + chalk.white(truncate(batch[i], 80)) + chalk.gray(" ..."));
+    }
+
+    const batchResults = await Promise.allSettled(
+      batch.map((url) => scanOnePage(context, url, timeout))
+    );
+
+    for (let i = 0; i < batch.length; i++) {
+      const url = batch[i];
+      const result = batchResults[i];
+
+      if (result.status === "fulfilled") {
+        const { detected } = result.value;
+        if (detected.length > 0) {
+          console.log(chalk.green(`  ✓ ${truncate(url, 65)}  [${detected.map((d) => d.player).join(", ")}]`));
+        }
+        results.push({ url, players: detected });
+      } else {
+        const err = result.reason;
+        if (err?._rateLimit) {
+          onRateLimit(throttle, url, err._rateLimit);
+          const retries = retryCount.get(url) || 0;
+          if (retries < MAX_RETRIES) {
+            retryCount.set(url, retries + 1);
+            remaining.unshift(url);
+          } else {
+            results.push({ url, players: [], error: `Rate limited: ${err._rateLimit} (max retries)` });
+          }
+        } else {
+          console.log(chalk.red(`  ✗ ${truncate(url, 65)}  ${(err?.message || "Unknown").slice(0, 50)}`));
+          results.push({ url, players: [], error: err?.message || "Unknown error" });
+        }
+      }
+    }
+
+    if (throttle.rateLimitHits > 0) tryRecover(throttle);
+  }
+
+  await browser.close();
+
+  const visited = results.map(r => r.url);
+  return {
+    domain,
+    results,
+    pagesScanned: results.length,
+    _state: { visited, queue: [] },
+    rateLimits: buildRateLimits(throttle),
+  };
+}
+
 // ── Report ──────────────────────────────────────────────────────────
 
 function generateReport({ domain, results, pagesScanned, _state, rateLimits }) {
@@ -1048,6 +1158,7 @@ ${chalk.bold("BB Videoscan")} - Scan websites voor videoplayer gebruik
 
 ${chalk.bold("Gebruik:")}
   node scan.mjs <url> [opties]
+  node scan.mjs --urls <url1,url2,...|file.json> [opties]
 
 ${chalk.bold("Opties:")}
   --max-pages <n>       Max pagina's te scannen (standaard: 50)
@@ -1055,11 +1166,14 @@ ${chalk.bold("Opties:")}
   --concurrency <n>     Pagina's tegelijk scannen (standaard: 6)
   --delay <ms>          Vertraging tussen batches in ms (standaard: 200)
   --resume <json-file>  Hervat scan vanuit eerder resultaat
+  --urls <urls|file>    Scan explicit URLs (comma-separated or JSON file path)
 
 ${chalk.bold("Voorbeelden:")}
   node scan.mjs https://www.menzis.nl
   node scan.mjs https://www.menzis.nl --max-pages 100 --concurrency 10
   node scan.mjs https://www.menzis.nl --resume videoscan-menzis.nl-2026-03-06.json --max-pages 400
+  node scan.mjs --urls https://example.com/page1,https://example.com/page2
+  node scan.mjs --urls urls.json
 `);
 }
 
@@ -1069,6 +1183,34 @@ async function main() {
   if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
     printUsage();
     process.exit(0);
+  }
+
+  const timeout = parseInt(args[args.indexOf("--timeout") + 1]) || 15000;
+  const concurrency = parseInt(args[args.indexOf("--concurrency") + 1]) || DEFAULT_CONCURRENCY;
+  const delay = parseInt(args[args.indexOf("--delay") + 1]) || 200;
+
+  // --urls mode: scan explicit URLs without crawling
+  const urlsIdx = args.indexOf("--urls");
+  if (urlsIdx !== -1 && args[urlsIdx + 1]) {
+    const urlsArg = args[urlsIdx + 1];
+    let urls;
+    if (urlsArg.endsWith('.json') && existsSync(urlsArg)) {
+      urls = JSON.parse(readFileSync(urlsArg, 'utf-8'));
+    } else {
+      urls = urlsArg.split(',').map(u => u.trim()).filter(Boolean);
+    }
+    if (!Array.isArray(urls) || urls.length === 0) {
+      console.error(chalk.red('No valid URLs provided'));
+      process.exit(1);
+    }
+    try {
+      const scanResult = await scanExplicitUrls(urls, { timeout, concurrency, delay });
+      generateReport(scanResult);
+    } catch (err) {
+      console.error(chalk.red(`Scan mislukt: ${err.message}`));
+      process.exit(1);
+    }
+    return;
   }
 
   const resumeIdx = args.indexOf("--resume");
@@ -1093,9 +1235,6 @@ async function main() {
   }
 
   const maxPages = parseInt(args[args.indexOf("--max-pages") + 1]) || 50;
-  const timeout = parseInt(args[args.indexOf("--timeout") + 1]) || 15000;
-  const concurrency = parseInt(args[args.indexOf("--concurrency") + 1]) || DEFAULT_CONCURRENCY;
-  const delay = parseInt(args[args.indexOf("--delay") + 1]) || 200;
 
   try {
     const scanResult = await crawlSite(url, { maxPages, timeout, resumeFile, concurrency, delay });

@@ -1461,6 +1461,59 @@ app.post('/api/actions/resume-videoscan', asyncHandler(async (req, res) => {
   res.json({ taskId: task.id, message: `Resume task #${task.id} created` });
 }));
 
+app.post('/api/actions/add-urls-to-scan', asyncHandler(async (req, res) => {
+  const { filename, urls, concurrency, delay } = req.body;
+  if (!filename || typeof filename !== 'string') {
+    res.status(400).json({ error: 'filename required' });
+    return;
+  }
+  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+    res.status(400).json({ error: 'Invalid filename' });
+    return;
+  }
+  if (!Array.isArray(urls) || urls.length === 0 || urls.length > 100) {
+    res.status(400).json({ error: 'urls must be an array of 1-100 URLs' });
+    return;
+  }
+  const invalidUrl = urls.find((u: string) => { try { new URL(u); return false; } catch { return true; } });
+  if (invalidUrl) {
+    res.status(400).json({ error: `Invalid URL: ${invalidUrl}` });
+    return;
+  }
+
+  // Ensure scan JSON exists locally
+  const scanPath = join(getVideoscanDir(), filename);
+  if (!existsSync(scanPath)) {
+    const downloaded = await downloadFile(filename, getVideoscanDir());
+    if (!downloaded) {
+      res.status(404).json({ error: 'Scan file not found' });
+      return;
+    }
+  }
+  let scanData: { domain?: string };
+  try {
+    scanData = JSON.parse(readFileSync(scanPath, 'utf-8'));
+  } catch {
+    res.status(400).json({ error: 'Invalid JSON file' });
+    return;
+  }
+  const domain = scanData.domain || 'unknown';
+
+  const task = await createTask('videoscan', domain, getVideoscanDir(), {
+    source: 'github',
+    event: 'videoscan-add-urls',
+    title: `Add ${urls.length} URLs to ${domain}`,
+    scanUrl: urls[0],
+    urls,
+    targetFilename: filename,
+    concurrency: concurrency || 6,
+    delay: delay ?? 200,
+  });
+  triggerUpdate();
+  await broadcastTasks();
+  res.json({ taskId: task.id, message: `Add-URLs task #${task.id} created` });
+}));
+
 app.get('/api/videoscans', asyncHandler(async (_req, res) => {
   res.json(await listScans());
 }));

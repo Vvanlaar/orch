@@ -48,6 +48,10 @@ export function resumeScan(filename: string, maxPages: number, concurrency: numb
   return postJson('/api/actions/resume-videoscan', { filename, maxPages, concurrency, delay });
 }
 
+export function addUrlsToScan(filename: string, urls: string[], concurrency: number, delay: number) {
+  return postJson('/api/actions/add-urls-to-scan', { filename, urls, concurrency, delay });
+}
+
 export async function regenerateReport(filename: string) {
   const result = await postJson('/api/videoscans/generate-report', { filename });
   await fetchScans();

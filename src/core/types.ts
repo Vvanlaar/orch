@@ -66,6 +66,8 @@ export interface TaskContext {
   concurrency?: number;
   resumeFile?: string; // path to previous scan JSON for resume
   delay?: number; // inter-batch delay in ms for rate limit throttling
+  urls?: string[]; // explicit URL list (no crawl mode)
+  targetFilename?: string; // merge into this existing scan after
 }
 
 export interface Config {

@@ -348,8 +348,8 @@ async function processPrCommentFix(task: Task): Promise<void> {
 
 async function processVideoscan(task: Task): Promise<void> {
   const ctx = task.context;
-  if (!ctx.scanUrl) {
-    await failTask(task.id, 'No scanUrl in task context');
+  if (!ctx.scanUrl && !ctx.urls?.length) {
+    await failTask(task.id, 'No scanUrl or urls in task context');
     notifyUpdate();
     return;
   }
@@ -360,11 +360,13 @@ async function processVideoscan(task: Task): Promise<void> {
 
   try {
     const result = await runVideoscan(task.id, {
-      scanUrl: ctx.scanUrl,
+      scanUrl: ctx.scanUrl || ctx.urls?.[0] || '',
       maxPages: ctx.maxPages,
       concurrency: ctx.concurrency,
       resumeFile: ctx.resumeFile,
       delay: ctx.delay,
+      urls: ctx.urls,
+      targetFilename: ctx.targetFilename,
     });
 
     if (result.success) {

@@ -1,5 +1,5 @@
 import { spawn, ChildProcess } from 'child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { chromium } from 'playwright';
@@ -10,6 +10,11 @@ import { dbListScans, dbUpsertVideoscan } from './db/videoscans.js';
 import { downloadFile, uploadScanFiles } from './db/storage.js';
 
 const log = createLogger('videoscan-runner');
+
+/** Silent unlink — ignores errors (file already gone, etc.) */
+function tryUnlink(path: string): void {
+  try { unlinkSync(path); } catch {}
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(__dirname, '../../');
@@ -42,6 +47,8 @@ export interface VideoscanOptions {
   concurrency?: number;
   resumeFile?: string;
   delay?: number;
+  urls?: string[];
+  targetFilename?: string;
 }
 
 export async function runVideoscan(taskId: number, options: VideoscanOptions): Promise<VideoscanResult> {
@@ -51,13 +58,25 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
     return { success: false, error: `scan.mjs not found at ${scanScript}` };
   }
 
-  const args = [scanScript, options.scanUrl];
-  if (options.maxPages) args.push('--max-pages', String(options.maxPages));
+  // Write temp URL file for --urls mode
+  let tempUrlFile: string | undefined;
+  if (options.urls?.length) {
+    tempUrlFile = join(VIDEOSCAN_DIR, `_temp-urls-${taskId}.json`);
+    writeFileSync(tempUrlFile, JSON.stringify(options.urls));
+  }
+
+  const args = [scanScript];
+  if (tempUrlFile) {
+    args.push('--urls', tempUrlFile);
+  } else {
+    args.push(options.scanUrl);
+  }
+  if (options.maxPages && !tempUrlFile) args.push('--max-pages', String(options.maxPages));
   if (options.concurrency) args.push('--concurrency', String(options.concurrency));
   if (options.resumeFile) args.push('--resume', options.resumeFile);
   if (options.delay) args.push('--delay', String(options.delay));
 
-  log.info(`Task #${taskId} Starting videoscan: ${options.scanUrl} (max ${options.maxPages || 50} pages)`);
+  log.info(`Task #${taskId} Starting videoscan: ${tempUrlFile ? `${options.urls!.length} explicit URLs` : options.scanUrl} (max ${options.maxPages || 50} pages)`);
 
   return new Promise((resolve) => {
     const proc = spawn('node', args, {
@@ -99,6 +118,9 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
       if (resolved) return;
       runningProcesses.delete(taskId);
 
+      // Clean up temp URL file
+      if (tempUrlFile && existsSync(tempUrlFile)) tryUnlink(tempUrlFile);
+
       if (code !== 0) {
         resolved = true;
         resolve({ success: false, error: stderr || `scan.mjs exited with code ${code}` });
@@ -106,11 +128,34 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
       }
 
       // Find the JSON file that was just created (most recent in VIDEOSCAN_DIR)
-      const jsonFile = findLatestScanFile();
+      let jsonFile = findLatestScanFile();
       if (!jsonFile) {
         resolved = true;
         resolve({ success: true }); // scan succeeded but no file found
         return;
+      }
+
+      // If targetFilename set, merge new scan into existing scan
+      if (options.targetFilename) {
+        claudeEmitter.emit('output', taskId, `\nMerging into ${options.targetFilename}...\n`);
+        try {
+          const targetPath = join(VIDEOSCAN_DIR, options.targetFilename);
+          if (!existsSync(targetPath)) {
+            await downloadFile(options.targetFilename, VIDEOSCAN_DIR);
+          }
+          const targetData = JSON.parse(readFileSync(targetPath, 'utf-8')) as ScanData;
+          const newData = JSON.parse(readFileSync(join(VIDEOSCAN_DIR, jsonFile), 'utf-8')) as ScanData;
+          const merged = mergeScansData([targetData, newData]);
+          writeFileSync(targetPath, JSON.stringify(merged, null, 2));
+          // Delete the temporary new scan file and its HTML/PDF if generated
+          for (const ext of ['.json', '.html', '.pdf']) {
+            tryUnlink(join(VIDEOSCAN_DIR, jsonFile.replace('.json', ext)));
+          }
+          jsonFile = options.targetFilename;
+          claudeEmitter.emit('output', taskId, `Merged successfully (${merged.pagesScanned} pages, ${merged.pagesWithVideo} with video)\n`);
+        } catch (err) {
+          claudeEmitter.emit('output', taskId, `[warn] Merge failed: ${err}, keeping new scan as-is\n`);
+        }
       }
 
       // Generate HTML report
@@ -132,7 +177,7 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
         });
 
         reportProc.on('close', async (reportCode) => {
-          const htmlFile = jsonFile.replace('.json', '.html');
+          const htmlFile = jsonFile!.replace('.json', '.html');
           const htmlPath = join(VIDEOSCAN_DIR, htmlFile);
           const htmlExists = existsSync(htmlPath);
 
@@ -149,21 +194,21 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
           }
 
           // Sync to Supabase (files + metadata)
-          await syncScanToSupabase(jsonFile);
+          await syncScanToSupabase(jsonFile!);
 
           resolved = true;
           resolve({
             success: true,
-            jsonFile,
+            jsonFile: jsonFile!,
             htmlFile: htmlExists ? htmlFile : undefined,
             pdfFile,
           });
         });
 
         reportProc.on('error', async (err) => {
-          await syncScanToSupabase(jsonFile);
+          await syncScanToSupabase(jsonFile!);
           resolved = true;
-          resolve({ success: true, jsonFile }); // scan worked, report failed
+          resolve({ success: true, jsonFile: jsonFile! }); // scan worked, report failed
         });
       } catch {
         if (jsonFile) await syncScanToSupabase(jsonFile);
@@ -291,19 +336,7 @@ interface ScanData {
   _state: { visited: string[]; queue: string[] };
 }
 
-export function mergeScans(filenames: string[]): MergeResult {
-  if (filenames.length < 2) throw new Error('Need at least 2 scans to merge');
-
-  const scansData = filenames.map(f => {
-    const path = join(VIDEOSCAN_DIR, f);
-    if (!existsSync(path)) throw new Error(`File not found: ${f}`);
-    return JSON.parse(readFileSync(path, 'utf-8')) as ScanData;
-  });
-
-  // Verify same domain
-  const domains = new Set(scansData.map(d => d.domain));
-  if (domains.size > 1) throw new Error(`Cannot merge scans from different domains: ${[...domains].join(', ')}`);
-
+export function mergeScansData(scansData: ScanData[]): ScanData {
   // Merge details — dedupe by URL, keep entry with more players
   const detailMap = new Map<string, ScanDetail>();
   for (const scan of scansData) {
@@ -345,7 +378,7 @@ export function mergeScans(filenames: string[]): MergeResult {
   const latestDate = scansData.reduce((latest, s) =>
     s.scanDate > latest ? s.scanDate : latest, scansData[0].scanDate);
 
-  const merged: ScanData = {
+  return {
     domain: scansData[0].domain,
     scanDate: latestDate,
     pagesScanned: visitedSet.size,
@@ -355,9 +388,25 @@ export function mergeScans(filenames: string[]): MergeResult {
     details: mergedDetails,
     _state: { visited: [...visitedSet], queue: [...queueSet] },
   };
+}
+
+export function mergeScans(filenames: string[]): MergeResult {
+  if (filenames.length < 2) throw new Error('Need at least 2 scans to merge');
+
+  const scansData = filenames.map(f => {
+    const path = join(VIDEOSCAN_DIR, f);
+    if (!existsSync(path)) throw new Error(`File not found: ${f}`);
+    return JSON.parse(readFileSync(path, 'utf-8')) as ScanData;
+  });
+
+  // Verify same domain
+  const domains = new Set(scansData.map(d => d.domain));
+  if (domains.size > 1) throw new Error(`Cannot merge scans from different domains: ${[...domains].join(', ')}`);
+
+  const merged = mergeScansData(scansData);
 
   // Write merged file
-  const ts = latestDate.replace(/[:.]/g, '-').replace('Z', '');
+  const ts = merged.scanDate.replace(/[:.]/g, '-').replace('Z', '');
   const mergedFilename = `videoscan-${merged.domain}-${ts}-merged.json`;
   writeFileSync(join(VIDEOSCAN_DIR, mergedFilename), JSON.stringify(merged, null, 2));
 

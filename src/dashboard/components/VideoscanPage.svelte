@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getScans, fetchScans, startScan, resumeScan, mergeDomainScans, regenerateReport, regeneratePreview, isLoading, importDigiToegankelijk, type ScanSummary, type DigiImportResult } from '../stores/videoscan.svelte';
+  import { getScans, fetchScans, startScan, resumeScan, addUrlsToScan, mergeDomainScans, regenerateReport, regeneratePreview, isLoading, importDigiToegankelijk, type ScanSummary, type DigiImportResult } from '../stores/videoscan.svelte';
   import { getTasks, getTaskOutput, isExpanded, toggleExpanded } from '../stores/tasks.svelte';
 
   let url = $state('');
@@ -132,6 +132,26 @@
       setTimeout(() => fetchScans(), 2000);
     } catch (err: any) {
       error = err.message;
+    }
+  }
+
+  let addingUrlsTo = $state<string | null>(null);
+  let addUrlsText = $state('');
+  let addUrlsSubmitting = $state(false);
+
+  async function handleAddUrls(scan: ScanSummary) {
+    const urls = addUrlsText.split('\n').map(u => u.trim()).filter(u => u.startsWith('http'));
+    if (urls.length === 0) return;
+    addUrlsSubmitting = true;
+    try {
+      await addUrlsToScan(scan.filename, urls, concurrency, delay);
+      addingUrlsTo = null;
+      addUrlsText = '';
+      setTimeout(() => fetchScans(), 2000);
+    } catch (err: any) {
+      error = err.message;
+    } finally {
+      addUrlsSubmitting = false;
     }
   }
 
@@ -416,9 +436,26 @@
                         {#if scan.canResume}
                           <button class="sb res" onclick={() => handleResume(scan)}>Resume</button>
                         {/if}
+                        <button class="sb" onclick={() => { addingUrlsTo = addingUrlsTo === scan.filename ? null : scan.filename; addUrlsText = ''; }}>+ URLs</button>
                       </div>
                     </div>
                   </div>
+                  {#if addingUrlsTo === scan.filename}
+                    <div class="add-urls-panel">
+                      <textarea
+                        class="add-urls-ta"
+                        placeholder="One URL per line..."
+                        bind:value={addUrlsText}
+                        rows="4"
+                      ></textarea>
+                      <div class="add-urls-btns">
+                        <button class="sb res" onclick={() => handleAddUrls(scan)} disabled={addUrlsSubmitting || !addUrlsText.trim()}>
+                          {addUrlsSubmitting ? '...' : 'Scan & merge'}
+                        </button>
+                        <button class="sb" onclick={() => { addingUrlsTo = null; addUrlsText = ''; }}>Cancel</button>
+                      </div>
+                    </div>
+                  {/if}
                 {/each}
               </div>
             {/if}
@@ -1709,5 +1746,29 @@
 
   .info-links .sb {
     gap: 5px;
+  }
+
+  /* Add URLs panel */
+  .add-urls-panel {
+    padding: 8px 10px;
+    border-top: 1px solid var(--border);
+    background: var(--surface-deep);
+  }
+  .add-urls-ta {
+    width: 100%;
+    min-height: 60px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font: 11px/1.4 monospace;
+    padding: 6px;
+    resize: vertical;
+  }
+  .add-urls-ta::placeholder { color: var(--text-dim); }
+  .add-urls-btns {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
   }
 </style>
