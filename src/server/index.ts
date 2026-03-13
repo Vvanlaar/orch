@@ -1501,6 +1501,103 @@ app.post('/api/videoscans/generate-report', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+function parseCsvLine(line: string): string[] {
+  const fields: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"' && line[i + 1] === '"') { current += '"'; i++; }
+      else if (ch === '"') { inQuotes = false; }
+      else { current += ch; }
+    } else {
+      if (ch === '"') { inQuotes = true; }
+      else if (ch === ',') { fields.push(current.trim()); current = ''; }
+      else { current += ch; }
+    }
+  }
+  fields.push(current.trim());
+  return fields;
+}
+
+function ensureHttp(url: string): string {
+  return url.startsWith('http') ? url : `https://${url}`;
+}
+
+app.post('/api/videoscans/import-digitoegankelijk', asyncHandler(async (req, res) => {
+  const { id } = req.body;
+  if (!id || typeof id !== 'number') {
+    res.status(400).json({ error: 'id (number) required' });
+    return;
+  }
+
+  const csvUrl = `https://dashboard.digitoegankelijk.nl/organisaties/download/${id}`;
+  const csvRes = await fetch(csvUrl);
+  if (!csvRes.ok) {
+    res.status(502).json({ error: `Failed to fetch CSV: HTTP ${csvRes.status}` });
+    return;
+  }
+  const csvText = await csvRes.text();
+  const lines = csvText.split('\n').filter(l => l.trim());
+  if (lines.length < 2) {
+    res.status(400).json({ error: 'CSV has no data rows' });
+    return;
+  }
+
+  const headers = parseCsvLine(lines[0]);
+  const nameIdx = headers.findIndex(h => /^naam/i.test(h));
+  const urlIdx = headers.findIndex(h => /^url/i.test(h));
+  const typeIdx = headers.findIndex(h => /site of app/i.test(h));
+  const statusIdx = headers.findIndex(h => /^status/i.test(h));
+
+  if (urlIdx === -1) {
+    res.status(400).json({ error: 'CSV missing URL column' });
+    return;
+  }
+
+  let skippedApps = 0;
+  const sites: { name: string; url: string; status: string; rootDomain: string }[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const fields = parseCsvLine(lines[i]);
+    if (typeIdx !== -1 && /app/i.test(fields[typeIdx] || '')) {
+      skippedApps++;
+      continue;
+    }
+    const siteUrl = fields[urlIdx] || '';
+    if (!siteUrl) continue;
+    let hostname: string;
+    try { hostname = new URL(ensureHttp(siteUrl)).hostname; } catch { continue; }
+    const parts = hostname.replace(/^www\./, '').split('.');
+    const rootDomain = parts.length >= 2 ? parts.slice(-2).join('.') : hostname;
+    sites.push({
+      name: nameIdx !== -1 ? (fields[nameIdx] || '') : '',
+      url: ensureHttp(siteUrl),
+      status: statusIdx !== -1 ? (fields[statusIdx] || '') : '',
+      rootDomain,
+    });
+  }
+
+  // Group by root domain
+  const groupMap = new Map<string, typeof sites>();
+  for (const site of sites) {
+    if (!groupMap.has(site.rootDomain)) groupMap.set(site.rootDomain, []);
+    groupMap.get(site.rootDomain)!.push(site);
+  }
+
+  const groups = [...groupMap.entries()]
+    .sort((a, b) => b[1].length - a[1].length)
+    .map(([rootDomain, domainSites]) => ({
+      rootDomain,
+      sites: domainSites.map(({ name, url, status }) => ({ name, url, status })),
+    }));
+
+  const orgName = sites.length > 0 && sites[0].name ? sites[0].name.split(' - ')[0].split(' \u2013 ')[0].trim() : `Organisation ${id}`;
+
+  res.json({ orgName, totalSites: sites.length, skippedApps, groups });
+}));
+
 // --- Orchestrator API ---
 
 app.post('/api/orchestrate', asyncHandler(async (_req, res) => {
