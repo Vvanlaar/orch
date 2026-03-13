@@ -499,6 +499,59 @@
       </div>
     {/if}
   </div>
+
+  <!-- Howto + Audit Documents -->
+  <div class="info-section">
+    <div class="info-card">
+      <h3 class="info-h">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+        Quick Start
+      </h3>
+      <div class="info-body">
+        <div class="info-step">
+          <span class="info-num">1</span>
+          <div>
+            <strong>Scan a website</strong>
+            <p>Paste any URL in the input above — e.g. <code>https://example.nl</code>. The scanner crawls pages and detects video players.</p>
+          </div>
+        </div>
+        <div class="info-step">
+          <span class="info-num">2</span>
+          <div>
+            <strong>Bulk-scan from DigiToegankelijk</strong>
+            <p>Paste a municipality page URL like <code>https://dashboard.digitoegankelijk.nl/organisaties/123</code> to import all their sites at once. Select which to scan and hit Start.</p>
+          </div>
+        </div>
+        <div class="info-step">
+          <span class="info-num">3</span>
+          <div>
+            <strong>Generate reports</strong>
+            <p>After a scan completes, click <strong>Gen</strong> for a full HTML/PDF report or <strong>Teaser</strong> for a one-page preview. Merge multiple scans of the same domain with the Merge button.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="info-card">
+      <h3 class="info-h">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        Audit Documents
+      </h3>
+      <div class="info-body">
+        <p class="info-desc">WCAG 2.2 video player accessibility audit by Proper Access — comparing Blue Billywig against other players.</p>
+        <div class="info-links">
+          <a class="sb rpt" href="/api/videoscans/audit/audit-summary.html" target="_blank">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            Audit Summary (HTML)
+          </a>
+          <a class="sb pdf" href="/api/videoscans/audit/audit-summary.pdf" target="_blank" download>
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            Audit Summary (PDF)
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <style>
@@ -1548,5 +1601,113 @@
     .sdot {
       display: none;
     }
+  }
+
+  /* === Info Section === */
+  .info-section {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+
+  @media (max-width: 900px) {
+    .info-section {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .info-card {
+    background: var(--surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .info-h {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border-subtle);
+    margin: 0;
+  }
+
+  .info-h svg {
+    flex-shrink: 0;
+    color: var(--accent);
+  }
+
+  .info-body {
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .info-step {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+  }
+
+  .info-num {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--accent-dim);
+    color: var(--accent-bright);
+    font-size: 11px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-family: 'IBM Plex Mono', monospace;
+    margin-top: 1px;
+  }
+
+  .info-step strong {
+    font-size: 13px;
+    color: var(--text);
+    display: block;
+    margin-bottom: 2px;
+  }
+
+  .info-step p {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.5;
+    margin: 0;
+  }
+
+  .info-step code {
+    font-size: 11px;
+    background: var(--surface-deep);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: 'IBM Plex Mono', monospace;
+    color: var(--accent-bright);
+  }
+
+  .info-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.5;
+    margin: 0;
+  }
+
+  .info-links {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .info-links .sb {
+    gap: 5px;
   }
 </style>

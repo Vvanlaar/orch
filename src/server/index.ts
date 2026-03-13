@@ -1506,6 +1506,22 @@ app.get('/api/videoscans/files/:filename', asyncHandler(async (req, res) => {
   }
 }));
 
+app.get('/api/videoscans/audit/:filename', (req, res) => {
+  const filename = req.params.filename as string;
+  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+    res.status(400).json({ error: 'Invalid filename' });
+    return;
+  }
+  const filePath = join(__dirname, '../../src/videoscan', filename);
+  if (!existsSync(filePath)) {
+    res.status(404).json({ error: 'File not found' });
+    return;
+  }
+  if (filename.endsWith('.html')) res.type('html').sendFile(filePath);
+  else if (filename.endsWith('.pdf')) res.type('pdf').sendFile(filePath);
+  else res.status(400).json({ error: 'Unsupported file type' });
+});
+
 app.post('/api/videoscans/generate-report', asyncHandler(async (req, res) => {
   const { filename } = req.body;
   if (!filename || typeof filename !== 'string') {
