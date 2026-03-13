@@ -1459,9 +1459,9 @@ app.post('/api/actions/resume-videoscan', asyncHandler(async (req, res) => {
   res.json({ taskId: task.id, message: `Resume task #${task.id} created` });
 }));
 
-app.get('/api/videoscans', (_req, res) => {
-  res.json(listScans());
-});
+app.get('/api/videoscans', asyncHandler(async (_req, res) => {
+  res.json(await listScans());
+}));
 
 app.post('/api/videoscans/merge', (req, res) => {
   const { filenames } = req.body;

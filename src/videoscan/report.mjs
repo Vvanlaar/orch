@@ -93,7 +93,6 @@ function generateAuditSection(playerSummary) {
   if (auditMatches.length === 0) return "";
 
   const failCount = auditMatches.filter((m) => m.status === "fail").length;
-  const passCount = auditMatches.filter((m) => m.status === "pass").length;
   const hasBB = playerNames.includes("Blue Billywig");
 
   const rows = auditMatches

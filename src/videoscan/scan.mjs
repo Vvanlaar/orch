@@ -113,7 +113,7 @@ const DETECTORS = {
       /mediatheek\.rijksoverheid/i,
       /rijksoverheid\.nl\/[^"]*video/i,
     ],
-    scripts: [/platformrijksoverheidonline/i, /rijksoverheid/i],
+    scripts: [/platformrijksoverheidonline/i],
   },
   "Vixy Video": {
     patterns: [
