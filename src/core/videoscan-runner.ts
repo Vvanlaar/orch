@@ -7,7 +7,7 @@ import { claudeEmitter } from './claude-runner.js';
 import { createLogger } from './logger.js';
 import { isSupabaseConfigured } from './db/client.js';
 import { dbListScans, dbUpsertVideoscan } from './db/videoscans.js';
-import { uploadScanFiles } from './db/storage.js';
+import { downloadFile, uploadScanFiles } from './db/storage.js';
 
 const log = createLogger('videoscan-runner');
 
@@ -178,6 +178,7 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
 
 export async function generateReport(jsonFilename: string): Promise<{ htmlFile?: string; pdfFile?: string }> {
   const jsonPath = join(VIDEOSCAN_DIR, jsonFilename);
+  if (!existsSync(jsonPath)) await downloadFile(jsonFilename, VIDEOSCAN_DIR);
   if (!existsSync(jsonPath)) throw new Error(`JSON file not found: ${jsonFilename}`);
 
   // Generate HTML
@@ -205,6 +206,7 @@ export async function generateReport(jsonFilename: string): Promise<{ htmlFile?:
 
 export async function generatePreview(jsonFilename: string): Promise<{ htmlFile?: string; pdfFile?: string }> {
   const jsonPath = join(VIDEOSCAN_DIR, jsonFilename);
+  if (!existsSync(jsonPath)) await downloadFile(jsonFilename, VIDEOSCAN_DIR);
   if (!existsSync(jsonPath)) throw new Error(`JSON file not found: ${jsonFilename}`);
 
   await new Promise<void>((resolve, reject) => {
