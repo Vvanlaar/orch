@@ -411,6 +411,7 @@ export async function syncScanToSupabase(jsonFilename: string): Promise<void> {
       scanState: data._state || {},
       hasReport: existsSync(join(VIDEOSCAN_DIR, htmlFile)),
       hasPdf: existsSync(join(VIDEOSCAN_DIR, pdfFile)),
+      hasPreview: existsSync(join(VIDEOSCAN_DIR, previewFile)),
       canResume: (data._state?.queue?.length || 0) > 0,
     });
 

@@ -14,6 +14,7 @@ interface VideoscanRow {
   scan_state: Record<string, unknown>;
   has_report: boolean;
   has_pdf: boolean;
+  has_preview: boolean;
   can_resume: boolean;
   archived: boolean;
   created_at: string;
@@ -29,7 +30,7 @@ function rowToSummary(row: VideoscanRow): ScanSummary {
     uniquePlayers: row.unique_players,
     hasReport: row.has_report,
     hasPdf: row.has_pdf,
-    hasPreview: false,
+    hasPreview: row.has_preview,
     canResume: row.can_resume,
   };
 }
@@ -57,6 +58,7 @@ export async function dbUpsertVideoscan(scan: {
   scanState: Record<string, unknown>;
   hasReport: boolean;
   hasPdf: boolean;
+  hasPreview: boolean;
   canResume: boolean;
 }): Promise<void> {
   const { error } = await getSupabase()
@@ -74,6 +76,7 @@ export async function dbUpsertVideoscan(scan: {
         scan_state: scan.scanState,
         has_report: scan.hasReport,
         has_pdf: scan.hasPdf,
+        has_preview: scan.hasPreview,
         can_resume: scan.canResume,
       },
       { onConflict: 'filename' }
