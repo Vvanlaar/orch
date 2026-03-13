@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getScans, fetchScans, startScan, resumeScan, mergeDomainScans, regenerateReport, isLoading, importDigiToegankelijk, type ScanSummary, type DigiImportResult } from '../stores/videoscan.svelte';
+  import { getScans, fetchScans, startScan, resumeScan, mergeDomainScans, regenerateReport, regeneratePreview, isLoading, importDigiToegankelijk, type ScanSummary, type DigiImportResult } from '../stores/videoscan.svelte';
   import { getTasks, getTaskOutput, isExpanded, toggleExpanded } from '../stores/tasks.svelte';
 
   let url = $state('');
@@ -136,6 +136,7 @@
   }
 
   let generating = $state<string | null>(null);
+  let generatingPreview = $state<string | null>(null);
   let merging = $state(false);
 
   // DigiToegankelijk import state
@@ -168,6 +169,18 @@
       error = err.message;
     } finally {
       generating = null;
+    }
+  }
+
+  async function handleGeneratePreview(scan: ScanSummary) {
+    if (generatingPreview) return;
+    generatingPreview = scan.filename;
+    try {
+      await regeneratePreview(scan.filename);
+    } catch (err: any) {
+      error = err.message;
+    } finally {
+      generatingPreview = null;
     }
   }
 
@@ -386,10 +399,18 @@
                         {#if scan.hasReport}
                           <a class="sb rpt" href="/api/videoscans/files/{scan.filename.replace('.json', '.html')}" target="_blank">Report</a>
                         {/if}
+                        {#if scan.hasPreview}
+                          <a class="sb prv" href="/api/videoscans/files/{scan.filename.replace('.json', '-preview.html')}" target="_blank">Preview</a>
+                        {/if}
                         <a class="sb" href="/api/videoscans/files/{scan.filename}" target="_blank" download>JSON</a>
                         {#if !scan.hasReport}
                           <button class="sb" onclick={() => handleGenerateReport(scan)} disabled={generating === scan.filename}>
                             {generating === scan.filename ? '...' : 'Gen'}
+                          </button>
+                        {/if}
+                        {#if scan.hasReport && !scan.hasPreview}
+                          <button class="sb prv" onclick={() => handleGeneratePreview(scan)} disabled={generatingPreview === scan.filename}>
+                            {generatingPreview === scan.filename ? '...' : 'Teaser'}
                           </button>
                         {/if}
                         {#if scan.canResume}
@@ -1012,6 +1033,16 @@
   .sb.rpt:hover {
     background: var(--accent-glow);
     border-color: var(--accent);
+  }
+
+  .sb.prv {
+    border-color: rgba(168, 85, 247, 0.3);
+    color: #c084fc;
+  }
+
+  .sb.prv:hover {
+    background: rgba(168, 85, 247, 0.1);
+    border-color: #a855f7;
   }
 
   .sb.res {

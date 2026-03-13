@@ -7,6 +7,7 @@ export interface ScanSummary {
   uniquePlayers: number;
   hasReport: boolean;
   hasPdf: boolean;
+  hasPreview: boolean;
   canResume: boolean;
 }
 
@@ -49,6 +50,12 @@ export function resumeScan(filename: string, maxPages: number, concurrency: numb
 
 export async function regenerateReport(filename: string) {
   const result = await postJson('/api/videoscans/generate-report', { filename });
+  await fetchScans();
+  return result;
+}
+
+export async function regeneratePreview(filename: string) {
+  const result = await postJson('/api/videoscans/generate-preview', { filename });
   await fetchScans();
   return result;
 }

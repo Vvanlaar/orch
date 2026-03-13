@@ -29,6 +29,7 @@ function rowToSummary(row: VideoscanRow): ScanSummary {
     uniquePlayers: row.unique_players,
     hasReport: row.has_report,
     hasPdf: row.has_pdf,
+    hasPreview: false,
     canResume: row.can_resume,
   };
 }

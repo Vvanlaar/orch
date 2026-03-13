@@ -31,7 +31,7 @@ import { initSettings } from '../core/settings.js';
 import { isSupabaseConfigured } from '../core/db/client.js';
 import { dbGetNotifications, dbInsertNotification } from '../core/db/notifications.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
-import { getVideoscanDir, listScans, mergeScans, generateReport } from '../core/videoscan-runner.js';
+import { getVideoscanDir, listScans, mergeScans, generateReport, generatePreview } from '../core/videoscan-runner.js';
 import type { TerminalId } from '../core/types.js';
 import { getCurrentAdoUser, getMyAdoWorkItems, getMyGitHubPRs, getMyResolvedWorkItems, getResolvedWithPRComments, getReviewedItemsInSprint, getTeamMembers, getWorkItemsBySprints, type OwnerFilter } from '../core/user-items.js';
 import { startNtfyListener } from '../core/ntfy-listener.js';
@@ -1506,6 +1506,16 @@ app.post('/api/videoscans/generate-report', asyncHandler(async (req, res) => {
     return;
   }
   const result = await generateReport(filename);
+  res.json(result);
+}));
+
+app.post('/api/videoscans/generate-preview', asyncHandler(async (req, res) => {
+  const { filename } = req.body;
+  if (!filename || typeof filename !== 'string') {
+    res.status(400).json({ error: 'filename required' });
+    return;
+  }
+  const result = await generatePreview(filename);
   res.json(result);
 }));
 
