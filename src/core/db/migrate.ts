@@ -147,6 +147,27 @@ async function migrateVideoscans() {
     }
   }
   console.log(`  Done: ${files.length} videoscans migrated`);
+
+  // Upload files to Supabase Storage
+  console.log('Uploading videoscan files to storage...');
+  const BUCKET = 'videoscans';
+  const { error: bucketErr } = await supabase.storage.createBucket(BUCKET, { public: false });
+  if (bucketErr && !bucketErr.message.includes('already exists')) {
+    console.error(`  Failed to create bucket: ${bucketErr.message}`);
+    return;
+  }
+
+  const allFiles = readdirSync(VIDEOSCAN_DIR)
+    .filter(f => f.startsWith('videoscan-') && (f.endsWith('.json') || f.endsWith('.html') || f.endsWith('.pdf')));
+  let uploaded = 0;
+  for (const f of allFiles) {
+    const content = readFileSync(join(VIDEOSCAN_DIR, f));
+    const contentType = f.endsWith('.html') ? 'text/html' : f.endsWith('.pdf') ? 'application/pdf' : 'application/json';
+    const { error } = await supabase.storage.from(BUCKET).upload(f, content, { contentType, upsert: true });
+    if (error) console.error(`  Upload ${f}: ${error.message}`);
+    else uploaded++;
+  }
+  console.log(`  Done: ${uploaded}/${allFiles.length} files uploaded to storage`);
 }
 
 async function migrateNotifications() {

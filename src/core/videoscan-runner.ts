@@ -6,7 +6,8 @@ import { chromium } from 'playwright';
 import { claudeEmitter } from './claude-runner.js';
 import { createLogger } from './logger.js';
 import { isSupabaseConfigured } from './db/client.js';
-import { dbListScans } from './db/videoscans.js';
+import { dbListScans, dbUpsertVideoscan } from './db/videoscans.js';
+import { uploadScanFiles } from './db/storage.js';
 
 const log = createLogger('videoscan-runner');
 
@@ -147,6 +148,9 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
             }
           }
 
+          // Sync to Supabase (files + metadata)
+          await syncScanToSupabase(jsonFile);
+
           resolved = true;
           resolve({
             success: true,
@@ -156,11 +160,13 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
           });
         });
 
-        reportProc.on('error', (err) => {
+        reportProc.on('error', async (err) => {
+          await syncScanToSupabase(jsonFile);
           resolved = true;
           resolve({ success: true, jsonFile }); // scan worked, report failed
         });
       } catch {
+        if (jsonFile) await syncScanToSupabase(jsonFile);
         resolved = true;
         resolve({ success: true, jsonFile });
       }
@@ -193,6 +199,7 @@ export async function generateReport(jsonFilename: string): Promise<{ htmlFile?:
     log.warn(`PDF generation failed for ${jsonFilename}: ${err}`);
   }
 
+  await syncScanToSupabase(jsonFilename);
   return { htmlFile, pdfFile };
 }
 
@@ -217,6 +224,7 @@ export async function generatePreview(jsonFilename: string): Promise<{ htmlFile?
     log.warn(`Preview PDF generation failed for ${jsonFilename}: ${err}`);
   }
 
+  await syncScanToSupabase(jsonFilename);
   return { htmlFile, pdfFile };
 }
 
@@ -368,6 +376,46 @@ export function mergeScans(filenames: string[]): MergeResult {
 
   log.info(`Merged ${filenames.length} scans into ${mergedFilename} (${merged.pagesScanned} pages, ${merged.pagesWithVideo} with video)`);
   return { filename: mergedFilename, archivedFiles: archived };
+}
+
+/**
+ * Sync a scan's files + metadata to Supabase (storage + DB row).
+ */
+export async function syncScanToSupabase(jsonFilename: string): Promise<void> {
+  if (!isSupabaseConfigured()) return;
+
+  const jsonPath = join(VIDEOSCAN_DIR, jsonFilename);
+  if (!existsSync(jsonPath)) return;
+
+  try {
+    const data = JSON.parse(readFileSync(jsonPath, 'utf-8'));
+    const htmlFile = jsonFilename.replace('.json', '.html');
+    const pdfFile = jsonFilename.replace('.json', '.pdf');
+    const previewFile = jsonFilename.replace('.json', '-preview.html');
+
+    // Upload files to Supabase Storage
+    await uploadScanFiles(jsonFilename, VIDEOSCAN_DIR);
+
+    // Upsert metadata row
+    await dbUpsertVideoscan({
+      filename: jsonFilename,
+      domain: data.domain || 'unknown',
+      scanDate: data.scanDate || new Date().toISOString(),
+      pagesScanned: data.pagesScanned || 0,
+      pagesWithVideo: data.pagesWithVideo || data.details?.length || 0,
+      uniquePlayers: data.uniquePlayers || Object.keys(data.playerSummary || {}).length,
+      playerSummary: data.playerSummary || {},
+      details: data.details || [],
+      scanState: data._state || {},
+      hasReport: existsSync(join(VIDEOSCAN_DIR, htmlFile)),
+      hasPdf: existsSync(join(VIDEOSCAN_DIR, pdfFile)),
+      canResume: (data._state?.queue?.length || 0) > 0,
+    });
+
+    log.info(`Synced ${jsonFilename} to Supabase`);
+  } catch (err) {
+    log.error(`Failed to sync ${jsonFilename}: ${err}`);
+  }
 }
 
 export interface ScanSummary {

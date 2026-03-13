@@ -31,7 +31,9 @@ import { initSettings } from '../core/settings.js';
 import { isSupabaseConfigured } from '../core/db/client.js';
 import { dbGetNotifications, dbInsertNotification } from '../core/db/notifications.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
-import { getVideoscanDir, listScans, mergeScans, generateReport, generatePreview } from '../core/videoscan-runner.js';
+import { getVideoscanDir, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase } from '../core/videoscan-runner.js';
+import { downloadFile } from '../core/db/storage.js';
+import { dbArchiveVideoscans } from '../core/db/videoscans.js';
 import type { TerminalId } from '../core/types.js';
 import { getCurrentAdoUser, getMyAdoWorkItems, getMyGitHubPRs, getMyResolvedWorkItems, getResolvedWithPRComments, getReviewedItemsInSprint, getTeamMembers, getWorkItemsBySprints, type OwnerFilter } from '../core/user-items.js';
 import { startNtfyListener } from '../core/ntfy-listener.js';
@@ -1463,31 +1465,36 @@ app.get('/api/videoscans', asyncHandler(async (_req, res) => {
   res.json(await listScans());
 }));
 
-app.post('/api/videoscans/merge', (req, res) => {
+app.post('/api/videoscans/merge', asyncHandler(async (req, res) => {
   const { filenames } = req.body;
   if (!Array.isArray(filenames) || filenames.length < 2) {
     res.status(400).json({ error: 'Need at least 2 filenames to merge' });
     return;
   }
-  try {
-    const result = mergeScans(filenames);
-    res.json(result);
-  } catch (err: any) {
-    res.status(400).json({ error: err.message });
-  }
-});
+  const result = mergeScans(filenames);
+  await syncScanToSupabase(result.filename);
+  if (isSupabaseConfigured()) await dbArchiveVideoscans(filenames);
+  res.json(result);
+}));
 
-app.get('/api/videoscans/files/:filename', (req, res) => {
-  const { filename } = req.params;
+app.get('/api/videoscans/files/:filename', asyncHandler(async (req, res) => {
+  const filename = req.params.filename as string;
   if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
     res.status(400).json({ error: 'Invalid filename' });
     return;
   }
-  const filePath = join(getVideoscanDir(), filename);
+  const dir = getVideoscanDir();
+  let filePath = join(dir, filename);
+
+  // Fall back to Supabase Storage if file not local
   if (!existsSync(filePath)) {
-    res.status(404).json({ error: 'File not found' });
-    return;
+    const downloaded = await downloadFile(filename, dir);
+    if (!downloaded) {
+      res.status(404).json({ error: 'File not found' });
+      return;
+    }
   }
+
   if (filename.endsWith('.html')) {
     res.type('html').sendFile(filePath);
   } else if (filename.endsWith('.json')) {
@@ -1497,7 +1504,7 @@ app.get('/api/videoscans/files/:filename', (req, res) => {
   } else {
     res.status(400).json({ error: 'Unsupported file type' });
   }
-});
+}));
 
 app.post('/api/videoscans/generate-report', asyncHandler(async (req, res) => {
   const { filename } = req.body;
