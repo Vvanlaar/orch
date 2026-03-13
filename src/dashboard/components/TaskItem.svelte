@@ -8,6 +8,7 @@
     toggleExpanded,
     getTaskOutput,
     appendSteerInput,
+    getLocalMachineId,
     stopTask,
     deleteTask,
     retryTask,
@@ -37,6 +38,7 @@
   let canDelete = $derived(task.status !== 'running');
   let hasOutput = $derived(!!output);
   let retryInfo = $derived(task.context?.retryCount ? ` (retry #${task.context.retryCount})` : '');
+  let isRemote = $derived(!!task.machineId && !!getLocalMachineId() && task.machineId !== getLocalMachineId());
 
   // Extract repo from GitHub PR URL only
   let repos = $derived(extractRepoFromGitHubUrl(task.context?.url) || '');
@@ -154,6 +156,8 @@
       {#if isSuggestion}
         <button class="action-btn approve-btn" onclick={handleApprove}>Approve</button>
         <button class="action-btn dismiss-btn" onclick={handleDismiss}>Skip</button>
+      {:else if isRunning && isRemote}
+        <span class="remote-badge" title="Running on {task.machineId}">remote</span>
       {:else if isRunning}
         <button class="action-btn done-btn" onclick={handleComplete}>Done</button>
         <button class="action-btn stop-btn" onclick={handleStop}>Stop</button>
@@ -336,6 +340,17 @@
 
   .dismiss-btn {
     background: var(--text-muted) !important;
+  }
+
+  .remote-badge {
+    font-size: 9px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--info-bg);
+    color: var(--info);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
   }
 
   .retry-btn:hover {

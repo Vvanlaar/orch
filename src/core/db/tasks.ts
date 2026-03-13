@@ -30,6 +30,7 @@ function rowToTask(row: TaskRow): Task {
     error: row.error ?? undefined,
     output: row.output ?? undefined,
     pid: row.pid ?? undefined,
+    machineId: row.machine_id ?? undefined,
     createdAt: row.created_at,
     startedAt: row.started_at ?? undefined,
     completedAt: row.completed_at ?? undefined,

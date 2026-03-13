@@ -4,7 +4,7 @@
   import { getTasks, getTaskOutput, isExpanded, toggleExpanded } from '../stores/tasks.svelte';
 
   let url = $state('');
-  let maxPages = $state(50);
+  let maxPages = $state(5000);
   let concurrency = $state(6);
   let delay = $state(200);
   let starting = $state(false);
@@ -246,7 +246,7 @@
       <div class="cmd-opts">
         <label class="cmd-opt">
           <span>Pages</span>
-          <input type="number" min="1" max="1000" bind:value={maxPages} />
+          <input type="number" min="1" max="50000" bind:value={maxPages} />
         </label>
         <label class="cmd-opt">
           <span>Threads</span>
@@ -731,7 +731,7 @@
   }
 
   .cmd-opt input {
-    width: 60px;
+    width: 80px;
     background: var(--surface-deep);
     border: 1px solid var(--border-subtle);
     border-radius: 5px;

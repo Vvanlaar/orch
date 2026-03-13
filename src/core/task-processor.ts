@@ -40,6 +40,7 @@ import {
   findRemoteForRepo,
 } from './git-ops.js';
 import { runVideoscan } from './videoscan-runner.js';
+import { MACHINE_ID, isSupabaseConfigured } from './db/client.js';
 import type { Task } from './types.js';
 
 let onTaskUpdate: (() => void) | null = null;
@@ -639,8 +640,9 @@ export async function startProcessor(intervalMs = 5000): Promise<void> {
   if (intervalId) return;
 
   // Mark orphaned running tasks as failed (from previous server crash/restart)
+  // With Supabase: only fail tasks belonging to THIS machine (other machines may still be running them)
   const allTasks = await getAllTasks(500);
-  const orphaned = allTasks.filter(t => t.status === 'running');
+  const orphaned = allTasks.filter(t => t.status === 'running' && (!isSupabaseConfigured() || !t.machineId || t.machineId === MACHINE_ID));
   for (const t of orphaned) {
     await failTask(t.id, 'Server restarted while task was running');
     log.warn(`Marked orphaned task #${t.id} as failed`);

@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import type { Task, TaskStatus, TaskType, TaskContext } from './types.js';
-import { isSupabaseConfigured } from './db/client.js';
+import { isSupabaseConfigured, MACHINE_ID } from './db/client.js';
 import {
   dbCreateTask,
   dbGetTask,
@@ -201,7 +201,7 @@ export async function getAllTasks(limit = 50): Promise<Task[]> {
 
 export async function startTask(id: number): Promise<void> {
   if (useDb) return dbStartTask(id);
-  jsonUpdateTask(id, { status: 'running', startedAt: new Date().toISOString() });
+  jsonUpdateTask(id, { status: 'running', startedAt: new Date().toISOString(), machineId: MACHINE_ID });
 }
 
 export async function completeTask(id: number, result: string): Promise<void> {

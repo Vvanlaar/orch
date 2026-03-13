@@ -28,10 +28,10 @@ import { getEffectiveRepoMapping, getScannedRepos } from '../core/repo-scanner.j
 import { getAuthenticatedUser, getPull, listPullReviewComments, listOrgRepos } from '../core/github-api.js';
 import { approveSuggestion, completeTask, createTask, deleteTask, dismissSuggestion, failTask, getAllTasks, getAllTasksWithOutput, getTask, getTasksWithPids, retryTask, updateTaskRepoPath } from '../core/task-queue.js';
 import { initSettings } from '../core/settings.js';
-import { isSupabaseConfigured } from '../core/db/client.js';
+import { isSupabaseConfigured, MACHINE_ID } from '../core/db/client.js';
 import { dbGetNotifications, dbInsertNotification } from '../core/db/notifications.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
-import { getVideoscanDir, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase } from '../core/videoscan-runner.js';
+import { getVideoscanDir, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan } from '../core/videoscan-runner.js';
 import { downloadFile } from '../core/db/storage.js';
 import { dbArchiveVideoscans } from '../core/db/videoscans.js';
 import type { TerminalId } from '../core/types.js';
@@ -170,7 +170,13 @@ app.post('/api/tasks/:id/stop', asyncHandler(async (req, res) => {
     res.status(400).json({ error: 'Task not running' });
     return;
   }
-  killTask(id);
+  // Multi-machine safety: only kill tasks running on this machine
+  if (task.machineId && task.machineId !== MACHINE_ID) {
+    res.status(400).json({ error: `Task is running on ${task.machineId}, not this machine (${MACHINE_ID})` });
+    return;
+  }
+  if (task.type === 'videoscan') killVideoscan(id);
+  else killTask(id);
   await failTask(id, 'Stopped by user');
   await broadcastTasks();
   res.json({ success: true });
@@ -744,6 +750,10 @@ app.post('/api/repos/clone', (req, res) => {
 app.get('/api/system/terminals', (_req, res) => {
   const terminals = detectAvailableTerminals();
   res.json(terminals);
+});
+
+app.get('/api/config/machine-id', (_req, res) => {
+  res.json({ machineId: MACHINE_ID });
 });
 
 app.get('/api/config/terminal', (_req, res) => {

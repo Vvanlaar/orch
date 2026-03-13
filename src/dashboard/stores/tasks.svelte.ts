@@ -3,6 +3,7 @@ import { setTasksHandler, setOutputHandler } from './websocket.svelte';
 import { readPreference, writePreference } from '../lib/preferences';
 
 // State
+let localMachineId = $state('');
 let tasks = $state<Task[]>([]);
 const EXPANDED_TASKS_STORAGE_KEY = 'orch.dashboard.tasks.expanded';
 const savedExpandedTasks = readPreference(
@@ -70,6 +71,21 @@ export function appendSteerInput(taskId: number, input: string) {
   taskOutputs.set(taskId, current + `\n> ${input}\n`);
   taskOutputs = new Map(taskOutputs);
 }
+
+export function getLocalMachineId() {
+  return localMachineId;
+}
+
+export async function fetchMachineId() {
+  try {
+    const res = await fetch('/api/config/machine-id');
+    const data = await res.json();
+    localMachineId = data.machineId || '';
+  } catch {}
+}
+
+// Fetch on module load
+fetchMachineId();
 
 export async function fetchTasks() {
   try {

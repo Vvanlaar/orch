@@ -23,6 +23,7 @@ export interface Task {
   output?: string; // persisted full output on completion/failure
   streamingOutput?: string; // live output during run
   pid?: number; // OS process ID when running
+  machineId?: string; // which machine is running this task
   createdAt: string;
   startedAt?: string;
   completedAt?: string;

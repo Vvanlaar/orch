@@ -45,6 +45,7 @@ export interface Task {
   result?: string;
   error?: string;
   streamingOutput?: string;
+  machineId?: string;
   context?: {
     title?: string;
     url?: string;
