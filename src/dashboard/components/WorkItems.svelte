@@ -826,12 +826,12 @@
     align-items: center;
     gap: 10px;
     padding: 8px 18px 10px;
-    border-bottom: 1px solid #2a313b;
+    border-bottom: 1px solid var(--border-primary);
   }
 
   .view-note {
     font-size: 11px;
-    color: #8b949e;
+    color: var(--text-muted);
     min-height: 16px;
   }
 
@@ -839,16 +839,16 @@
     display: inline-flex;
     gap: 2px;
     padding: 2px;
-    border: 1px solid #353d47;
+    border: 1px solid var(--border-bright);
     border-radius: 8px;
-    background: #0d1117;
+    background: var(--bg-deep);
   }
 
   .view-switch-btn {
     background: transparent;
     border: none;
     border-radius: 6px;
-    color: #8b949e;
+    color: var(--text-muted);
     padding: 5px 10px;
     display: inline-flex;
     align-items: center;
@@ -861,13 +861,13 @@
   }
 
   .view-switch-btn:hover {
-    color: #c9d1d9;
-    background: #2a313b;
+    color: var(--text-primary);
+    background: var(--bg-raised);
   }
 
   .view-switch-btn.active {
-    color: #58a6ff;
-    background: #122a4a;
+    color: #3b82f6;
+    background: var(--info-bg);
   }
 
   .view-icon {
@@ -889,7 +889,7 @@
   .kanban-board-wrapper {
     max-height: calc(100vh - 280px);
     overflow: auto;
-    border-top: 1px solid #2a313b;
+    border-top: 1px solid var(--border-primary);
   }
 
   .kanban-board {
@@ -899,8 +899,8 @@
   }
 
   .kanban-column {
-    background: #0d1117;
-    border: 1px solid #2a313b;
+    background: var(--bg-deep);
+    border: 1px solid var(--border-primary);
     border-radius: 8px;
     display: flex;
     flex-direction: column;
@@ -920,13 +920,13 @@
     gap: 8px;
     padding: 10px 12px;
     border: none;
-    border-bottom: 1px solid #2a313b;
+    border-bottom: 3px solid var(--border-primary);
     background: transparent;
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.04em;
     text-transform: uppercase;
-    color: #8b949e;
+    color: var(--text-muted);
     cursor: pointer;
     width: 100%;
     font-family: inherit;
@@ -934,7 +934,7 @@
   }
 
   .kanban-column-header:hover {
-    color: #c9d1d9;
+    color: var(--text-primary);
   }
 
   .collapsed .kanban-column-header {
@@ -969,18 +969,18 @@
   }
 
   .kanban-card {
-    background: #161b22;
-    border: 1px solid #2a313b;
-    border-left: 3px solid #8b949e;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-primary);
+    border-left: 3px solid var(--text-muted);
     border-radius: 8px;
     padding: 10px;
     transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
   }
 
   .kanban-card:hover {
-    border-color: #353d47;
+    border-color: var(--border-bright);
     transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
   }
 
   .kanban-card-top {
@@ -988,17 +988,17 @@
     justify-content: space-between;
     align-items: center;
     font-size: 10px;
-    color: #6e7681;
+    color: var(--text-dim);
     margin-bottom: 4px;
   }
 
   .kanban-card-top .ticket-link {
-    color: #6e7681;
+    color: var(--text-dim);
     font-size: 10px;
   }
 
   .kanban-card-top .ticket-link:hover {
-    color: #58a6ff;
+    color: var(--info);
   }
 
   .kanban-title {
@@ -1006,7 +1006,7 @@
     font-weight: 600;
     line-height: 1.35;
     margin-bottom: 6px;
-    color: #e6edf3;
+    color: var(--text-heading);
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
@@ -1028,7 +1028,7 @@
     gap: 5px;
     margin-top: 2px;
     padding-top: 8px;
-    border-top: 1px solid #21262d;
+    border-top: 1px solid var(--border-subtle);
   }
 
   .kanban-action-primary {
@@ -1057,20 +1057,20 @@
   }
 
   .kanban-empty {
-    color: #6e7681;
+    color: var(--text-dim);
     font-size: 11px;
     text-align: center;
     padding: 16px 8px;
   }
 
   .ticket-link {
-    color: #8b949e;
+    color: var(--text-muted);
     text-decoration: none;
     transition: color 0.15s;
   }
 
   .ticket-link:hover {
-    color: #58a6ff;
+    color: var(--info);
   }
 
   .list-row {
@@ -1078,14 +1078,14 @@
     grid-template-columns: 1fr auto;
     gap: 16px;
     padding: 10px 18px 10px 16px;
-    border-bottom: 1px solid #21262d;
-    border-left: 3px solid #8b949e;
+    border-bottom: 1px solid var(--border-subtle);
+    border-left: 3px solid var(--text-muted);
     align-items: center;
-    transition: background 0.1s;
+    transition: background 0.1s, border-left-color 0.15s;
   }
 
   .list-row:hover {
-    background: #1c2128;
+    background: var(--bg-raised);
   }
 
   .list-row-content {
@@ -1098,24 +1098,24 @@
     align-items: center;
     gap: 8px;
     font-size: 11px;
-    color: #6e7681;
+    color: var(--text-dim);
     margin-bottom: 2px;
   }
 
   .list-row-top .ticket-link {
-    color: #6e7681;
+    color: var(--text-dim);
     font-size: 11px;
   }
 
   .list-row-time {
-    color: #6e7681;
+    color: var(--text-dim);
     white-space: nowrap;
   }
 
   .list-row-title {
     font-size: 13px;
     font-weight: 600;
-    color: #e6edf3;
+    color: var(--text-heading);
     line-height: 1.35;
     margin-bottom: 4px;
     white-space: nowrap;
@@ -1145,7 +1145,7 @@
     display: inline-block;
     width: 5px;
     height: 5px;
-    background: #58a6ff;
+    background: var(--info);
     border-radius: 50%;
     margin-left: 4px;
     vertical-align: middle;
@@ -1162,10 +1162,10 @@
   .note-textarea {
     width: 100%;
     min-height: 60px;
-    background: #0d1117;
-    border: 1px solid #2a313b;
+    background: var(--bg-deep);
+    border: 1px solid var(--border-primary);
     border-radius: 6px;
-    color: #c9d1d9;
+    color: var(--text-primary);
     font-size: 12px;
     font-family: 'IBM Plex Mono', 'Consolas', monospace;
     padding: 8px 10px;
@@ -1175,23 +1175,23 @@
 
   .note-textarea:focus {
     outline: none;
-    border-color: #1f4a85;
+    border-color: #3b82f6;
   }
 
   .filter-separator {
     display: inline-block;
     width: 1px;
     height: 20px;
-    background: #353d47;
+    background: var(--border-bright);
     align-self: center;
     margin: 0 2px;
   }
 
   .group-toggle {
     background: transparent;
-    border: 1px solid #353d47;
+    border: 1px solid var(--border-bright);
     border-radius: 6px;
-    color: #8b949e;
+    color: var(--text-muted);
     padding: 3px 10px;
     font-size: 11px;
     font-weight: 600;
@@ -1201,18 +1201,18 @@
   }
 
   .group-toggle:hover {
-    color: #c9d1d9;
-    border-color: #58a6ff;
+    color: var(--text-primary);
+    border-color: #3b82f6;
   }
 
   .group-toggle.active {
-    color: #58a6ff;
-    background: #122a4a;
+    color: #3b82f6;
+    background: var(--info-bg);
     border-color: #1f4a85;
   }
 
   .parent-group {
-    border-bottom: 1px solid #2a313b;
+    border-bottom: 1px solid var(--border-primary);
   }
 
   .parent-group-header {
@@ -1221,10 +1221,10 @@
     gap: 8px;
     width: 100%;
     padding: 8px 18px;
-    background: #0d1117;
+    background: var(--bg-deep);
     border: none;
-    border-bottom: 1px solid #21262d;
-    color: #c9d1d9;
+    border-bottom: 1px solid var(--border-subtle);
+    color: var(--text-primary);
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
@@ -1233,18 +1233,18 @@
   }
 
   .parent-group-header:hover {
-    background: #161b22;
+    background: var(--bg-surface);
   }
 
   .parent-group-chevron {
-    color: #6e7681;
+    color: var(--text-dim);
     font-size: 11px;
     width: 12px;
     flex-shrink: 0;
   }
 
   .parent-group-link {
-    color: #58a6ff;
+    color: var(--info);
     text-decoration: none;
     font-size: 11px;
     flex-shrink: 0;
@@ -1271,10 +1271,10 @@
     gap: 6px;
     width: 100%;
     padding: 6px 8px;
-    background: #0d1117;
+    background: var(--bg-deep);
     border: none;
     border-radius: 6px;
-    color: #8b949e;
+    color: var(--text-muted);
     font-size: 10px;
     font-weight: 600;
     cursor: pointer;
@@ -1284,8 +1284,8 @@
   }
 
   .kanban-parent-header:hover {
-    background: #161b22;
-    color: #c9d1d9;
+    background: var(--bg-surface);
+    color: var(--text-primary);
   }
 
   .kanban-parent-title {

@@ -289,37 +289,37 @@
 
 <style>
   .ticket-link {
-    color: #8b949e;
+    color: var(--text-muted);
     text-decoration: none;
     transition: color 0.15s;
   }
 
   .ticket-link:hover {
-    color: #58a6ff;
+    color: var(--info);
   }
 
   .sprint-header {
     padding: 10px 18px;
-    background: #151b23;
+    background: var(--bg-deep);
     font-size: 12px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    color: #8b949e;
+    color: var(--text-muted);
   }
 
   .current-user {
-    color: #58a6ff;
+    color: var(--info);
     font-weight: 500;
   }
 
   .section-header {
     padding: 8px 18px;
-    background: #151b23;
+    background: var(--bg-deep);
     font-size: 11px;
     font-weight: 600;
-    color: #8b949e;
-    border-bottom: 1px solid #21262d;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border-subtle);
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -333,7 +333,7 @@
   }
 
   .section-header.clickable:hover {
-    background: #161b22;
+    background: var(--bg-surface);
   }
 
   .toggle-icon {
@@ -345,7 +345,7 @@
     align-items: center;
     justify-content: space-between;
     padding: 12px 18px;
-    border-top: 1px solid #2a313b;
+    border-top: 1px solid var(--border-primary);
     gap: 12px;
   }
 
@@ -359,7 +359,7 @@
 
   .assign-label {
     font-size: 11px;
-    color: #8b949e;
+    color: var(--text-muted);
     white-space: nowrap;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -375,7 +375,7 @@
   .team-member {
     padding: 3px 10px;
     border-radius: 6px;
-    background: #2a313b;
+    background: var(--bg-raised);
     cursor: pointer;
     font-size: 11px;
     font-weight: 500;
@@ -383,13 +383,13 @@
   }
 
   .team-member:hover {
-    background: #353d47;
+    background: var(--bg-overlay);
   }
 
   .team-member.selected {
-    background: #123620;
-    color: #3fb950;
-    border: 1px solid #16381f;
+    background: var(--success-bg);
+    color: var(--success);
+    border: 1px solid #065f46;
   }
 
   .assign-controls {
@@ -405,8 +405,8 @@
   }
 
   .badge-person {
-    background: #2a313b;
-    color: #8b949e;
+    background: var(--bg-raised);
+    color: var(--text-muted);
     padding: 2px 8px;
     border-radius: 4px;
     font-size: 10px;
@@ -414,18 +414,18 @@
   }
 
   .badge-person.assigned {
-    background: #123620;
-    color: #3fb950;
+    background: var(--success-bg);
+    color: var(--success);
   }
 
   .badge-person.unassigned {
-    background: #361414;
-    color: #f85149;
+    background: var(--danger-bg);
+    color: var(--danger);
   }
 
   .badge.repo {
-    background: #122a4a;
-    color: #58a6ff;
+    background: var(--info-bg);
+    color: var(--info);
     padding: 2px 8px;
     border-radius: 4px;
     font-size: 10px;
@@ -442,10 +442,10 @@
 
   .repo-selector select {
     padding: 4px 8px;
-    background: #0d1117;
-    border: 1px solid #2a313b;
+    background: var(--bg-deep);
+    border: 1px solid var(--border-primary);
     border-radius: 6px;
-    color: #c9d1d9;
+    color: var(--text-primary);
     font-size: 11px;
     min-width: 180px;
     font-family: 'IBM Plex Sans', system-ui, sans-serif;
@@ -454,7 +454,7 @@
 
   .repo-selector select:focus {
     outline: none;
-    border-color: #1f4a85;
+    border-color: var(--info);
   }
 
   .clone-btn {

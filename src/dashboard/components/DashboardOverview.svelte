@@ -72,9 +72,9 @@
   let pendingActions = $derived(orch.actions.filter(a => !a.accepted && !a.dismissed));
 
   function usageColor(pct: number): string {
-    if (pct >= 90) return '#f85149';
-    if (pct >= 70) return '#f0883e';
-    return '#3fb950';
+    if (pct >= 90) return 'var(--danger)';
+    if (pct >= 70) return 'var(--warning)';
+    return 'var(--success)';
   }
 
   onMount(() => {
@@ -82,7 +82,7 @@
   });
 </script>
 
-<div class="overview">
+<div class="dash overview">
   <!-- Claude Usage -->
   <div class="card summary-card">
     <h2>Claude Usage</h2>
@@ -149,7 +149,7 @@
           <span class="stat-label">author</span>
         </div>
         <div class="stat">
-          <span class="stat-value" style="color: #f0883e">{prCounts.reviewer}</span>
+          <span class="stat-value" style="color: var(--warning)">{prCounts.reviewer}</span>
           <span class="stat-label">reviewer</span>
         </div>
       </div>
@@ -162,11 +162,11 @@
     <div class="card-body">
       <div class="stat-grid">
         <div class="stat">
-          <span class="stat-value" style="color: #3fb950">{taskCounts.running}</span>
+          <span class="stat-value" style="color: var(--success)">{taskCounts.running}</span>
           <span class="stat-label">running</span>
         </div>
         <div class="stat">
-          <span class="stat-value" style="color: #58a6ff">{taskCounts.pending}</span>
+          <span class="stat-value" style="color: var(--info)">{taskCounts.pending}</span>
           <span class="stat-label">pending</span>
         </div>
         <div class="stat">
@@ -175,7 +175,7 @@
         </div>
         {#if taskCounts.failed > 0}
           <div class="stat">
-            <span class="stat-value" style="color: #f85149">{taskCounts.failed}</span>
+            <span class="stat-value" style="color: var(--danger)">{taskCounts.failed}</span>
             <span class="stat-label">failed</span>
           </div>
         {/if}
@@ -214,7 +214,7 @@
           <span class="stat-label">pages</span>
         </div>
         <div class="stat">
-          <span class="stat-value" style="color: #3fb950">{scanSummary.totalWithVideo}</span>
+          <span class="stat-value" style="color: var(--success)">{scanSummary.totalWithVideo}</span>
           <span class="stat-label">with video</span>
         </div>
       </div>
@@ -237,6 +237,13 @@
 </div>
 
 <style>
+  .dash {
+    --accent: #f59e0b;
+    --accent-bright: #fbbf24;
+    --accent-dim: #92400e;
+    --accent-glow: rgba(245, 158, 11, 0.15);
+  }
+
   .overview {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -248,16 +255,18 @@
     text-align: left;
     font: inherit;
     cursor: default;
+    border-left: 3px solid var(--accent-dim);
+    transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
   }
 
   .summary-card.clickable {
     cursor: pointer;
-    transition: border-color 0.15s, transform 0.1s;
   }
 
   .summary-card.clickable:hover {
-    border-color: #3d444d;
     transform: translateY(-1px);
+    border-left-color: var(--accent);
+    box-shadow: 0 0 20px var(--accent-glow);
   }
 
   .card-body {
@@ -279,27 +288,27 @@
 
   .usage-label {
     font-size: 11px;
-    color: #8b949e;
+    color: var(--text-muted);
     min-width: 42px;
     font-family: 'IBM Plex Mono', monospace;
   }
 
   .usage-bar-wrap {
     flex: 1;
-    height: 8px;
-    background: #2a313b;
-    border-radius: 4px;
+    height: 10px;
+    background: var(--bg-raised);
+    border-radius: 5px;
     overflow: hidden;
   }
 
   .usage-bar {
     height: 100%;
-    border-radius: 4px;
+    border-radius: 5px;
     transition: width 0.3s;
   }
 
   .usage-pct {
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 600;
     min-width: 36px;
     text-align: right;
@@ -308,7 +317,7 @@
 
   .usage-reset {
     font-size: 10px;
-    color: #6e7681;
+    color: var(--text-dim);
     margin-left: 52px;
   }
 
@@ -327,24 +336,24 @@
   }
 
   .stat-value {
-    font-size: 20px;
+    font-size: 24px;
     font-weight: 700;
-    color: #e6edf3;
+    color: var(--text-heading);
     font-family: 'IBM Plex Mono', monospace;
     line-height: 1;
   }
 
   .stat-label {
     font-size: 10px;
-    color: #6e7681;
+    color: var(--text-dim);
     margin-top: 4px;
     text-transform: uppercase;
     letter-spacing: 0.03em;
   }
 
-  .state-new { color: #58a6ff; }
-  .state-active { color: #3fb950; }
-  .state-resolved { color: #8b949e; }
+  .state-new { color: var(--info); }
+  .state-active { color: var(--success); }
+  .state-resolved { color: var(--text-muted); }
   .state-reviewed { color: #a371f7; }
 
   /* Running tasks */
@@ -353,7 +362,7 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    border-top: 1px solid #21262d;
+    border-top: 1px solid var(--border-subtle);
     padding-top: 10px;
   }
 
@@ -362,26 +371,28 @@
     align-items: center;
     gap: 8px;
     font-size: 11px;
+    border-left: 2px solid var(--success);
+    padding-left: 8px;
   }
 
   .running-dot {
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: #3fb950;
+    background: var(--success);
     flex-shrink: 0;
     animation: pulse 2s infinite;
   }
 
   .running-name {
-    color: #c9d1d9;
+    color: var(--text-primary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   .running-repo {
-    color: #6e7681;
+    color: var(--text-dim);
     margin-left: auto;
     flex-shrink: 0;
     font-family: 'IBM Plex Mono', monospace;
@@ -404,24 +415,24 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #6e7681;
+    background: var(--text-dim);
   }
 
   .orch-dot.running {
-    background: #3fb950;
+    background: var(--success);
     animation: pulse 2s infinite;
   }
 
   .orch-label {
     font-size: 13px;
-    color: #c9d1d9;
+    color: var(--text-primary);
     text-transform: capitalize;
   }
 
   .orch-pending {
     font-size: 11px;
-    background: #362210;
-    color: #f0883e;
+    background: var(--warning-bg);
+    color: var(--warning);
     padding: 2px 8px;
     border-radius: 4px;
     font-weight: 500;
