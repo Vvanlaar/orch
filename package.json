@@ -7,7 +7,9 @@
   "scripts": {
     "dev:server": "tsx watch src/server/index.ts",
     "dev:dashboard": "vite src/dashboard",
+    "clean": "rm -rf dist",
     "build": "tsc && npm run build:dashboard",
+    "rebuild": "npm run clean && npm run build",
     "build:dashboard": "vite build src/dashboard",
     "start": "node dist/server/index.js",
     "test": "vitest",
