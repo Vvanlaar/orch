@@ -259,11 +259,11 @@
     justify-content: space-between;
     align-items: center;
     margin-bottom: 20px;
-    padding-bottom: 16px;
-    border-bottom: 1px solid var(--border-primary);
-    background: linear-gradient(180deg, var(--bg-raised) 0%, transparent 100%);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-primary);
     padding: 16px 20px;
     border-radius: 10px;
+    box-shadow: var(--shadow-card);
   }
 
   h1 {
