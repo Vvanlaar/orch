@@ -12,6 +12,7 @@
     "start": "node dist/server/index.js",
     "test": "vitest",
     "dev": "concurrently --kill-others \"npm:dev:server\" \"npm:dev:dashboard\"",
+    "postinstall": "npx playwright install chromium",
     "build:desktop": "npm run build && cp -r dist/server dist/core dist/dashboard desktop/ && cd desktop && npm install && npx electron-builder --win"
   },
   "dependencies": {
