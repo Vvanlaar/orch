@@ -62,12 +62,12 @@
 </script>
 
 <div class="card" class:collapsed={cardCollapsed}>
-  <h2 class="process-header" onclick={toggleCard}>
-    <span>Processes</span>
-    <div class="process-actions" onclick={e => e.stopPropagation()}>
-      <button class="action-btn secondary" onclick={fetchProcesses}>Refresh</button>
-      <button class="action-btn kill-old" onclick={handleKillOld}>Kill Old (2h+)</button>
-      <button class="action-btn kill-all" onclick={handleKillAll}>Kill All</button>
+  <h2 class="process-header">
+    <button type="button" class="card-toggle" onclick={toggleCard}>Processes</button>
+    <div class="process-actions">
+      <button type="button" class="action-btn secondary" onclick={fetchProcesses}>Refresh</button>
+      <button type="button" class="action-btn kill-old" onclick={handleKillOld}>Kill Old (2h+)</button>
+      <button type="button" class="action-btn kill-all" onclick={handleKillAll}>Kill All</button>
     </div>
   </h2>
   {#if !cardCollapsed}

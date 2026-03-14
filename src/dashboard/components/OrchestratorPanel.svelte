@@ -68,15 +68,15 @@
 </script>
 
 <div class="card orch-panel" class:collapsed={cardCollapsed}>
-  <h2 onclick={toggleCard}>
-    Auto-Orchestrator
-    <span class="orch-controls" onclick={e => e.stopPropagation()}>
+  <h2>
+    <button type="button" class="card-toggle" onclick={toggleCard}>Auto-Orchestrator</button>
+    <span class="orch-controls">
       {#if state.status !== 'idle'}
         <span class="status-badge" class:gathering={state.status === 'gathering'} class:analyzing={state.status === 'analyzing'} class:ready={state.status === 'ready'} class:error={state.status === 'error'}>
           {state.status}
         </span>
       {/if}
-      <button class="action-btn orch-run-btn" onclick={triggerOrchestration} disabled={isRunning}>
+      <button type="button" class="action-btn orch-run-btn" onclick={triggerOrchestration} disabled={isRunning}>
         {isRunning ? 'Running...' : 'Run'}
       </button>
     </span>
@@ -197,7 +197,6 @@
 
   .orch-panel h2 {
     display: flex;
-    justify-content: space-between;
     align-items: center;
   }
 

@@ -26,7 +26,7 @@
 </script>
 
 <div class="card tasks" class:collapsed={cardCollapsed}>
-  <h2 onclick={toggleCard}>Orch Tasks</h2>
+  <h2><button type="button" class="card-toggle" onclick={toggleCard}>Orch Tasks</button></h2>
   {#if !cardCollapsed}
     <div class="card-body">
       <div class="card-list">

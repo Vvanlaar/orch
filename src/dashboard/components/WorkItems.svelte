@@ -403,7 +403,7 @@
 </script>
 
 <div class="card" class:collapsed={cardCollapsed} style="margin-bottom: 20px;">
-  <h2 onclick={toggleCard}>{isPRMode ? 'Pull Requests' : 'Work Items'}</h2>
+  <h2><button type="button" class="card-toggle" onclick={toggleCard}>{isPRMode ? 'Pull Requests' : 'Work Items'}</button></h2>
   {#if !cardCollapsed}
   <div class="card-body">
   <div class="filters" style="margin-bottom: 4px;">

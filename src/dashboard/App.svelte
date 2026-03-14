@@ -173,19 +173,28 @@
   }
 
   :global(.card > h2) {
-    cursor: pointer;
     user-select: none;
   }
 
-  :global(.card > h2::before) {
+  :global(.card-toggle) {
+    all: unset;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    flex: 1;
+    min-width: 0;
+  }
+
+  :global(.card-toggle::before) {
     content: '\25BC';
     display: inline-block;
     margin-right: 8px;
     font-size: 9px;
     transition: transform 0.15s;
+    flex-shrink: 0;
   }
 
-  :global(.card.collapsed > h2::before) {
+  :global(.card.collapsed .card-toggle::before) {
     transform: rotate(-90deg);
   }
 

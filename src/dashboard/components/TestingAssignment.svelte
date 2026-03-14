@@ -117,7 +117,7 @@
 </script>
 
 <div class="card" class:collapsed={cardCollapsed}>
-  <h2 onclick={toggleCard}>Testing Assignment</h2>
+  <h2><button type="button" class="card-toggle" onclick={toggleCard}>Testing Assignment</button></h2>
   {#if !cardCollapsed}
   <div class="card-body">
   <div class="sprint-header">
