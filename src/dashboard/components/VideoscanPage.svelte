@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getScans, fetchScans, startScan, startGroupScan, resumeScan, addUrlsToScan, mergeDomainScans, regenerateReport, regeneratePreview, isLoading, importDigiToegankelijk, type ScanSummary, type DigiImportResult } from '../stores/videoscan.svelte';
+  import { getScans, fetchScans, startScan, startGroupScan, resumeScan, addUrlsToScan, mergeDomainScans, regenerateReport, regeneratePreview, isLoading, importDigiToegankelijk, type ScanSummary, type DigiImportResult, type ReportOptions } from '../stores/videoscan.svelte';
   import { getTasks, getTaskOutput, isExpanded, toggleExpanded } from '../stores/tasks.svelte';
 
   let url = $state('');
@@ -166,6 +166,8 @@
   let generating = $state<string | null>(null);
   let generatingPreview = $state<string | null>(null);
   let merging = $state(false);
+  let showReportOptions = $state<string | null>(null);
+  let reportOpts = $state<ReportOptions>({});
 
   // DigiToegankelijk import state
   let importPreview = $state<DigiImportResult | null>(null);
@@ -188,11 +190,12 @@
     }
   }
 
-  async function handleGenerateReport(scan: ScanSummary) {
+  async function handleGenerateReport(scan: ScanSummary, opts?: ReportOptions) {
     if (generating) return;
     generating = scan.filename;
+    showReportOptions = null;
     try {
-      await regenerateReport(scan.filename);
+      await regenerateReport(scan.filename, opts);
     } catch (err: any) {
       error = err.message;
     } finally {
@@ -204,7 +207,7 @@
     if (generatingPreview) return;
     generatingPreview = scan.filename;
     try {
-      await regeneratePreview(scan.filename);
+      await regeneratePreview(scan.filename, reportOpts);
     } catch (err: any) {
       error = err.message;
     } finally {
@@ -431,7 +434,7 @@
                           <a class="sb prv" href="/api/videoscans/files/{scan.filename.replace('.json', '-preview.html')}" target="_blank">Preview</a>
                         {/if}
                         <a class="sb" href="/api/videoscans/files/{scan.filename}" target="_blank" download>JSON</a>
-                        <button class="sb" onclick={() => handleGenerateReport(scan)} disabled={generating === scan.filename}>
+                        <button class="sb" onclick={() => { showReportOptions = showReportOptions === scan.filename ? null : scan.filename; reportOpts = {}; }} disabled={generating === scan.filename}>
                           {generating === scan.filename ? '...' : scan.hasReport ? 'Regen' : 'Gen'}
                         </button>
                         {#if scan.hasReport && !scan.hasPreview}
@@ -446,6 +449,21 @@
                       </div>
                     </div>
                   </div>
+                  {#if showReportOptions === scan.filename}
+                    <div class="add-urls-panel" style="gap:6px">
+                      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+                        <input class="add-urls-ta" style="padding:6px 8px;font-size:12px" placeholder="Cover image URL" bind:value={reportOpts.coverImageUrl}>
+                        <input class="add-urls-ta" style="padding:6px 8px;font-size:12px" placeholder="Contact image URL" bind:value={reportOpts.contactImageUrl}>
+                        <input class="add-urls-ta" style="padding:6px 8px;font-size:12px" placeholder="Contact name" bind:value={reportOpts.contactName}>
+                        <input class="add-urls-ta" style="padding:6px 8px;font-size:12px" placeholder="Contact phone" bind:value={reportOpts.contactPhone}>
+                        <input class="add-urls-ta" style="padding:6px 8px;font-size:12px;grid-column:span 2" placeholder="Contact email" bind:value={reportOpts.contactEmail}>
+                      </div>
+                      <div class="add-urls-btns">
+                        <button class="sb res" onclick={() => handleGenerateReport(scan, reportOpts)}>Generate</button>
+                        <button class="sb" onclick={() => showReportOptions = null}>Cancel</button>
+                      </div>
+                    </div>
+                  {/if}
                   {#if addingUrlsTo === scan.filename}
                     <div class="add-urls-panel">
                       <textarea

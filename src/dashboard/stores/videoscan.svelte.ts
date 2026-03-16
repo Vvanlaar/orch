@@ -56,14 +56,22 @@ export function addUrlsToScan(filename: string, urls: string[], concurrency: num
   return postJson('/api/actions/add-urls-to-scan', { filename, urls, concurrency, delay });
 }
 
-export async function regenerateReport(filename: string) {
-  const result = await postJson('/api/videoscans/generate-report', { filename });
+export interface ReportOptions {
+  coverImageUrl?: string;
+  contactImageUrl?: string;
+  contactName?: string;
+  contactPhone?: string;
+  contactEmail?: string;
+}
+
+export async function regenerateReport(filename: string, options?: ReportOptions) {
+  const result = await postJson('/api/videoscans/generate-report', { filename, ...options });
   await fetchScans();
   return result;
 }
 
-export async function regeneratePreview(filename: string) {
-  const result = await postJson('/api/videoscans/generate-preview', { filename });
+export async function regeneratePreview(filename: string, options?: ReportOptions) {
+  const result = await postJson('/api/videoscans/generate-preview', { filename, ...options });
   await fetchScans();
   return result;
 }
