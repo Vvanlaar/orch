@@ -1554,12 +1554,12 @@ app.get('/api/videoscans', asyncHandler(async (_req, res) => {
 }));
 
 app.post('/api/videoscans/merge', asyncHandler(async (req, res) => {
-  const { filenames } = req.body;
+  const { filenames, label } = req.body;
   if (!Array.isArray(filenames) || filenames.length < 2) {
     res.status(400).json({ error: 'Need at least 2 filenames to merge' });
     return;
   }
-  const result = mergeScans(filenames);
+  const result = mergeScans(filenames, label);
   await syncScanToSupabase(result.filename);
   if (isSupabaseConfigured()) await dbArchiveVideoscans(filenames);
   res.json(result);

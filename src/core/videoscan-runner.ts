@@ -390,7 +390,7 @@ export function mergeScansData(scansData: ScanData[]): ScanData {
   };
 }
 
-export function mergeScans(filenames: string[]): MergeResult {
+export function mergeScans(filenames: string[], label?: string): MergeResult {
   if (filenames.length < 2) throw new Error('Need at least 2 scans to merge');
 
   const scansData = filenames.map(f => {
@@ -399,11 +399,12 @@ export function mergeScans(filenames: string[]): MergeResult {
     return JSON.parse(readFileSync(path, 'utf-8')) as ScanData;
   });
 
-  // Verify same domain
+  // Verify same domain unless label provided (cross-domain merge)
   const domains = new Set(scansData.map(d => d.domain));
-  if (domains.size > 1) throw new Error(`Cannot merge scans from different domains: ${[...domains].join(', ')}`);
+  if (!label && domains.size > 1) throw new Error(`Cannot merge scans from different domains: ${[...domains].join(', ')}. Use label param for cross-domain merge.`);
 
   const merged = mergeScansData(scansData);
+  if (label) merged.domain = label;
 
   // Write merged file
   const ts = merged.scanDate.replace(/[:.]/g, '-').replace('Z', '');
