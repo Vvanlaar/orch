@@ -52,11 +52,13 @@ export interface ReportOptions {
 function reportOptionsToArgs(options?: ReportOptions): string[] {
   if (!options) return [];
   const args: string[] = [];
-  if (options.coverImageUrl) args.push('--cover-image', options.coverImageUrl);
-  if (options.contactImageUrl) args.push('--contact-image', options.contactImageUrl);
-  if (options.contactName) args.push('--contact-name', options.contactName);
-  if (options.contactPhone) args.push('--contact-phone', options.contactPhone);
-  if (options.contactEmail) args.push('--contact-email', options.contactEmail);
+  // Quote values to handle spaces (spawn with shell: true joins args)
+  const q = (v: string) => `"${v.replace(/"/g, '\\"')}"`;
+  if (options.coverImageUrl) args.push('--cover-image', q(options.coverImageUrl));
+  if (options.contactImageUrl) args.push('--contact-image', q(options.contactImageUrl));
+  if (options.contactName) args.push('--contact-name', q(options.contactName));
+  if (options.contactPhone) args.push('--contact-phone', q(options.contactPhone));
+  if (options.contactEmail) args.push('--contact-email', q(options.contactEmail));
   return args;
 }
 
