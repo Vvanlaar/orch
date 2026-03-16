@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{title}}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,400;0,500;0,700;1,400;1,700&display=swap">
+  <style>
+    @font-face { font-family: 'Gustavo'; src: url('https://d3bn524hv76vco.cloudfront.net/upload/newskin.acc/f26146ff9bc1ae4ad6541812c26349c0f5d0c493.otf') format('opentype'); font-weight: 500; }
+    @font-face { font-family: 'Gustavo'; src: url('https://d3bn524hv76vco.cloudfront.net/upload/newskin.acc/8077700769db7db2280aa07ecc0d70bdd665ade3.otf') format('opentype'); font-weight: 700; }
+    :root { --primary: #3578BB; --primary-light: #9ABBDD; --text-dark: #002837; --bg-box: #FAFBFB; --border-box: #F5F6F7; --accent-red: #ED6A5B; --accent-green: #46AF91; --white: #FFFFFF; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Montserrat', sans-serif; color: var(--text-dark); background: #f5f5f5; line-height: 1.5; }
+    .page { background: var(--white); max-width: 900px; margin: 0 auto; padding: 40px 48px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); position: relative; }
+    .page::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 4px; background: var(--primary); }
+    h1 { font-family: 'Gustavo', sans-serif; font-size: 28px; font-weight: 700; color: var(--text-dark); }
+    h2 { font-family: 'Gustavo', sans-serif; font-size: 18px; font-weight: 700; color: var(--text-dark); margin: 20px 0 8px; }
+    .highlight-line { display: inline; background-image: linear-gradient(var(--primary-light), var(--primary-light)); background-repeat: no-repeat; background-size: 100% 10px; background-position: 0 112%; }
+    .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0; }
+    .stat-box { background: var(--bg-box); border: 1px solid var(--border-box); border-radius: 8px; padding: 14px; text-align: center; }
+    .stat-box .number { font-family: 'Gustavo', sans-serif; font-size: 28px; font-weight: 700; color: var(--text-dark); }
+    .stat-box .label { font-size: 10px; text-transform: uppercase; color: var(--primary); font-weight: 700; letter-spacing: 0.5px; margin-top: 2px; }
+    .flag { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; margin: 4px 4px 4px 0; }
+    .flag-red { background: #fff5f5; color: #c0392b; border: 1px solid #f5c6cb; }
+    .flag-orange { background: #fff8f0; color: #e67e22; border: 1px solid #fde2c8; }
+    .flag-green { background: #f0faf4; color: var(--accent-green); border: 1px solid #c3e6cb; }
+    .cta-bar { background: linear-gradient(135deg, var(--text-dark) 0%, var(--primary) 100%); color: var(--white); padding: 20px 24px; border-radius: 0 0 20px 0; margin-top: 20px; display: flex; justify-content: space-between; align-items: center; }
+    .cta-btn { display: inline-block; background: var(--accent-red); color: var(--white); padding: 10px 24px; border-radius: 0 0 12px 0; text-decoration: none; font-family: 'Gustavo', sans-serif; font-weight: 700; font-size: 14px; }
+    @media print { body { background: white; } .page { box-shadow: none; margin: 0; } }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div>
+        <h1><span class="highlight-line">Video Quick Scan</span></h1>
+        <div style="color:#666;font-size:15px;margin-top:4px">{{orgName}} — {{dateStr}}</div>
+      </div>
+      <div><img src="https://d3bn524hv76vco.cloudfront.net/upload/newskin.acc/780b5079ecb7d44a8d5a2d090d06882962d5ab17.svg" alt="Blue Billywig" style="height:32px"></div>
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat-box"><div class="number">{{pagesScanned}}</div><div class="label">Pagina's gescand</div></div>
+      <div class="stat-box"><div class="number">{{pagesWithVideo}}</div><div class="label">Pagina's met video</div></div>
+      <div class="stat-box"><div class="number">{{playerCount}}</div><div class="label">Videospelers</div></div>
+      <div class="stat-box"><div class="number">{{videoEmbeds}}</div><div class="label">Video-embeds</div></div>
+    </div>
+
+    <div style="display:flex;gap:32px;flex-wrap:wrap">
+      <div style="flex:1;min-width:240px">
+        <h2>Gevonden players</h2>
+        {{pieChart}}
+      </div>
+      <div style="flex:1;min-width:240px">
+        {{privacyFlags}}
+        {{accessibilityFlags}}
+      </div>
+    </div>
+
+    <div class="cta-bar">
+      <div>
+        <div style="font-weight:700;font-size:16px">Benieuwd naar het volledige rapport?</div>
+        <div style="font-size:14px;opacity:0.85;margin-top:4px">Privacy-analyse, toegankelijkheidsdetails en aanbevelingen.</div>
+      </div>
+      <a class="cta-btn" href="https://www.bluebillywig.com/nl/demo/">Plan een afspraak</a>
+    </div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px;padding-top:8px;border-top:2px solid var(--primary);font-size:12px;color:#999">
+      <span>Video Quick Scan — {{orgName}}</span>
+      <img src="https://d3bn524hv76vco.cloudfront.net/upload/newskin.acc/780b5079ecb7d44a8d5a2d090d06882962d5ab17.svg" alt="Blue Billywig" style="height:20px">
+    </div>
+  </div>
+</body>
+</html>

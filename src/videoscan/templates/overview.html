@@ -1,0 +1,31 @@
+  <div class="page" id="page1">
+    <h1><span class="highlight-line">Overzicht videogebruik</span></h1>
+
+    <p>We hebben het videolandschap van {{orgName}} in kaart gebracht. Er zijn in totaal <strong class="text-primary">{{pagesWithVideo}} pagina's met video</strong> gevonden op de onderzochte domeinen.</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Sectie URL</th>
+          <th>Aantal pagina's</th>
+          <th>Aangetroffen Players</th>
+        </tr>
+      </thead>
+      <tbody>
+{{sectionTableRows}}
+      </tbody>
+    </table>
+
+    <div class="stats-overview">
+      <div class="grid-3">
+{{statsBoxes}}
+      </div>
+      <div class="pie-row">
+{{pieChart}}
+      </div>
+    </div>
+
+{{detailTable}}
+
+{{footer}}
+  </div>
