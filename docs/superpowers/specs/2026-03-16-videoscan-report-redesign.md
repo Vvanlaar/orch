@@ -37,12 +37,12 @@ src/videoscan/
   templates/
     styles.css                  ← full CSS from designer (CSS variables, all component styles)
     document.html               ← outer HTML shell: <!DOCTYPE>, <head>, font links, {{title}}, {{styles}}, <body>{{pages}}</body>
-    cover.html                  ← cover page: {{orgName}}, {{coverImageUrl}}, {{introText}}, {{dateStr}}, {{bbLogoSvg}}
-    overview.html               ← stats + section table + pie chart + detail table: {{statsBoxes}}, {{sectionTable}}, {{pieChart}}, {{detailTable}}, {{footer}}
-    accessibility.html          ← bar chart + audit table + tags: {{barChart}}, {{auditTable}}, {{techTags}}, {{contentTags}}, {{footer}}
+    cover.html                  ← cover page: {{orgName}}, {{coverImageUrl}}, {{introText}}, {{dateStr}} (BB logo hardcoded as <img> URL)
+    overview.html               ← {{orgName}}, {{pagesWithVideo}}, {{statsBoxes}}, {{sectionTableRows}}, {{pieChart}}, {{detailTable}}, {{footer}}
+    accessibility.html          ← {{barChart}}, {{auditTable}}, {{footer}} (tech/content tag grids are static HTML, not placeholders)
     privacy.html                ← risks + cookie card: {{nonEuCount}}, {{privacyRiskItems}}, {{cookieSection}}, {{footer}}
     checklist.html              ← static content, {{footer}}
-    contact.html                ← {{contactName}}, {{contactPhone}}, {{contactEmail}}, {{contactImageUrl}}, {{footer}}
+    contact.html                ← {{contactName}}, {{contactPhone}}, {{contactEmail}}, {{contactImageUrl}} (own footer layout, no {{footer}})
     footer.html                 ← reusable footer fragment: {{pageNumber}} — injected into each page template via {{footer}}
     preview.html                ← single-page preview: {{orgName}}, {{dateStr}}, {{pagesScanned}}, {{pagesWithVideo}}, {{playerCount}}, {{videoEmbeds}}, {{pieChart}}, {{privacyFlags}}, {{accessibilityFlags}}
 ```
