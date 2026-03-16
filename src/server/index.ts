@@ -1435,6 +1435,31 @@ app.post('/api/actions/start-videoscan', asyncHandler(async (req, res) => {
   res.json({ taskId: task.id, message: `Videoscan task #${task.id} created` });
 }));
 
+app.post('/api/actions/start-videoscan-urls', asyncHandler(async (req, res) => {
+  const { urls, maxPages, concurrency, delay } = req.body;
+  if (!Array.isArray(urls) || urls.length === 0 || urls.length > 500) {
+    res.status(400).json({ error: 'urls must be an array of 1-500 URLs' });
+    return;
+  }
+  const invalidUrl = urls.find((u: string) => { try { new URL(u); return false; } catch { return true; } });
+  if (invalidUrl) { res.status(400).json({ error: `Invalid URL: ${invalidUrl}` }); return; }
+
+  const domain = new URL(urls[0]).hostname;
+  const task = await createTask('videoscan', urls[0], getVideoscanDir(), {
+    source: 'github',
+    event: 'videoscan',
+    title: `Videoscan: ${domain} (${urls.length} URLs)`,
+    scanUrl: urls[0],
+    urls,
+    maxPages: maxPages || 50,
+    concurrency: concurrency || 6,
+    delay: delay ?? 200,
+  });
+  triggerUpdate();
+  await broadcastTasks();
+  res.json({ taskId: task.id, message: `Videoscan task #${task.id} created for ${domain} (${urls.length} URLs)` });
+}));
+
 app.post('/api/actions/resume-videoscan', asyncHandler(async (req, res) => {
   const { filename, maxPages, concurrency, delay } = req.body;
   if (!filename || typeof filename !== 'string') {

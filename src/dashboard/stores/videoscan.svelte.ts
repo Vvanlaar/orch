@@ -44,6 +44,10 @@ export function startScan(url: string, maxPages: number, concurrency: number, de
   return postJson('/api/actions/start-videoscan', { url, maxPages, concurrency, delay });
 }
 
+export function startGroupScan(urls: string[], maxPages: number, concurrency: number, delay: number) {
+  return postJson('/api/actions/start-videoscan-urls', { urls, maxPages, concurrency, delay });
+}
+
 export function resumeScan(filename: string, maxPages: number, concurrency: number, delay: number) {
   return postJson('/api/actions/resume-videoscan', { filename, maxPages, concurrency, delay });
 }

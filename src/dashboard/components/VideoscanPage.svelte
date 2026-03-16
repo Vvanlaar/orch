@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getScans, fetchScans, startScan, resumeScan, addUrlsToScan, mergeDomainScans, regenerateReport, regeneratePreview, isLoading, importDigiToegankelijk, type ScanSummary, type DigiImportResult } from '../stores/videoscan.svelte';
+  import { getScans, fetchScans, startScan, startGroupScan, resumeScan, addUrlsToScan, mergeDomainScans, regenerateReport, regeneratePreview, isLoading, importDigiToegankelijk, type ScanSummary, type DigiImportResult } from '../stores/videoscan.svelte';
   import { getTasks, getTaskOutput, isExpanded, toggleExpanded } from '../stores/tasks.svelte';
 
   let url = $state('');
@@ -98,24 +98,32 @@
     bulkProgress = 0;
   }
 
+  let bulkGroupCount = $derived.by(() => {
+    if (!importPreview) return 0;
+    return importPreview.groups.filter(g => g.sites.some(s => selectedUrls.has(s.url))).length;
+  });
+
   async function handleBulkStart() {
     if (!importPreview || bulkStarting) return;
-    const urls = [...selectedUrls];
     bulkStarting = true;
     bulkProgress = 0;
     error = '';
     const errors: string[] = [];
-    const BATCH_SIZE = 5;
-    for (let i = 0; i < urls.length; i += BATCH_SIZE) {
-      const batch = urls.slice(i, i + BATCH_SIZE);
-      await Promise.all(batch.map(async (scanUrl) => {
-        try {
-          await startScan(scanUrl, maxPages, concurrency, delay);
-        } catch (err: any) {
-          errors.push(err.message);
-        }
-        bulkProgress = bulkProgress + 1;
-      }));
+
+    const groupScans = importPreview.groups
+      .map(g => ({
+        domain: g.rootDomain,
+        urls: g.sites.map(s => s.url).filter(u => selectedUrls.has(u)),
+      }))
+      .filter(g => g.urls.length > 0);
+
+    for (const group of groupScans) {
+      try {
+        await startGroupScan(group.urls, maxPages, concurrency, delay);
+      } catch (err: any) {
+        errors.push(`${group.domain}: ${err.message}`);
+      }
+      bulkProgress++;
     }
     if (errors.length > 0) {
       error = `${errors.length} scan(s) failed to start`;
@@ -312,13 +320,13 @@
       <div class="digi-actions">
         {#if bulkStarting}
           <div class="digi-progress">
-            <div class="digi-progress-bar" style="width:{selectedCount > 0 ? Math.round((bulkProgress / selectedCount) * 100) : 0}%"></div>
+            <div class="digi-progress-bar" style="width:{bulkGroupCount > 0 ? Math.round((bulkProgress / bulkGroupCount) * 100) : 0}%"></div>
           </div>
-          <span class="digi-progress-text">{bulkProgress} / {selectedCount}</span>
+          <span class="digi-progress-text">{bulkProgress} / {bulkGroupCount} domains</span>
         {:else}
           <button class="cmd-go" onclick={handleBulkStart} disabled={selectedCount === 0}>
             <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
-            Start {selectedCount} scans
+            Start {bulkGroupCount} domain scan{bulkGroupCount !== 1 ? 's' : ''} ({selectedCount} URLs)
           </button>
           <button class="digi-cancel" onclick={dismissImport}>Cancel</button>
         {/if}
