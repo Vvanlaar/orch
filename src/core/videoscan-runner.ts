@@ -41,6 +41,25 @@ export interface VideoscanResult {
   error?: string;
 }
 
+export interface ReportOptions {
+  coverImageUrl?: string;
+  contactImageUrl?: string;
+  contactName?: string;
+  contactPhone?: string;
+  contactEmail?: string;
+}
+
+function reportOptionsToArgs(options?: ReportOptions): string[] {
+  if (!options) return [];
+  const args: string[] = [];
+  if (options.coverImageUrl) args.push('--cover-image', options.coverImageUrl);
+  if (options.contactImageUrl) args.push('--contact-image', options.contactImageUrl);
+  if (options.contactName) args.push('--contact-name', options.contactName);
+  if (options.contactPhone) args.push('--contact-phone', options.contactPhone);
+  if (options.contactEmail) args.push('--contact-email', options.contactEmail);
+  return args;
+}
+
 export interface VideoscanOptions {
   scanUrl: string;
   maxPages?: number;
@@ -221,14 +240,14 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
   });
 }
 
-export async function generateReport(jsonFilename: string): Promise<{ htmlFile?: string; pdfFile?: string }> {
+export async function generateReport(jsonFilename: string, options?: ReportOptions): Promise<{ htmlFile?: string; pdfFile?: string }> {
   const jsonPath = join(VIDEOSCAN_DIR, jsonFilename);
   if (!existsSync(jsonPath)) await downloadFile(jsonFilename, VIDEOSCAN_DIR);
   if (!existsSync(jsonPath)) throw new Error(`JSON file not found: ${jsonFilename}`);
 
   // Generate HTML
   await new Promise<void>((resolve, reject) => {
-    const proc = spawn('node', [REPORT_SCRIPT, jsonFilename], { cwd: VIDEOSCAN_DIR, shell: true });
+    const proc = spawn('node', [REPORT_SCRIPT, jsonFilename, ...reportOptionsToArgs(options)], { cwd: VIDEOSCAN_DIR, shell: true });
     proc.on('close', (code) => code === 0 ? resolve() : reject(new Error(`report.mjs exited with code ${code}`)));
     proc.on('error', reject);
   });
@@ -249,13 +268,13 @@ export async function generateReport(jsonFilename: string): Promise<{ htmlFile?:
   return { htmlFile, pdfFile };
 }
 
-export async function generatePreview(jsonFilename: string): Promise<{ htmlFile?: string; pdfFile?: string }> {
+export async function generatePreview(jsonFilename: string, options?: ReportOptions): Promise<{ htmlFile?: string; pdfFile?: string }> {
   const jsonPath = join(VIDEOSCAN_DIR, jsonFilename);
   if (!existsSync(jsonPath)) await downloadFile(jsonFilename, VIDEOSCAN_DIR);
   if (!existsSync(jsonPath)) throw new Error(`JSON file not found: ${jsonFilename}`);
 
   await new Promise<void>((resolve, reject) => {
-    const proc = spawn('node', [REPORT_SCRIPT, jsonFilename, '--preview'], { cwd: VIDEOSCAN_DIR, shell: true });
+    const proc = spawn('node', [REPORT_SCRIPT, jsonFilename, '--preview', ...reportOptionsToArgs(options)], { cwd: VIDEOSCAN_DIR, shell: true });
     proc.on('close', (code) => code === 0 ? resolve() : reject(new Error(`report.mjs --preview exited with code ${code}`)));
     proc.on('error', reject);
   });
