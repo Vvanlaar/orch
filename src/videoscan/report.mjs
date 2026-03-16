@@ -310,7 +310,7 @@ function generateReport(scanData, socialData) {
       const section = isMultiDomain ? `${u.hostname}/${pathSection}` : pathSection;
       if (!sectionGroups[section]) sectionGroups[section] = {
         players: new Set(), pages: [], count: 0,
-        baseUrl: `${u.origin}${pathSection === "(homepage)" ? "/" : "/" + pathSection}`
+        baseUrl: encodeURI(`${u.origin}${pathSection === "(homepage)" ? "/" : "/" + pathSection}`)
       };
       sectionGroups[section].count++;
       sectionGroups[section].pages.push(page.url);
@@ -726,7 +726,7 @@ function generateReport(scanData, socialData) {
           .map(
             ([section, data]) => `
           <tr>
-            <td><strong><a href="${data.baseUrl}" target="_blank" style="color:${BB_LIGHT_BLUE};text-decoration:none">/${section}</a></strong></td>
+            <td><strong><a href="${data.baseUrl}" target="_blank" style="color:${BB_LIGHT_BLUE};text-decoration:none">${section.includes("/") && isMultiDomain ? section : "/" + section}</a></strong></td>
             <td>${data.count}</td>
             <td>${[...data.players].map((p) => `<span style="display:inline-block;background:${BB_ACCENT};padding:2px 8px;border-radius:4px;margin:2px;font-size:13px">${p}</span>`).join(" ")}</td>
           </tr>`
