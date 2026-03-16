@@ -431,11 +431,9 @@
                           <a class="sb prv" href="/api/videoscans/files/{scan.filename.replace('.json', '-preview.html')}" target="_blank">Preview</a>
                         {/if}
                         <a class="sb" href="/api/videoscans/files/{scan.filename}" target="_blank" download>JSON</a>
-                        {#if !scan.hasReport}
-                          <button class="sb" onclick={() => handleGenerateReport(scan)} disabled={generating === scan.filename}>
-                            {generating === scan.filename ? '...' : 'Gen'}
-                          </button>
-                        {/if}
+                        <button class="sb" onclick={() => handleGenerateReport(scan)} disabled={generating === scan.filename}>
+                          {generating === scan.filename ? '...' : scan.hasReport ? 'Regen' : 'Gen'}
+                        </button>
                         {#if scan.hasReport && !scan.hasPreview}
                           <button class="sb prv" onclick={() => handleGeneratePreview(scan)} disabled={generatingPreview === scan.filename}>
                             {generatingPreview === scan.filename ? '...' : 'Teaser'}
