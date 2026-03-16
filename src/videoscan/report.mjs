@@ -295,13 +295,23 @@ function generateReport(scanData, socialData) {
     .sort((a, b) => b[1].count - a[1].count)
     .map(([name, data]) => ({ label: name, value: data.count }));
 
-  // Group pages by site section (first path segment)
+  // Group pages by site section (first path segment), prefixed with hostname for multi-domain reports
+  const domainSet = new Set();
+  for (const page of details || []) {
+    try { domainSet.add(new URL(page.url).hostname); } catch {}
+  }
+  const isMultiDomain = domainSet.size > 1;
+
   const sectionGroups = {};
   for (const page of details || []) {
     try {
-      const path = new URL(page.url).pathname;
-      const section = path.split("/").filter(Boolean)[0] || "(homepage)";
-      if (!sectionGroups[section]) sectionGroups[section] = { players: new Set(), pages: [], count: 0 };
+      const u = new URL(page.url);
+      const pathSection = u.pathname.split("/").filter(Boolean)[0] || "(homepage)";
+      const section = isMultiDomain ? `${u.hostname}/${pathSection}` : pathSection;
+      if (!sectionGroups[section]) sectionGroups[section] = {
+        players: new Set(), pages: [], count: 0,
+        baseUrl: `${u.origin}${pathSection === "(homepage)" ? "/" : "/" + pathSection}`
+      };
       sectionGroups[section].count++;
       sectionGroups[section].pages.push(page.url);
       for (const p of page.players) sectionGroups[section].players.add(p.name);
@@ -716,7 +726,7 @@ function generateReport(scanData, socialData) {
           .map(
             ([section, data]) => `
           <tr>
-            <td><strong>/${section}</strong></td>
+            <td><strong><a href="${data.baseUrl}" target="_blank" style="color:${BB_LIGHT_BLUE};text-decoration:none">/${section}</a></strong></td>
             <td>${data.count}</td>
             <td>${[...data.players].map((p) => `<span style="display:inline-block;background:${BB_ACCENT};padding:2px 8px;border-radius:4px;margin:2px;font-size:13px">${p}</span>`).join(" ")}</td>
           </tr>`
