@@ -25,14 +25,20 @@ After all fixes:
 - Run /code-simplifier on modified files
 - Ensure code remains clean and readable
 
-### 4. Self-Review
+### 4. Reply & Resolve on GitHub
+After fixing each comment:
+- Reply to EVERY review comment on the PR explaining the fix (use `mcp__plugin_github_github__add_reply_to_pull_request_comment`)
+- Resolve each review thread so the reviewer sees all comments addressed
+- Even if a comment required no code change, reply explaining why
+
+### 5. Self-Review
 Before committing:
 - Review all changes made
 - Verify fixes are correct
 - Check for regressions
 - Ensure code style is consistent
 
-### 5. Output Format
+### 6. Output Format
 ```
 ## Review Comment Fixes
 
