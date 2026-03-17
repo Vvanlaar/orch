@@ -385,10 +385,18 @@ ${buildFooter(pageNum)}
   }));
 
   // ── Contact page ──
+  const hasContact = options.contactName || options.contactPhone || options.contactEmail;
+  const contactSection = hasContact
+    ? `<div class="contact-item" style="margin-top: 10px;">
+          <h3 style="margin-bottom: 12px;">Weet mij te vinden</h3>
+          ${options.contactName ? `<p>${options.contactName}</p>` : ""}
+          ${options.contactPhone ? `<p>${options.contactPhone}</p>` : ""}
+          ${options.contactEmail ? `<p>${options.contactEmail}</p>` : ""}
+        </div>`
+    : "";
+
   pages.push(fillTemplate(loadTemplate("contact.html"), {
-    contactName: options.contactName || "",
-    contactPhone: options.contactPhone || "",
-    contactEmail: options.contactEmail || "",
+    contactSection,
     contactImageUrl: options.contactImageUrl || "",
   }));
 

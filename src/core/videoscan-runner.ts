@@ -301,8 +301,7 @@ async function generatePdf(htmlPath: string): Promise<string> {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
-    await page.goto(pathToFileURL(htmlPath).href, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForTimeout(1000); // let CSS/fonts settle
+    await page.goto(pathToFileURL(htmlPath).href, { waitUntil: 'networkidle', timeout: 60000 });
     await page.pdf({
       path: pdfPath,
       format: 'A4',
