@@ -158,6 +158,7 @@
         <button class="action-btn dismiss-btn" onclick={handleDismiss}>Skip</button>
       {:else if isRunning && isRemote}
         <span class="remote-badge" title="Running on {task.machineId}">remote</span>
+        <button class="action-btn stop-btn" onclick={handleStop}>Stop</button>
       {:else if isRunning}
         <button class="action-btn done-btn" onclick={handleComplete}>Done</button>
         <button class="action-btn stop-btn" onclick={handleStop}>Stop</button>

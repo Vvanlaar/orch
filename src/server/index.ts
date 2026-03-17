@@ -170,14 +170,13 @@ app.post('/api/tasks/:id/stop', asyncHandler(async (req, res) => {
     res.status(400).json({ error: 'Task not running' });
     return;
   }
-  // Multi-machine safety: only kill tasks running on this machine
-  if (task.machineId && task.machineId !== MACHINE_ID) {
-    res.status(400).json({ error: `Task is running on ${task.machineId}, not this machine (${MACHINE_ID})` });
-    return;
+  // Only kill process if task is on this machine (can't kill remote processes)
+  const isLocal = !task.machineId || task.machineId === MACHINE_ID;
+  if (isLocal) {
+    if (task.type === 'videoscan') killVideoscan(id);
+    else killTask(id);
   }
-  if (task.type === 'videoscan') killVideoscan(id);
-  else killTask(id);
-  await failTask(id, 'Stopped by user');
+  await failTask(id, isLocal ? 'Stopped by user' : `Stopped by user (was remote on ${task.machineId})`);
   await broadcastTasks();
   res.json({ success: true });
 }));
