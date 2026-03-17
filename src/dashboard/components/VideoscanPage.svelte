@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { getScans, fetchScans, startScan, startGroupScan, resumeScan, addUrlsToScan, mergeDomainScans, regenerateReport, regeneratePreview, isLoading, importDigiToegankelijk, type ScanSummary, type DigiImportResult, type ReportOptions } from '../stores/videoscan.svelte';
   import { getTasks, getTaskOutput, isExpanded, toggleExpanded } from '../stores/tasks.svelte';
+  import { readPreference, writePreference } from '../lib/preferences';
 
   let url = $state('');
   let maxPages = $state(5000);
@@ -194,6 +195,7 @@
     if (generating) return;
     generating = scan.filename;
     showReportOptions = null;
+    writePreference(`report-opts-${scan.filename}`, opts ?? {});
     try {
       await regenerateReport(scan.filename, opts);
     } catch (err: any) {
@@ -206,6 +208,7 @@
   async function handleGeneratePreview(scan: ScanSummary) {
     if (generatingPreview) return;
     generatingPreview = scan.filename;
+    writePreference(`report-opts-${scan.filename}`, reportOpts);
     try {
       await regeneratePreview(scan.filename, reportOpts);
     } catch (err: any) {
@@ -434,7 +437,7 @@
                           <a class="sb prv" href="/api/videoscans/files/{scan.filename.replace('.json', '-preview.html')}" target="_blank">Preview</a>
                         {/if}
                         <a class="sb" href="/api/videoscans/files/{scan.filename}" target="_blank" download>JSON</a>
-                        <button class="sb" onclick={() => { showReportOptions = showReportOptions === scan.filename ? null : scan.filename; reportOpts = {}; }} disabled={generating === scan.filename}>
+                        <button class="sb" onclick={() => { showReportOptions = showReportOptions === scan.filename ? null : scan.filename; reportOpts = readPreference(`report-opts-${scan.filename}`, {}); }} disabled={generating === scan.filename}>
                           {generating === scan.filename ? '...' : scan.hasReport ? 'Regen' : 'Gen'}
                         </button>
                         {#if scan.hasReport && !scan.hasPreview}
