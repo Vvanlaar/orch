@@ -392,7 +392,7 @@
           {@const collapsed = collapsedDomains.has(domain)}
           <div class="dom" class:collapsed>
             <div class="dom-head">
-              <button class="dom-toggle" onclick={() => toggleDomain(domain)}>
+              <button class="dom-toggle" aria-expanded={!collapsedDomains.has(domain)} onclick={() => toggleDomain(domain)}>
                 <span class="dom-chev">&#9662;</span>
                 <span class="dom-name">{domain}</span>
                 <span class="dom-pill">{domainScans.length}</span>
@@ -445,7 +445,7 @@
                         </button>
                         {#if scan.hasReport && !scan.hasPreview}
                           <button class="sb prv" onclick={() => handleGeneratePreview(scan)} disabled={generatingPreview === scan.filename}>
-                            {generatingPreview === scan.filename ? '...' : 'Teaser'}
+                            {generatingPreview === scan.filename ? '...' : 'Mk Preview'}
                           </button>
                         {/if}
                         {#if scan.canResume}
@@ -456,14 +456,14 @@
                     </div>
                   </div>
                   {#if showReportOptions === scan.filename}
-                    <div class="add-urls-panel" style="gap:6px">
-                      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
-                        <input class="add-urls-ta" style="padding:6px 8px;font-size:12px;grid-column:span 2" placeholder="Organisation name (override)" bind:value={reportOpts.orgName}>
-                        <input class="add-urls-ta" style="padding:6px 8px;font-size:12px" placeholder="Cover image URL" bind:value={reportOpts.coverImageUrl}>
-                        <input class="add-urls-ta" style="padding:6px 8px;font-size:12px" placeholder="Contact image URL" bind:value={reportOpts.contactImageUrl}>
-                        <input class="add-urls-ta" style="padding:6px 8px;font-size:12px" placeholder="Contact name" bind:value={reportOpts.contactName}>
-                        <input class="add-urls-ta" style="padding:6px 8px;font-size:12px" placeholder="Contact phone" bind:value={reportOpts.contactPhone}>
-                        <input class="add-urls-ta" style="padding:6px 8px;font-size:12px;grid-column:span 2" placeholder="Contact email" bind:value={reportOpts.contactEmail}>
+                    <div class="add-urls-panel report-opts-panel">
+                      <div class="report-opts-grid">
+                        <input class="report-opts-input span2" placeholder="Organisation name (override)" bind:value={reportOpts.orgName}>
+                        <input class="report-opts-input" placeholder="Cover image URL" bind:value={reportOpts.coverImageUrl}>
+                        <input class="report-opts-input" placeholder="Contact image URL" bind:value={reportOpts.contactImageUrl}>
+                        <input class="report-opts-input" placeholder="Contact name" bind:value={reportOpts.contactName}>
+                        <input class="report-opts-input" placeholder="Contact phone" bind:value={reportOpts.contactPhone}>
+                        <input class="report-opts-input span2" placeholder="Contact email" bind:value={reportOpts.contactEmail}>
                       </div>
                       <div class="add-urls-btns">
                         <button class="sb res" onclick={() => handleGenerateReport(scan, reportOpts)}>Generate</button>
@@ -542,7 +542,7 @@
         {/if}
 
         {#if historyTasks.length > 0}
-          <div class="side-sec">
+          <div class="side-sec" style="max-height:500px;overflow-y:auto">
             <h3 class="side-h">
               <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
               History
@@ -635,6 +635,7 @@
     --border: #1c2e40;
     --border-subtle: #162030;
     --text: #c9d5e0;
+    --text-dim: #7d9ab3;
     --text-muted: #5e7389;
     --success: #10b981;
     --warning: #f59e0b;
@@ -983,8 +984,8 @@
     font-size: 10px;
     font-weight: 600;
     background: var(--surface-raised);
-    color: var(--text-muted);
-    border: 1px solid var(--border);
+    color: var(--text-dim);
+    border: 1px solid #253547;
     border-radius: 6px;
     padding: 4px 10px;
     cursor: pointer;
@@ -1035,7 +1036,7 @@
 
   .sc-date {
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--text-dim);
     font-family: 'IBM Plex Mono', monospace;
   }
 
@@ -1043,7 +1044,7 @@
     display: flex;
     gap: 14px;
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--text-dim);
   }
 
   .sc-n strong {
@@ -1080,8 +1081,8 @@
   }
 
   .cov-pct {
-    font-size: 9px;
-    color: var(--text-muted);
+    font-size: 10px;
+    color: var(--text-dim);
     font-family: 'IBM Plex Mono', monospace;
     min-width: 24px;
   }
@@ -1107,6 +1108,7 @@
 
   .sc-btns {
     display: flex;
+    flex-wrap: wrap;
     gap: 4px;
   }
 
@@ -1123,14 +1125,14 @@
     white-space: nowrap;
     transition: all 0.12s;
     text-decoration: none;
-    border: 1px solid var(--border);
+    border: 1px solid #253547;
     background: var(--surface-deep);
-    color: var(--text-muted);
+    color: var(--text-dim);
     letter-spacing: 0.02em;
   }
 
   .sb:hover {
-    border-color: var(--border);
+    border-color: #2e4560;
     background: var(--surface-raised);
     color: var(--text);
   }
@@ -1157,22 +1159,22 @@
   }
 
   .sb.prv {
-    border-color: rgba(168, 85, 247, 0.3);
+    border-color: rgba(168, 85, 247, 0.45);
     color: #c084fc;
   }
 
   .sb.prv:hover {
-    background: rgba(168, 85, 247, 0.1);
+    background: rgba(168, 85, 247, 0.12);
     border-color: #a855f7;
   }
 
   .sb.res {
-    border-color: rgba(245, 158, 11, 0.3);
+    border-color: rgba(245, 158, 11, 0.45);
     color: var(--warning);
   }
 
   .sb.res:hover {
-    background: rgba(245, 158, 11, 0.1);
+    background: rgba(245, 158, 11, 0.12);
     border-color: var(--warning);
   }
 
@@ -1796,7 +1798,23 @@
     padding: 6px;
     resize: vertical;
   }
-  .add-urls-ta::placeholder { color: var(--text-dim); }
+  .add-urls-ta::placeholder { color: var(--text-muted); }
+  .report-opts-panel { gap: 6px; }
+  .report-opts-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+  .report-opts-input {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 12px;
+    padding: 6px 8px;
+  }
+  .report-opts-input::placeholder { color: var(--text-muted); }
+  .report-opts-input.span2 { grid-column: span 2; }
   .add-urls-btns {
     display: flex;
     gap: 6px;
