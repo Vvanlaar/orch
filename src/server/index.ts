@@ -1616,6 +1616,7 @@ app.post('/api/videoscans/generate-report', asyncHandler(async (req, res) => {
     return;
   }
   const result = await generateReport(filename, { orgName, coverImageUrl, contactImageUrl, contactName, contactPhone, contactEmail });
+  await generatePreview(filename, { orgName, coverImageUrl, contactImageUrl, contactName, contactPhone, contactEmail });
   res.json(result);
 }));
 
