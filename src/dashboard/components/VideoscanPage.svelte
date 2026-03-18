@@ -455,6 +455,7 @@
                   {#if showReportOptions === scan.filename}
                     <div class="add-urls-panel" style="gap:6px">
                       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+                        <input class="add-urls-ta" style="padding:6px 8px;font-size:12px;grid-column:span 2" placeholder="Organisation name (override)" bind:value={reportOpts.orgName}>
                         <input class="add-urls-ta" style="padding:6px 8px;font-size:12px" placeholder="Cover image URL" bind:value={reportOpts.coverImageUrl}>
                         <input class="add-urls-ta" style="padding:6px 8px;font-size:12px" placeholder="Contact image URL" bind:value={reportOpts.contactImageUrl}>
                         <input class="add-urls-ta" style="padding:6px 8px;font-size:12px" placeholder="Contact name" bind:value={reportOpts.contactName}>

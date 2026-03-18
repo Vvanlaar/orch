@@ -42,6 +42,7 @@ export interface VideoscanResult {
 }
 
 export interface ReportOptions {
+  orgName?: string;
   coverImageUrl?: string;
   contactImageUrl?: string;
   contactName?: string;
@@ -54,6 +55,7 @@ function reportOptionsToArgs(options?: ReportOptions): string[] {
   const args: string[] = [];
   // Quote values to handle spaces (spawn with shell: true joins args)
   const q = (v: string) => `"${v.replace(/"/g, '\\"')}"`;
+  if (options.orgName) args.push('--org-name', q(options.orgName));
   if (options.coverImageUrl) args.push('--cover-image', q(options.coverImageUrl));
   if (options.contactImageUrl) args.push('--contact-image', q(options.contactImageUrl));
   if (options.contactName) args.push('--contact-name', q(options.contactName));

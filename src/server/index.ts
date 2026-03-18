@@ -1610,22 +1610,22 @@ app.get('/api/videoscans/audit/:filename', (req, res) => {
 });
 
 app.post('/api/videoscans/generate-report', asyncHandler(async (req, res) => {
-  const { filename, coverImageUrl, contactImageUrl, contactName, contactPhone, contactEmail } = req.body;
+  const { filename, orgName, coverImageUrl, contactImageUrl, contactName, contactPhone, contactEmail } = req.body;
   if (!filename || typeof filename !== 'string') {
     res.status(400).json({ error: 'filename required' });
     return;
   }
-  const result = await generateReport(filename, { coverImageUrl, contactImageUrl, contactName, contactPhone, contactEmail });
+  const result = await generateReport(filename, { orgName, coverImageUrl, contactImageUrl, contactName, contactPhone, contactEmail });
   res.json(result);
 }));
 
 app.post('/api/videoscans/generate-preview', asyncHandler(async (req, res) => {
-  const { filename, coverImageUrl, contactImageUrl, contactName, contactPhone, contactEmail } = req.body;
+  const { filename, orgName, coverImageUrl, contactImageUrl, contactName, contactPhone, contactEmail } = req.body;
   if (!filename || typeof filename !== 'string') {
     res.status(400).json({ error: 'filename required' });
     return;
   }
-  const result = await generatePreview(filename, { coverImageUrl, contactImageUrl, contactName, contactPhone, contactEmail });
+  const result = await generatePreview(filename, { orgName, coverImageUrl, contactImageUrl, contactName, contactPhone, contactEmail });
   res.json(result);
 }));
 

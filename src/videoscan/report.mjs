@@ -172,8 +172,8 @@ function formatNumber(n) {
 
 function generateReport(scanData, socialData, options = {}) {
   const { domain, scanDate, pagesScanned, playerSummary, details } = scanData;
-  const orgName = domain.replace(/^www\./, "").replace(/\.\w+$/, "");
-  const orgNameCap = orgName.charAt(0).toUpperCase() + orgName.slice(1);
+  const derivedName = domain.replace(/^www\./, "").replace(/\.\w+$/, "");
+  const orgNameCap = options.orgName || (derivedName.charAt(0).toUpperCase() + derivedName.slice(1));
   const dateStr = new Date(scanDate).toLocaleDateString("nl-NL", { year: "numeric", month: "long", day: "numeric" });
 
   const players = Object.entries(playerSummary || {});
@@ -413,8 +413,8 @@ ${buildFooter(pageNum)}
 
 function generatePreviewReport(scanData, options = {}) {
   const { domain, scanDate, pagesScanned, playerSummary, details } = scanData;
-  const orgName = domain.replace(/^www\./, "").replace(/\.\w+$/, "");
-  const orgNameCap = orgName.charAt(0).toUpperCase() + orgName.slice(1);
+  const derivedName = domain.replace(/^www\./, "").replace(/\.\w+$/, "");
+  const orgNameCap = options.orgName || (derivedName.charAt(0).toUpperCase() + derivedName.slice(1));
   const dateStr = new Date(scanDate).toLocaleDateString("nl-NL", { year: "numeric", month: "long", day: "numeric" });
 
   const players = Object.entries(playerSummary || {});
@@ -477,7 +477,7 @@ function generatePreviewReport(scanData, options = {}) {
 
 const args = process.argv.slice(2);
 if (args.length === 0) {
-  console.log("Usage: node report.mjs <scan.json> [--preview] [--social <file>] [--cover-image <url>] [--contact-image <url>] [--contact-name <name>] [--contact-phone <phone>] [--contact-email <email>]");
+  console.log("Usage: node report.mjs <scan.json> [--preview] [--social <file>] [--org-name <name>] [--cover-image <url>] [--contact-image <url>] [--contact-name <name>] [--contact-phone <phone>] [--contact-email <email>]");
   process.exit(0);
 }
 
@@ -490,6 +490,7 @@ const scanFile = args[0];
 const scanData = JSON.parse(readFileSync(scanFile, "utf-8"));
 
 const options = {
+  orgName: getArg("--org-name"),
   coverImageUrl: getArg("--cover-image"),
   contactImageUrl: getArg("--contact-image"),
   contactName: getArg("--contact-name"),

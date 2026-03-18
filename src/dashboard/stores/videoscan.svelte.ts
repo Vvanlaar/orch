@@ -57,6 +57,7 @@ export function addUrlsToScan(filename: string, urls: string[], concurrency: num
 }
 
 export interface ReportOptions {
+  orgName?: string;
   coverImageUrl?: string;
   contactImageUrl?: string;
   contactName?: string;
