@@ -1,19 +1,12 @@
 #!/usr/bin/env node
 /**
  * Standalone audit one-pager: Proper Access WCAG 2.2 videospeler audit summary.
- * Generates HTML + PDF (via Playwright). BB branded.
+ * Generates HTML + PDF (via Playwright). BB branded. Two A4 pages.
  *
  * Usage: node audit-summary.mjs [--output <path>]
  */
 import { writeFileSync } from "fs";
 import { AUDIT_DATA } from "./audit-data.mjs";
-
-const BB_BLUE = "#1a3a5c";
-const BB_LIGHT_BLUE = "#4a90d9";
-const BB_ACCENT = "#e8f0fe";
-const BB_ORANGE = "#f07048";
-const BB_GREEN = "#2ecc71";
-const BB_RED = "#e74c3c";
 
 function generateHTML() {
   const players = Object.entries(AUDIT_DATA.players)
@@ -29,30 +22,38 @@ function generateHTML() {
 
   const playerRows = players.map(([name, data]) => {
     const isPass = data.status === "pass";
-    const rowBg = isPass ? "#f0faf4" : "white";
+    const rowClass = isPass ? ' class="row-success"' : '';
+    const nameClass = isPass ? ' class="fw-bold"' : '';
     const badge = isPass
-      ? `<span style="background:${BB_GREEN};color:white;padding:3px 10px;border-radius:12px;font-size:13px;font-weight:600">Voldoet</span>`
-      : `<span style="background:${BB_RED};color:white;padding:3px 10px;border-radius:12px;font-size:13px;font-weight:600">Voldoet niet</span>`;
-    return `<tr style="background:${rowBg}">
-      <td style="padding:12px 16px;border-bottom:1px solid #eee;font-weight:${isPass ? "700" : "400"}">${name}</td>
-      <td style="padding:12px 16px;border-bottom:1px solid #eee;text-align:center">${data.findings}</td>
-      <td style="padding:12px 16px;border-bottom:1px solid #eee;text-align:center">${data.failedSC}</td>
-      <td style="padding:12px 16px;border-bottom:1px solid #eee;text-align:center">${badge}</td>
+      ? `<span class="status status-pass">Voldoet</span>`
+      : `<span class="status status-fail">Voldoet niet</span>`;
+    return `<tr${rowClass}>
+      <td${nameClass}>${name}</td>
+      <td class="text-center">${data.findings}</td>
+      <td class="text-center">${data.failedSC}</td>
+      <td class="text-center">${badge}</td>
     </tr>`;
   }).join("");
 
   const categoryBars = categories.map(([name, cat]) => {
     const pct = (cat.playersAffected / maxAffected) * 100;
-    return `<div style="margin:8px 0">
-      <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:4px">
+    return `<div class="category-item">
+      <div class="category-header">
         <span><strong>${name}</strong> — ${cat.description}</span>
-        <span style="color:#666">${cat.playersAffected} van ${totalPlayers} spelers</span>
+        <span class="category-count">${cat.playersAffected} van ${totalPlayers} spelers</span>
       </div>
-      <div style="background:#eee;border-radius:4px;height:24px;overflow:hidden">
-        <div style="background:${BB_ORANGE};height:100%;width:${pct}%;border-radius:4px;transition:width 0.3s"></div>
-      </div>
+      <div class="bar-bg"><div class="bar-fill" style="width:${pct.toFixed(1)}%"></div></div>
     </div>`;
   }).join("");
+
+  const footer = (page) => `<div class="page-footer">
+      <div>Pagina ${page} van 2</div>
+      <div>
+        <span class="footer-logo">Blue Billywig</span> &nbsp;|&nbsp;
+        <a href="https://www.bluebillywig.com/nl/demo/">bluebillywig.com/nl/demo</a> &nbsp;|&nbsp;
+        <a href="https://www.bluebillywig.com/nl/contact/">Contact</a>
+      </div>
+    </div>`;
 
   return `<!DOCTYPE html>
 <html lang="nl">
@@ -61,54 +62,57 @@ function generateHTML() {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Toegankelijkheidsaudit Videospelers — Samenvatting</title>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'Inter', -apple-system, sans-serif; color: #333; background: #f5f5f5; line-height: 1.6; }
-    .page {
-      background: white;
-      max-width: 900px;
-      margin: 0 auto 24px;
-      padding: 48px 56px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-      page-break-after: always;
-      position: relative;
-    }
-    .page::after {
-      content: '';
-      position: absolute;
-      bottom: 0; left: 0; right: 0;
-      height: 4px;
-      background: ${BB_LIGHT_BLUE};
-    }
-    h1 { font-size: 28px; font-weight: 800; color: ${BB_BLUE}; margin-bottom: 4px; }
-    h2 { font-size: 20px; font-weight: 700; color: ${BB_BLUE}; margin: 28px 0 12px; }
-    p { margin: 8px 0; color: #444; }
-    table { width: 100%; border-collapse: collapse; margin: 12px 0; }
-    th { background: ${BB_BLUE}; color: white; padding: 10px 16px; text-align: left; font-weight: 600; font-size: 14px; }
-    .footer { display: flex; justify-content: flex-end; align-items: center; margin-top: 24px; padding-top: 12px; border-top: 2px solid ${BB_LIGHT_BLUE}; }
-    .bb-logo { font-weight: 800; color: ${BB_BLUE}; font-size: 18px; }
-    @media print { body { background: white; } .page { box-shadow: none; margin: 0; } }
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    body { font-family: 'Inter', -apple-system, sans-serif; color: #334155; background: #e2e8f0; line-height: 1.6; display: flex; flex-direction: column; align-items: center; padding: 2rem 0; }
+    .page { width: 210mm; height: 297mm; background: white; margin-bottom: 2rem; padding: 20mm 20mm 25mm 20mm; box-shadow: 0 10px 25px rgba(0,0,0,0.1); position: relative; overflow: hidden; }
+    .page::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 6px; background: linear-gradient(90deg, #1a3a5c 0%, #4a90d9 100%); }
+    h1 { font-size: 26px; font-weight: 800; color: #0f172a; margin-bottom: 4px; letter-spacing: -0.5px; }
+    h2 { font-size: 18px; font-weight: 700; color: #0f172a; margin: 32px 0 16px; border-bottom: 2px solid #f1f5f9; padding-bottom: 8px; }
+    p { margin: 8px 0; color: #475569; font-size: 14px; }
+    strong { color: #0f172a; }
+    .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; }
+    .header-subtitle { color: #64748b; font-size: 14px; margin-top: 2px; }
+    table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px; }
+    th { background: #f8fafc; color: #475569; padding: 12px 16px; text-align: left; font-weight: 600; border-bottom: 2px solid #e2e8f0; text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; }
+    td { padding: 12px 16px; border-bottom: 1px solid #f1f5f9; }
+    tr:nth-child(even) td { background: #fafbfc; }
+    .text-center { text-align: center; }
+    .fw-bold { font-weight: 700; color: #0f172a; }
+    .status { padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; display: inline-block; }
+    .status-pass { background: #dcfce7; color: #166534; }
+    .status-fail { background: #fee2e2; color: #991b1b; }
+    .row-success td { background-color: #f0fdf4 !important; }
+    .category-item { margin: 16px 0; }
+    .category-header { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px; }
+    .category-count { color: #64748b; font-weight: 500; }
+    .bar-bg { background: #e2e8f0; border-radius: 6px; height: 12px; overflow: hidden; }
+    .bar-fill { background: #f97316; height: 100%; border-radius: 6px; }
+    .conclusion-box { background: #f0f9ff; border-left: 4px solid #0ea5e9; padding: 20px; margin: 32px 0 0 0; border-radius: 0 8px 8px 0; }
+    .conclusion-title { font-size: 16px; color: #0369a1; font-weight: 700; margin-bottom: 8px; display: block; }
+    .conclusion-text { font-size: 14px; color: #0f172a; line-height: 1.7; }
+    .page-footer { position: absolute; bottom: 0; left: 0; right: 0; height: 20mm; padding: 0 20mm; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #e2e8f0; font-size: 12px; color: #64748b; background: #ffffff; }
+    .page-footer a { color: #0ea5e9; text-decoration: none; font-weight: 500; }
+    .footer-logo { font-weight: 700; color: #1a3a5c; }
+    @page { size: A4; margin: 0; }
+    @media print { body { background: white; margin: 0; padding: 0; display: block; } .page { margin: 0; box-shadow: none; border: none; page-break-after: always; height: 297mm; } }
   </style>
 </head>
 <body>
 
-  <!-- Page 1: Header + Table + Categories -->
   <div class="page">
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px">
+    <div class="header">
       <div>
         <h1>Toegankelijkheidsaudit Videospelers</h1>
-        <p style="color:#666;font-size:15px;margin-top:2px">
-          Samenvatting — Audit door <strong>${AUDIT_DATA.source}</strong>, december 2025
-        </p>
+        <p class="header-subtitle">Samenvatting — Audit door <strong>${AUDIT_DATA.source}</strong>, december 2025</p>
       </div>
-      <div class="bb-logo" style="font-size:22px;white-space:nowrap">Blue Billywig</div>
     </div>
 
-    <p style="font-size:15px">
+    <p>
       ${AUDIT_DATA.source} heeft <strong>${totalPlayers} videospelers</strong> getoetst aan de
       <strong>${AUDIT_DATA.standard}</strong> richtlijnen (methode: ${AUDIT_DATA.method}).
-      Van de ${totalPlayers} spelers voldoen er <strong style="color:${BB_GREEN}">${passCount}</strong> volledig
-      en <strong style="color:${BB_RED}">${failCount}</strong> niet.
+      Van de ${totalPlayers} spelers voldoen er <strong style="color:#166534">${passCount} volledig</strong>
+      en <strong style="color:#991b1b">${failCount} niet</strong>.
     </p>
 
     <h2>Resultaten per speler</h2>
@@ -116,36 +120,38 @@ function generateHTML() {
       <thead>
         <tr>
           <th>Videospeler</th>
-          <th style="text-align:center">Bevindingen</th>
-          <th style="text-align:center">Afgekeurde criteria</th>
-          <th style="text-align:center">Status</th>
+          <th class="text-center">Bevindingen</th>
+          <th class="text-center">Afgekeurde criteria</th>
+          <th class="text-center">Status</th>
         </tr>
       </thead>
       <tbody>${playerRows}</tbody>
     </table>
 
-    <h2>Probleemcategorieën</h2>
-    <p style="font-size:14px;color:#666">Aantal spelers met problemen per categorie (van de ${totalPlayers} geteste spelers):</p>
+    ${footer(1)}
+  </div>
+
+  <div class="page">
+    <div class="header">
+      <div>
+        <h1>Probleemcategorieën & Conclusie</h1>
+        <p class="header-subtitle">Vervolg — Audit door ${AUDIT_DATA.source}, december 2025</p>
+      </div>
+    </div>
+
+    <h2>Knelpunten in de markt</h2>
+    <p style="margin-bottom: 24px;">Aantal spelers met specifieke problemen per categorie (van de ${totalPlayers} geteste spelers):</p>
+
     ${categoryBars}
 
-    <div style="background:${BB_ACCENT};border-left:4px solid ${BB_LIGHT_BLUE};padding:16px 20px;margin:24px 0;border-radius:0 8px 8px 0">
-      <strong style="color:${BB_BLUE}">Conclusie</strong><br>
-      <span style="font-size:15px">
-        Blue Billywig is de enige commerciële videospeler die volledig voldoet aan WCAG 2.2.
-        De Rijksoverheidsplayer en OpenGemeenten voldoen ook, maar zijn alleen beschikbaar voor overheidsorganisaties.
+    <div class="conclusion-box">
+      <span class="conclusion-title">Eindconclusie</span>
+      <span class="conclusion-text">
+        Uit de audit blijkt dat de meerderheid van de videospelers in de markt niet voldoet aan de basiseisen voor digitale toegankelijkheid. <strong>Blue Billywig</strong> is de enige commerciële videospeler die volledig voldoet aan WCAG 2.2. De Rijksoverheidsplayer en OpenGemeenten voldoen eveneens, maar zijn uitsluitend beschikbaar voor specifieke overheidsorganisaties.
       </span>
     </div>
 
-    <div class="footer">
-      <div style="text-align:right">
-        <div style="font-weight:700;color:${BB_BLUE}">Plan een demo</div>
-        <div style="font-size:13px;color:#666">
-          <a href="https://www.bluebillywig.com/nl/demo/" style="color:${BB_LIGHT_BLUE};text-decoration:none">bluebillywig.com/nl/demo</a>
-          &nbsp;|&nbsp;
-          <a href="https://www.bluebillywig.com/nl/contact/" style="color:${BB_LIGHT_BLUE};text-decoration:none">Contact</a>
-        </div>
-      </div>
-    </div>
+    ${footer(2)}
   </div>
 
 </body>

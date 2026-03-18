@@ -24,12 +24,12 @@ export const AUDIT_DATA = {
     OpenGemeenten:         { findings: 0,  failedSC: 0,  status: "pass" },
   },
   categories: {
-    "Toetsenbordbediening":       { playersAffected: 6, description: "Bediening via toetsenbord" },
-    "Schermlezer-ondersteuning":  { playersAffected: 6, description: "ARIA-rollen, namen en statussen" },
-    "Contrast & zichtbaarheid":   { playersAffected: 5, description: "Focusindicatoren, tekst- en iconencontrast" },
-    "Zoom & responsiviteit":      { playersAffected: 3, description: "Bruikbaarheid bij 400% zoom" },
-    "Formulieren & labels":       { playersAffected: 3, description: "Labels, foutmeldingen, autocomplete" },
-    "Taalinstellingen":           { playersAffected: 3, description: "Ontbrekende taalattributen" },
+    "Toetsenbordbediening":       { playersAffected: 6, description: "Bediening via toetsenbord ontbreekt of hapert" },
+    "Schermlezer-ondersteuning":  { playersAffected: 6, description: "Foutieve ARIA-rollen, namen en statussen" },
+    "Contrast & zichtbaarheid":   { playersAffected: 5, description: "Slechte focusindicatoren, tekst- en iconencontrast" },
+    "Zoom & responsiviteit":      { playersAffected: 3, description: "Verlies van bruikbaarheid bij 400% zoom" },
+    "Formulieren & labels":       { playersAffected: 3, description: "Ontbrekende labels, foutmeldingen of autocomplete" },
+    "Taalinstellingen":           { playersAffected: 3, description: "Ontbrekende of foutieve HTML taalattributen" },
   },
 };
 
