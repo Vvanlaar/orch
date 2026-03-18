@@ -436,6 +436,9 @@
                         {#if scan.hasPreview}
                           <a class="sb prv" href="/api/videoscans/files/{scan.filename.replace('.json', '-preview.html')}" target="_blank">Preview</a>
                         {/if}
+                        {#if scan.hasPreviewPdf}
+                          <a class="sb pdf" href="/api/videoscans/files/{scan.filename.replace('.json', '-preview.pdf')}" target="_blank" download>Preview PDF</a>
+                        {/if}
                         <a class="sb" href="/api/videoscans/files/{scan.filename}" target="_blank" download>JSON</a>
                         <button class="sb" onclick={() => { showReportOptions = showReportOptions === scan.filename ? null : scan.filename; reportOpts = readPreference(`report-opts-${scan.filename}`, {}); }} disabled={generating === scan.filename}>
                           {generating === scan.filename ? '...' : scan.hasReport ? 'Regen' : 'Gen'}

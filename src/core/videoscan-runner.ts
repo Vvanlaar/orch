@@ -466,6 +466,7 @@ export async function syncScanToSupabase(jsonFilename: string): Promise<void> {
     const htmlFile = jsonFilename.replace('.json', '.html');
     const pdfFile = jsonFilename.replace('.json', '.pdf');
     const previewFile = jsonFilename.replace('.json', '-preview.html');
+    const previewPdfFile = jsonFilename.replace('.json', '-preview.pdf');
 
     // Upload files to Supabase Storage
     await uploadScanFiles(jsonFilename, VIDEOSCAN_DIR);
@@ -484,6 +485,7 @@ export async function syncScanToSupabase(jsonFilename: string): Promise<void> {
       hasReport: existsSync(join(VIDEOSCAN_DIR, htmlFile)),
       hasPdf: existsSync(join(VIDEOSCAN_DIR, pdfFile)),
       hasPreview: existsSync(join(VIDEOSCAN_DIR, previewFile)),
+      hasPreviewPdf: existsSync(join(VIDEOSCAN_DIR, previewPdfFile)),
       canResume: (data._state?.queue?.length || 0) > 0,
     });
 
@@ -503,6 +505,7 @@ export interface ScanSummary {
   hasReport: boolean;
   hasPdf: boolean;
   hasPreview: boolean;
+  hasPreviewPdf: boolean;
   canResume: boolean;
 }
 
@@ -518,6 +521,7 @@ function listScansFromDisk(): ScanSummary[] {
         const htmlFile = filename.replace('.json', '.html');
         const pdfFile = filename.replace('.json', '.pdf');
         const previewFile = filename.replace('.json', '-preview.html');
+        const previewPdfFile = filename.replace('.json', '-preview.pdf');
         return {
           filename,
           domain: data.domain || 'unknown',
@@ -528,6 +532,7 @@ function listScansFromDisk(): ScanSummary[] {
           hasReport: existsSync(join(VIDEOSCAN_DIR, htmlFile)),
           hasPdf: existsSync(join(VIDEOSCAN_DIR, pdfFile)),
           hasPreview: existsSync(join(VIDEOSCAN_DIR, previewFile)),
+          hasPreviewPdf: existsSync(join(VIDEOSCAN_DIR, previewPdfFile)),
           canResume: (data._state?.queue?.length || 0) > 0,
         };
       } catch {
@@ -541,6 +546,7 @@ function listScansFromDisk(): ScanSummary[] {
           hasReport: false,
           hasPdf: false,
           hasPreview: false,
+          hasPreviewPdf: false,
           canResume: false,
         };
       }

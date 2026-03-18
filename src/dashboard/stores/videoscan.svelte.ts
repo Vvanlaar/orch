@@ -8,6 +8,7 @@ export interface ScanSummary {
   hasReport: boolean;
   hasPdf: boolean;
   hasPreview: boolean;
+  hasPreviewPdf: boolean;
   canResume: boolean;
 }
 

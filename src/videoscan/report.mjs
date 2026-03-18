@@ -459,8 +459,8 @@ function generatePreviewReport(scanData, options = {}) {
         <p style="font-size:13px;color:#666;margin-top:8px">Bron: ${AUDIT_DATA.source} audit (${AUDIT_DATA.date})</p>`;
   }
 
-  return fillTemplate(loadTemplate("preview.html"), {
-    title: `Video Quick Scan Preview - ${orgNameCap}`,
+  const pageNum = 1;
+  const previewPage = fillTemplate(loadTemplate("preview.html"), {
     orgName: orgNameCap,
     dateStr,
     pagesScanned: String(pagesScanned),
@@ -470,6 +470,25 @@ function generatePreviewReport(scanData, options = {}) {
     pieChart,
     privacyFlags,
     accessibilityFlags,
+    footer: buildFooter(pageNum),
+  });
+
+  const previewCSS = `
+    /* Preview overrides */
+    .page { height: auto; min-height: 0; }
+    .preview-stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0; }
+    .flag { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; margin: 4px 4px 4px 0; }
+    .flag-red { background: #fff5f5; color: #c0392b; border: 1px solid #f5c6cb; }
+    .flag-orange { background: #fff8f0; color: #e67e22; border: 1px solid #fde2c8; }
+    .flag-green { background: #f0faf4; color: var(--accent-green); border: 1px solid #c3e6cb; }
+    .cta-bar { background: linear-gradient(135deg, var(--text-dark) 0%, var(--primary) 100%); color: var(--white); padding: 20px 24px; border-radius: 0 0 20px 0; margin-top: 20px; display: flex; justify-content: space-between; align-items: center; }
+  `;
+
+  const styles = loadTemplate("styles.css") + previewCSS;
+  return fillTemplate(loadTemplate("document.html"), {
+    title: `Video Quick Scan Preview - ${orgNameCap}`,
+    styles,
+    pages: previewPage,
   });
 }
 
