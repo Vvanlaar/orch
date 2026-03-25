@@ -38,9 +38,10 @@ function rowToSummary(row: VideoscanRow): ScanSummary {
 }
 
 export async function dbListScans(): Promise<ScanSummary[]> {
+  // Only select columns used by rowToSummary — exclude large details/scan_state/player_summary JSONB
   const { data, error } = await getSupabase()
     .from('videoscans')
-    .select()
+    .select('filename, domain, scan_date, pages_scanned, pages_with_video, unique_players, has_report, has_pdf, has_preview, has_preview_pdf, can_resume')
     .eq('archived', false)
     .order('scan_date', { ascending: false });
 

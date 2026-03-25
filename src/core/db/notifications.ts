@@ -7,10 +7,10 @@ export interface NotificationRow {
   created_at: string;
 }
 
-export async function dbGetNotifications(limit = 200): Promise<NotificationRow[]> {
+export async function dbGetNotifications(limit = 50): Promise<NotificationRow[]> {
   const { data, error } = await getSupabase()
     .from('notifications')
-    .select()
+    .select('id, type, data, created_at')
     .order('created_at', { ascending: false })
     .limit(limit);
 

@@ -71,10 +71,12 @@ export async function dbGetTask(id: number): Promise<Task | undefined> {
   return rowToTask(data as TaskRow);
 }
 
+const TASK_COLUMNS_NO_OUTPUT = 'id, type, status, repo, repo_path, context, result, error, pid, machine_id, created_at, started_at, completed_at';
+
 export async function dbGetPendingTasks(limit = 10): Promise<Task[]> {
   const { data, error } = await getSupabase()
     .from('tasks')
-    .select()
+    .select(TASK_COLUMNS_NO_OUTPUT)
     .eq('status', 'pending')
     .order('created_at', { ascending: true })
     .limit(limit);
@@ -94,9 +96,10 @@ export async function dbGetRunningCount(): Promise<number> {
 }
 
 export async function dbGetAllTasks(limit = 50): Promise<Task[]> {
+  // Exclude large `output` column to reduce egress — streaming output is overlaid separately
   const { data, error } = await getSupabase()
     .from('tasks')
-    .select()
+    .select(TASK_COLUMNS_NO_OUTPUT)
     .order('created_at', { ascending: false })
     .limit(limit);
 
@@ -176,7 +179,7 @@ export async function dbDeleteTask(id: number): Promise<boolean> {
 export async function dbGetTasksWithPids(): Promise<Task[]> {
   const { data, error } = await getSupabase()
     .from('tasks')
-    .select()
+    .select(TASK_COLUMNS_NO_OUTPUT)
     .eq('status', 'running')
     .not('pid', 'is', null);
 
@@ -187,7 +190,7 @@ export async function dbGetTasksWithPids(): Promise<Task[]> {
 export async function dbGetPendingSuggestions(): Promise<Task[]> {
   const { data, error } = await getSupabase()
     .from('tasks')
-    .select()
+    .select(TASK_COLUMNS_NO_OUTPUT)
     .eq('status', 'suggestion')
     .order('created_at', { ascending: true });
 

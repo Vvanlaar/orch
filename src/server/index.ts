@@ -1819,7 +1819,7 @@ app.get('/api/errors', (_req, res) => {
 app.get('/api/notifications', asyncHandler(async (_req, res) => {
   try {
     if (isSupabaseConfigured()) {
-      const entries = await dbGetNotifications(200);
+      const entries = await dbGetNotifications(50);
       // Flatten data back into top-level for compatibility
       res.json(entries.map(e => ({ id: e.id, type: e.type, timestamp: e.created_at, ...e.data })));
       return;
