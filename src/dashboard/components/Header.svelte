@@ -13,9 +13,21 @@
 
   interface Props {
     refreshAll: (refresh?: boolean) => void;
+    lastRefreshedAt: string;
   }
 
-  let { refreshAll }: Props = $props();
+  let { refreshAll, lastRefreshedAt }: Props = $props();
+
+  // Tick every 30s to keep relative time fresh
+  let tick = $state(0);
+  onMount(() => {
+    const timer = setInterval(() => tick++, 30000);
+    return () => clearInterval(timer);
+  });
+  let refreshedAgo = $derived.by(() => {
+    void tick; // reactive dependency
+    return formatUpdatedAt(lastRefreshedAt);
+  });
 
   let currentRoute = $derived(getRoute());
 
@@ -245,7 +257,10 @@
         <span class="notif-badge-count">{notifState.unreadCount > 99 ? '99+' : notifState.unreadCount}</span>
       {/if}
     </button>
-    <button class="refresh-btn" onclick={() => refreshAll(true)}>Refresh</button>
+    <div class="refresh-group">
+      {#if refreshedAgo}<span class="refresh-ago">{refreshedAgo}</span>{/if}
+      <button class="refresh-btn" onclick={() => refreshAll(true)}>Refresh</button>
+    </div>
     <div class="status">
       <div class="status-dot" class:disconnected={!connectionState.connected}></div>
       <span>{connectionState.connected ? 'Connected' : 'Disconnected'}</span>
@@ -643,6 +658,18 @@
   .gh-error {
     font-size: 11px;
     color: var(--danger);
+  }
+
+  .refresh-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .refresh-ago {
+    font-size: 10px;
+    color: var(--text-dim);
+    white-space: nowrap;
   }
 
   .orch-btn,

@@ -38,7 +38,7 @@ export const config: Config = {
   },
   polling: {
     enabled: envOr('POLLING_ENABLED', 'true') === 'true',
-    intervalMs: parseInt(envOr('POLLING_INTERVAL_MS', '60000')),
+    intervalMs: parseInt(envOr('POLLING_INTERVAL_MS', '300000')),
   },
   supabase: {
     url: envOr('SUPABASE_URL', ''),

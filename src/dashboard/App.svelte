@@ -22,6 +22,7 @@
   import { getRoute } from './lib/router.svelte';
 
   let route = $derived(getRoute());
+  let lastRefreshedAt = $state<string>('');
 
   function refreshAll(refresh = false) {
     fetchPRs(refresh);
@@ -35,19 +36,20 @@
     fetchCurrentUser();
     fetchNotifications();
     fetchOrchestratorState();
+    lastRefreshedAt = new Date().toISOString();
   }
 
   onMount(() => {
     connect();
     refreshAll();
-    // Refresh every 2 minutes (uses cache)
-    const interval = setInterval(() => refreshAll(), 120000);
+    // Refresh every 10 minutes (reduced from 2min to lower Supabase egress)
+    const interval = setInterval(() => refreshAll(), 600000);
     return () => clearInterval(interval);
   });
 </script>
 
 <div class="container">
-  <Header {refreshAll} />
+  <Header {refreshAll} {lastRefreshedAt} />
   {#if route === '/videoscan'}
     <VideoscanPage />
   {:else if route === '/tickets'}
