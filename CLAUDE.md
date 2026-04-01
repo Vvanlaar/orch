@@ -12,12 +12,12 @@ After each code change, use the code-simplifier and review skills. Fix any error
 
 ## Commands
 
-- `npm run dev` - Server + dashboard with hot reload (concurrently)
-- `npm run dev:server` - Server only (tsx watch, port 3011)
-- `npm run dev:dashboard` - Vite dev server (port 5173, proxies API/WS to 3011)
-- `npm run build` - `tsc` (server/core) then `vite build` (dashboard)
-- `npm test` - Vitest (run single: `npx vitest run path/to/test`)
-- `npm start` - Production server from `dist/`
+- `pnpm dev` - Server + dashboard with hot reload (concurrently)
+- `pnpm dev:server` - Server only (tsx watch, port 3011)
+- `pnpm dev:dashboard` - Vite dev server (port 5173, proxies API/WS to 3011)
+- `pnpm build` - `tsc` (server/core) then `vite build` (dashboard)
+- `pnpm test` - Vitest (run single: `pnpm exec vitest run path/to/test`)
+- `pnpm start` - Production server from `dist/`
 
 ## Architecture
 

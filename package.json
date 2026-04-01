@@ -8,15 +8,15 @@
     "dev:server": "tsx watch src/server/index.ts",
     "dev:dashboard": "vite src/dashboard",
     "clean": "rm -rf dist",
-    "build": "tsc && npm run build:dashboard",
-    "rebuild": "npm run clean && npm run build",
+    "build": "tsc && pnpm run build:dashboard",
+    "rebuild": "pnpm run clean && pnpm run build",
     "build:dashboard": "vite build src/dashboard",
     "start": "node dist/server/index.js",
     "test": "vitest",
     "migrate": "tsx src/core/db/migrate.ts",
-    "dev": "concurrently --kill-others \"npm:dev:server\" \"npm:dev:dashboard\"",
-    "postinstall": "npx playwright install chromium",
-    "build:desktop": "npm run build && cp -r dist/server dist/core dist/dashboard desktop/ && cd desktop && npm install && npx electron-builder --win"
+    "dev": "concurrently --kill-others \"pnpm:dev:server\" \"pnpm:dev:dashboard\"",
+    "postinstall": "pnpm exec playwright install chromium",
+    "build:desktop": "pnpm run build && cp -r dist/server dist/core dist/dashboard desktop/ && cd desktop && pnpm install && pnpm exec electron-builder --win"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.99.1",
@@ -45,5 +45,14 @@
     "typescript": "^5.7.0",
     "vite": "^7.3.1",
     "vitest": "^4.0.18"
+  },
+  "packageManager": "pnpm@10.33.0+sha512.10568bb4a6afb58c9eb3630da90cc9516417abebd3fabbe6739f0ae795728da1491e9db5a544c76ad8eb7570f5c4bb3d6c637b2cb41bfdcdb47fa823c8649319",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "playwright",
+      "esbuild",
+      "electron",
+      "electron-winstaller"
+    ]
   }
 }

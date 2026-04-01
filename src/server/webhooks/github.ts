@@ -9,7 +9,7 @@ import path from 'path';
 
 const log = createLogger('github-webhook');
 
-export const githubRouter = Router();
+export const githubRouter: Router = Router();
 
 function verifySignature(payload: string, signature: string | undefined): boolean {
   if (!config.github.webhookSecret || !signature) return false;
