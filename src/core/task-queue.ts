@@ -18,6 +18,7 @@ import {
   dbGetPendingSuggestions,
   dbApproveSuggestion,
   dbDismissSuggestion,
+  dbClaimTask,
 } from './db/tasks.js';
 import { createLogger } from './logger.js';
 
@@ -207,6 +208,14 @@ export async function getAllTasks(limit = 50): Promise<Task[]> {
 export async function startTask(id: number): Promise<void> {
   if (useDb) return dbStartTask(id);
   jsonUpdateTask(id, { status: 'running', startedAt: new Date().toISOString(), machineId: MACHINE_ID });
+}
+
+export async function claimTask(id: number): Promise<boolean> {
+  if (useDb) return dbClaimTask(id);
+  const task = jsonGetTask(id);
+  if (!task || task.status !== 'pending') return false;
+  jsonUpdateTask(id, { status: 'running', startedAt: new Date().toISOString(), machineId: MACHINE_ID });
+  return true;
 }
 
 export async function completeTask(id: number, result: string): Promise<void> {

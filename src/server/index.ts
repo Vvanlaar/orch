@@ -108,7 +108,7 @@ function broadcastOutput(taskId: number, chunk: string): void {
   });
 }
 
-app.use(cors({ origin: true }));
+app.use(cors({ origin: [/^https?:\/\/localhost(:\d+)?$/, /^https?:\/\/127\.0\.0\.1(:\d+)?$/] }));
 app.use(express.json());
 
 // Dashboard - serve built Svelte app or fallback to old HTML
@@ -1869,7 +1869,7 @@ app.use(expressErrorMiddleware);
 
 // Start server
 installProcessHandlers();
-server.listen(config.server.port, () => {
+server.listen(config.server.port, '127.0.0.1', () => {
   log.info(`Orch server listening on port ${config.server.port}`);
   log.info(`Dashboard: http://localhost:${config.server.port}`);
   log.info(`GitHub webhooks: http://localhost:${config.server.port}/webhooks/github`);

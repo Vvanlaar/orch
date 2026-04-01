@@ -10,7 +10,7 @@ import {
   getPendingTasks,
   getRunningCount,
   getRunningTasks,
-  startTask,
+  claimTask,
   completeTask,
   failTask,
   appendStreamingOutput,
@@ -153,7 +153,6 @@ async function replyToReviewComment(
 
 async function processPrCommentFix(task: Task): Promise<void> {
   log.info(`Task #${task.id} Processing PR comment fix for ${task.repo}#${task.context.prNumber}`);
-  await startTask(task.id);
   notifyUpdate();
 
   const comments = task.context.reviewComments || [];
@@ -357,7 +356,6 @@ async function processVideoscan(task: Task): Promise<void> {
   }
 
   clearStreamingOutput(task.id);
-  await startTask(task.id);
   notifyUpdate();
 
   try {
@@ -526,7 +524,6 @@ async function processTask(task: Task): Promise<void> {
   }
 
   clearStreamingOutput(task.id);
-  await startTask(task.id);
   notifyUpdate();
 
   // Determine if this task type should allow code edits
@@ -634,6 +631,13 @@ export async function processQueue(): Promise<void> {
       otherSlots--;
     }
 
+    const claimed = await claimTask(task.id);
+    if (!claimed) {
+      if (task.type === 'videoscan') videoscanSlots++;
+      else otherSlots++;
+      continue;
+    }
+
     processTask(task).catch((err) => {
       log.error(`Unhandled error in task #${task.id}`, err);
     });
@@ -650,8 +654,14 @@ export async function startProcessor(intervalMs = 5000): Promise<void> {
   const allTasks = await getAllTasks(500);
   const orphaned = allTasks.filter(t => t.status === 'running' && (!isSupabaseConfigured() || !t.machineId || t.machineId === MACHINE_ID));
   for (const t of orphaned) {
-    await failTask(t.id, 'Server restarted while task was running');
-    log.warn(`Marked orphaned task #${t.id} as failed`);
+    const isTerminalTask = t.type === 'testing' || ((t.type === 'code-gen' || t.type === 'issue-fix') && !!t.context.workItemId);
+    if (isTerminalTask) {
+      await updateTaskStatus(t.id, 'pending');
+      log.warn(`Reset terminal task #${t.id} to pending (may still have active terminal)`);
+    } else {
+      await failTask(t.id, 'Server restarted while task was running');
+      log.warn(`Marked orphaned task #${t.id} as failed`);
+    }
   }
 
   log.info('Task processor started');
