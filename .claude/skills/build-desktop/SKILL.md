@@ -10,7 +10,7 @@ description: Build a new desktop app release (Electron). Triggers on "build desk
 1. **Bump version** in `desktop/package.json` (patch bump unless user specifies)
 2. **Build dashboard** from `src/dashboard/`:
    ```bash
-   cd src/dashboard && npx.cmd vite build
+   cd src/dashboard && pnpm.cmd exec vite build
    ```
 3. **Copy dist to desktop/**:
    ```bash
@@ -19,11 +19,11 @@ description: Build a new desktop app release (Electron). Triggers on "build desk
    Note: `dist/server` and `dist/core` come from `tsc` (may have pre-existing TS errors — that's fine, the JS still emits). The dashboard comes from vite build above.
 4. **Install desktop deps**:
    ```bash
-   cd desktop && npm.cmd install
+   cd desktop && pnpm.cmd install
    ```
 5. **Build executable** (Windows by default):
    ```bash
-   cd desktop && npx.cmd electron-builder --win
+   cd desktop && pnpm.cmd exec electron-builder --win
    ```
    Output lands in `desktop/artifacts/` as an NSIS `.exe` installer.
 6. **Commit** version bump + push
