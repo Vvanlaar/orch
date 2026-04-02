@@ -174,15 +174,15 @@ function initSubmodules(cwd: string): void {
 }
 
 /** Link or install node_modules in a worktree.
- *  Junction from sourceRepo when lockfiles match, else `npm ci --prefer-offline`. */
+ *  Junction from sourceRepo when lockfiles match, else `pnpm install --frozen-lockfile --prefer-offline`. */
 function linkOrInstallNodeModules(worktreePath: string, sourceRepoPath: string): void {
   const sourceModules = path.join(sourceRepoPath, 'node_modules');
   const targetModules = path.join(worktreePath, 'node_modules');
   if (!existsSync(sourceModules)) return; // source has no node_modules, skip
 
-  const sourceLock = path.join(sourceRepoPath, 'package-lock.json');
-  const targetLock = path.join(worktreePath, 'package-lock.json');
-  if (!existsSync(targetLock)) return; // no package-lock in worktree, skip
+  const sourceLock = path.join(sourceRepoPath, 'pnpm-lock.yaml');
+  const targetLock = path.join(worktreePath, 'pnpm-lock.yaml');
+  if (!existsSync(targetLock)) return; // no pnpm-lock in worktree, skip
 
   try {
     const same = existsSync(sourceLock) &&
@@ -198,8 +198,8 @@ function linkOrInstallNodeModules(worktreePath: string, sourceRepoPath: string):
       }
       log.info(`Linked node_modules from ${sourceRepoPath}`);
     } else if (!same) {
-      log.info('Lockfile differs, running npm ci');
-      execSync('npm ci --prefer-offline', { cwd: worktreePath, stdio: 'pipe', timeout: 300000 });
+      log.info('Lockfile differs, running pnpm install');
+      execSync('pnpm install --frozen-lockfile --prefer-offline', { cwd: worktreePath, stdio: 'pipe', timeout: 300000 });
     }
   } catch (err) {
     log.error('Failed to link/install node_modules', err);

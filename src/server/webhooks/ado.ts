@@ -8,7 +8,7 @@ import path from 'path';
 
 const log = createLogger('ado-webhook');
 
-export const adoRouter = Router();
+export const adoRouter: Router = Router();
 
 function resolveRepoPath(repoName: string, project: string): string | null {
   // Try full path first: org/project/repo
