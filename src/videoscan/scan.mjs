@@ -495,8 +495,12 @@ async function extractConsentGatedContent(page) {
     for (const s of document.querySelectorAll('script[type="text/plain"][data-cookieconsent]')) {
       if (s.textContent) parts.push(s.textContent);
     }
-    // Elements with deferred src attributes
-    for (const el of document.querySelectorAll("[data-cmp-src], [data-cookieblock-src], [data-src]")) {
+    // Elements with deferred src attributes (iframes/scripts only — skip images)
+    for (const el of document.querySelectorAll(
+      "iframe[data-cmp-src], iframe[data-cookieblock-src], iframe[data-src]," +
+      "script[data-cmp-src], script[data-cookieblock-src], script[data-src]," +
+      "[data-cmp-src], [data-cookieblock-src]"
+    )) {
       const src = el.getAttribute("data-cmp-src") || el.getAttribute("data-cookieblock-src") || el.getAttribute("data-src");
       if (src) parts.push(src);
     }
@@ -638,9 +642,7 @@ async function scanOnePage(context, url, timeout) {
 
   // Skip pages that redirected to a different domain
   try {
-    const finalHost = new URL(page.url()).hostname.replace(/^www\./, "");
-    const origHost = new URL(url).hostname.replace(/^www\./, "");
-    if (finalHost !== origHost) {
+    if (didRedirectOffDomain(page, url)) {
       await page.close();
       return { detected: [], links: [] };
     }
@@ -658,11 +660,7 @@ async function scanOnePage(context, url, timeout) {
 
   // Re-grab HTML after dynamic content has loaded
   const html = await page.content();
-  const consentGatedHtml = await extractConsentGatedContent(page);
-  const detected = detectPlayers(
-    consentGatedHtml ? html + "\n" + consentGatedHtml : html,
-    networkRequests
-  );
+  const detected = await detectWithConsent(page, html, networkRequests);
 
   // Extract links for further crawling
   const links = await page.evaluate(() =>
@@ -698,9 +696,7 @@ async function scanFirstPage(context, url, timeout) {
 
   // Skip pages that redirected to a different domain
   try {
-    const finalHost = new URL(page.url()).hostname.replace(/^www\./, "");
-    const origHost = new URL(url).hostname.replace(/^www\./, "");
-    if (finalHost !== origHost) {
+    if (didRedirectOffDomain(page, url)) {
       await page.close();
       return { detected: [], links: [] };
     }
@@ -718,11 +714,7 @@ async function scanFirstPage(context, url, timeout) {
   }
 
   const html = await page.content();
-  const consentGatedHtml = await extractConsentGatedContent(page);
-  const detected = detectPlayers(
-    consentGatedHtml ? html + "\n" + consentGatedHtml : html,
-    networkRequests
-  );
+  const detected = await detectWithConsent(page, html, networkRequests);
   const links = await page.evaluate(() =>
     Array.from(document.querySelectorAll("a[href]"), (a) => a.href)
   );
