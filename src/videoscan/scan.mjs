@@ -174,8 +174,6 @@ const DETECTORS = {
   Instagram: {
     patterns: [
       /instagram\.com\/embed/i,
-      /instagram\.com\/p\//i,
-      /instagram\.com\/reel/i,
       /cdninstagram\.com/i,
       /instgrm\.Embeds/i,
       /instagram-media/i,
@@ -198,8 +196,7 @@ const DETECTORS = {
       /platform\.twitter\.com\/widgets/i,
       /twitter-tweet/i,
       /twitter-timeline/i,
-      /x\.com\/\w+\/status\/\d+/i,
-      /twitter\.com\/\w+\/status\/\d+/i,
+      /twitter-video/i,
     ],
     scripts: [/platform\.twitter\.com\/widgets\.js/i],
   },
@@ -458,6 +455,74 @@ async function acceptCookies(page) {
   return false;
 }
 
+// After accepting the cookie banner, Cookiebot's inline consent placeholders
+// (e.g. <script type="text/plain" data-cookieconsent="marketing">) may still
+// block video embeds. This function triggers the swap so iframes load.
+async function activateCookiebotConsent(page) {
+  const hasPlaceholders = await page.evaluate(() =>
+    document.querySelectorAll(
+      'script[type="text/plain"][data-cookieconsent], .cookieconsent-optout-marketing, .cookieconsent-optout'
+    ).length > 0
+  );
+  if (!hasPlaceholders) return;
+
+  await page.evaluate(() => {
+    // Method 1: Cookiebot API
+    if (typeof Cookiebot !== "undefined" && Cookiebot.renew) {
+      try { Cookiebot.consent.marketing = true; Cookiebot.renew(); } catch {}
+    }
+    // Method 2: dispatch standard Cookiebot event
+    try { window.dispatchEvent(new Event("CookiebotOnAccept")); } catch {}
+    // Method 3: force-swap consent-gated scripts to execute
+    for (const s of document.querySelectorAll('script[type="text/plain"][data-cookieconsent]')) {
+      try {
+        const ns = document.createElement("script");
+        ns.textContent = s.textContent;
+        if (s.src) ns.src = s.src;
+        s.parentNode.replaceChild(ns, s);
+      } catch {}
+    }
+  });
+  await page.waitForTimeout(2000);
+}
+
+// Extract video URLs from consent-gated tags even when consent activation
+// didn't fire. Returns concatenated HTML-like string for detectPlayers().
+async function extractConsentGatedContent(page) {
+  return page.evaluate(() => {
+    const parts = [];
+    // Script tags that Cookiebot hides behind consent
+    for (const s of document.querySelectorAll('script[type="text/plain"][data-cookieconsent]')) {
+      if (s.textContent) parts.push(s.textContent);
+    }
+    // Deferred src attributes on iframes/scripts only (skip images/tracking pixels)
+    for (const el of document.querySelectorAll(
+      "iframe[data-cmp-src], iframe[data-cookieblock-src], iframe[data-src]," +
+      "script[data-cmp-src], script[data-cookieblock-src], script[data-src]"
+    )) {
+      const src = el.getAttribute("data-cmp-src") || el.getAttribute("data-cookieblock-src") || el.getAttribute("data-src");
+      if (src) parts.push(src);
+    }
+    return parts.length > 0 ? parts.join("\n") : "";
+  });
+}
+
+// Check whether navigation landed on a different domain (e.g. login redirect).
+function didRedirectOffDomain(page, originalUrl) {
+  const finalHost = new URL(page.url()).hostname.replace(/^www\./, "");
+  const origHost = new URL(originalUrl).hostname.replace(/^www\./, "");
+  return finalHost !== origHost;
+}
+
+// Gather consent-gated HTML and run detection.
+async function detectWithConsent(page, html, networkRequests) {
+  const consentGatedHtml = await extractConsentGatedContent(page);
+  return detectPlayers(
+    consentGatedHtml ? html + "\n" + consentGatedHtml : html,
+    networkRequests
+  );
+}
+
 async function scrollPage(page) {
   await page.evaluate(async () => {
     const delay = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -577,6 +642,15 @@ async function scanOnePage(context, url, timeout) {
     throw createRateLimitError(rlReason);
   }
 
+  // Skip pages that redirected to a different domain
+  try {
+    if (didRedirectOffDomain(page, url)) {
+      const dest = page.url();
+      await page.close();
+      return { detected: [], links: [], skippedReason: `redirect to ${new URL(dest).hostname}` };
+    }
+  } catch {}
+
   // Scroll to trigger lazy-loaded video embeds
   await scrollPage(page);
 
@@ -589,7 +663,7 @@ async function scanOnePage(context, url, timeout) {
 
   // Re-grab HTML after dynamic content has loaded
   const html = await page.content();
-  const detected = detectPlayers(html, networkRequests);
+  const detected = await detectWithConsent(page, html, networkRequests);
 
   // Extract links for further crawling
   const links = await page.evaluate(() =>
@@ -623,8 +697,26 @@ async function scanFirstPage(context, url, timeout) {
     throw createRateLimitError(rlReason);
   }
 
+  // Skip pages that redirected to a different domain
+  try {
+    if (didRedirectOffDomain(page, url)) {
+      const dest = page.url();
+      await page.close();
+      return { detected: [], links: [], skippedReason: `redirect to ${new URL(dest).hostname}` };
+    }
+  } catch {}
+
   if (await acceptCookies(page)) {
     await page.goto(url, { waitUntil: "networkidle", timeout });
+    // Re-check redirect after post-consent navigation
+    try {
+      if (didRedirectOffDomain(page, url)) {
+        const dest = page.url();
+        await page.close();
+        return { detected: [], links: [], skippedReason: `redirect to ${new URL(dest).hostname}` };
+      }
+    } catch {}
+    await activateCookiebotConsent(page);
   }
 
   await scrollPage(page);
@@ -634,7 +726,7 @@ async function scanFirstPage(context, url, timeout) {
   }
 
   const html = await page.content();
-  const detected = detectPlayers(html, networkRequests);
+  const detected = await detectWithConsent(page, html, networkRequests);
   const links = await page.evaluate(() =>
     Array.from(document.querySelectorAll("a[href]"), (a) => a.href)
   );
@@ -772,8 +864,10 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       chalk.gray(`[${visited.size}/${maxPages}] `) + chalk.white(truncate(firstUrl, 80)) + " "
     );
     try {
-      const { detected, links } = await scanFirstPage(context, firstUrl, timeout);
-      if (detected.length > 0) {
+      const { detected, links, skippedReason } = await scanFirstPage(context, firstUrl, timeout);
+      if (skippedReason) {
+        console.log(chalk.yellow(`  ⤳ skipped (${skippedReason})`));
+      } else if (detected.length > 0) {
         console.log(chalk.green(`  [${detected.map((d) => d.player).join(", ")}]`));
       } else {
         console.log(chalk.gray("  -"));
@@ -845,8 +939,10 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       const result = batchResults[i];
 
       if (result.status === "fulfilled") {
-        const { detected, links } = result.value;
-        if (detected.length > 0) {
+        const { detected, links, skippedReason } = result.value;
+        if (skippedReason) {
+          console.log(chalk.yellow(`  ⤳ ${truncate(url, 65)}  skipped (${skippedReason})`));
+        } else if (detected.length > 0) {
           console.log(chalk.green(`  ✓ ${truncate(url, 65)}  [${detected.map((d) => d.player).join(", ")}]`));
         }
         results.push({ url, players: detected });
@@ -966,8 +1062,10 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
   const firstUrl = urls[0];
   process.stdout.write(chalk.gray(`[1/${urls.length}] `) + chalk.white(truncate(firstUrl, 80)) + " ");
   try {
-    const { detected } = await scanFirstPage(context, firstUrl, timeout);
-    if (detected.length > 0) {
+    const { detected, skippedReason } = await scanFirstPage(context, firstUrl, timeout);
+    if (skippedReason) {
+      console.log(chalk.yellow(`  ⤳ skipped (${skippedReason})`));
+    } else if (detected.length > 0) {
       console.log(chalk.green(`  [${detected.map((d) => d.player).join(", ")}]`));
     } else {
       console.log(chalk.gray("  -"));
@@ -1008,8 +1106,10 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
       const result = batchResults[i];
 
       if (result.status === "fulfilled") {
-        const { detected } = result.value;
-        if (detected.length > 0) {
+        const { detected, skippedReason } = result.value;
+        if (skippedReason) {
+          console.log(chalk.yellow(`  ⤳ ${truncate(url, 65)}  skipped (${skippedReason})`));
+        } else if (detected.length > 0) {
           console.log(chalk.green(`  ✓ ${truncate(url, 65)}  [${detected.map((d) => d.player).join(", ")}]`));
         }
         results.push({ url, players: detected });
