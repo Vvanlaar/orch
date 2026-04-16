@@ -130,7 +130,7 @@ if (hasDashboardBuild) {
 } else {
   // Dev mode - Vite handles the dashboard
   app.get('/', (_req, res) => {
-    res.send('Dashboard not built. Run npm run build:dashboard or use Vite dev server.');
+    res.send('Dashboard not built. Run pnpm run build:dashboard or use Vite dev server.');
   });
 }
 
