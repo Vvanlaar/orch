@@ -495,11 +495,10 @@ async function extractConsentGatedContent(page) {
     for (const s of document.querySelectorAll('script[type="text/plain"][data-cookieconsent]')) {
       if (s.textContent) parts.push(s.textContent);
     }
-    // Elements with deferred src attributes (iframes/scripts only — skip images)
+    // Deferred src attributes on iframes/scripts only (skip images/tracking pixels)
     for (const el of document.querySelectorAll(
       "iframe[data-cmp-src], iframe[data-cookieblock-src], iframe[data-src]," +
-      "script[data-cmp-src], script[data-cookieblock-src], script[data-src]," +
-      "[data-cmp-src], [data-cookieblock-src]"
+      "script[data-cmp-src], script[data-cookieblock-src], script[data-src]"
     )) {
       const src = el.getAttribute("data-cmp-src") || el.getAttribute("data-cookieblock-src") || el.getAttribute("data-src");
       if (src) parts.push(src);
@@ -518,7 +517,10 @@ function didRedirectOffDomain(page, originalUrl) {
 // Gather consent-gated HTML and run detection.
 async function detectWithConsent(page, html, networkRequests) {
   const consentGatedHtml = await extractConsentGatedContent(page);
-  return detectPlayers(html + consentGatedHtml, networkRequests);
+  return detectPlayers(
+    consentGatedHtml ? html + "\n" + consentGatedHtml : html,
+    networkRequests
+  );
 }
 
 async function scrollPage(page) {
@@ -643,8 +645,9 @@ async function scanOnePage(context, url, timeout) {
   // Skip pages that redirected to a different domain
   try {
     if (didRedirectOffDomain(page, url)) {
+      const dest = page.url();
       await page.close();
-      return { detected: [], links: [] };
+      return { detected: [], links: [], skippedReason: `redirect to ${new URL(dest).hostname}` };
     }
   } catch {}
 
@@ -697,13 +700,22 @@ async function scanFirstPage(context, url, timeout) {
   // Skip pages that redirected to a different domain
   try {
     if (didRedirectOffDomain(page, url)) {
+      const dest = page.url();
       await page.close();
-      return { detected: [], links: [] };
+      return { detected: [], links: [], skippedReason: `redirect to ${new URL(dest).hostname}` };
     }
   } catch {}
 
   if (await acceptCookies(page)) {
     await page.goto(url, { waitUntil: "networkidle", timeout });
+    // Re-check redirect after post-consent navigation
+    try {
+      if (didRedirectOffDomain(page, url)) {
+        const dest = page.url();
+        await page.close();
+        return { detected: [], links: [], skippedReason: `redirect to ${new URL(dest).hostname}` };
+      }
+    } catch {}
     await activateCookiebotConsent(page);
   }
 
@@ -852,8 +864,10 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       chalk.gray(`[${visited.size}/${maxPages}] `) + chalk.white(truncate(firstUrl, 80)) + " "
     );
     try {
-      const { detected, links } = await scanFirstPage(context, firstUrl, timeout);
-      if (detected.length > 0) {
+      const { detected, links, skippedReason } = await scanFirstPage(context, firstUrl, timeout);
+      if (skippedReason) {
+        console.log(chalk.yellow(`  ⤳ skipped (${skippedReason})`));
+      } else if (detected.length > 0) {
         console.log(chalk.green(`  [${detected.map((d) => d.player).join(", ")}]`));
       } else {
         console.log(chalk.gray("  -"));
@@ -925,8 +939,10 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       const result = batchResults[i];
 
       if (result.status === "fulfilled") {
-        const { detected, links } = result.value;
-        if (detected.length > 0) {
+        const { detected, links, skippedReason } = result.value;
+        if (skippedReason) {
+          console.log(chalk.yellow(`  ⤳ ${truncate(url, 65)}  skipped (${skippedReason})`));
+        } else if (detected.length > 0) {
           console.log(chalk.green(`  ✓ ${truncate(url, 65)}  [${detected.map((d) => d.player).join(", ")}]`));
         }
         results.push({ url, players: detected });
@@ -1046,8 +1062,10 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
   const firstUrl = urls[0];
   process.stdout.write(chalk.gray(`[1/${urls.length}] `) + chalk.white(truncate(firstUrl, 80)) + " ");
   try {
-    const { detected } = await scanFirstPage(context, firstUrl, timeout);
-    if (detected.length > 0) {
+    const { detected, skippedReason } = await scanFirstPage(context, firstUrl, timeout);
+    if (skippedReason) {
+      console.log(chalk.yellow(`  ⤳ skipped (${skippedReason})`));
+    } else if (detected.length > 0) {
       console.log(chalk.green(`  [${detected.map((d) => d.player).join(", ")}]`));
     } else {
       console.log(chalk.gray("  -"));
@@ -1088,8 +1106,10 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
       const result = batchResults[i];
 
       if (result.status === "fulfilled") {
-        const { detected } = result.value;
-        if (detected.length > 0) {
+        const { detected, skippedReason } = result.value;
+        if (skippedReason) {
+          console.log(chalk.yellow(`  ⤳ ${truncate(url, 65)}  skipped (${skippedReason})`));
+        } else if (detected.length > 0) {
           console.log(chalk.green(`  ✓ ${truncate(url, 65)}  [${detected.map((d) => d.player).join(", ")}]`));
         }
         results.push({ url, players: detected });
