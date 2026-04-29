@@ -42,6 +42,7 @@ export interface Task {
   status: 'pending' | 'running' | 'completed' | 'failed' | 'needs-repo' | 'suggestion' | 'dismissed';
   repo: string;
   createdAt: string;
+  startedAt?: string;
   result?: string;
   error?: string;
   streamingOutput?: string;
@@ -50,6 +51,7 @@ export interface Task {
     title?: string;
     url?: string;
     retryCount?: number;
+    maxPages?: number;
   };
 }
 

@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { getScans, fetchScans, startScan, startGroupScan, resumeScan, addUrlsToScan, mergeDomainScans, regenerateReport, regeneratePreview, isLoading, importDigiToegankelijk, type ScanSummary, type DigiImportResult, type ReportOptions } from '../stores/videoscan.svelte';
   import { getTasks, getTaskOutput, isExpanded, toggleExpanded } from '../stores/tasks.svelte';
+  import VideoscanLiveProgress from './VideoscanLiveProgress.svelte';
   import { readPreference, writePreference } from '../lib/preferences';
 
   let url = $state('');
@@ -509,6 +510,7 @@
               {@const output = getTaskOutput(task.id)}
               {@const exp = isExpanded(task.id)}
               <div class="side-item">
+                <VideoscanLiveProgress {task} />
                 <button class="side-row" onclick={() => toggleExpanded(task.id)}>
                   <span class="side-title">#{task.id} {task.context?.title || 'Videoscan'}</span>
                   <span class="side-badge run">{task.status}</span>
