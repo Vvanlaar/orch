@@ -1141,7 +1141,17 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   };
 }
 
+// Strip <a href="..."> values so player-domain regexes don't match link
+// targets. Anchors are navigation, not embeds.
+function stripAnchorHrefs(html) {
+  return html.replace(
+    /(<a\b[^>]*?)\s+href\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi,
+    "$1"
+  );
+}
+
 function detectPlayers(html, networkRequests) {
+  const searchable = stripAnchorHrefs(html);
   const found = [];
 
   for (const [player, config] of Object.entries(DETECTORS)) {
@@ -1149,7 +1159,7 @@ function detectPlayers(html, networkRequests) {
 
     // Check HTML content
     for (const pattern of config.patterns) {
-      const match = html.match(pattern);
+      const match = searchable.match(pattern);
       if (match) matches.push(`HTML: ${match[0].slice(0, 80)}`);
     }
 
@@ -1164,7 +1174,7 @@ function detectPlayers(html, networkRequests) {
     }
   }
 
-  return filterNonVideoSocials(filterToHighestTier(found), html, networkRequests);
+  return filterNonVideoSocials(filterToHighestTier(found), searchable, networkRequests);
 }
 
 // ── Explicit URL scanning (no crawl) ────────────────────────────────
