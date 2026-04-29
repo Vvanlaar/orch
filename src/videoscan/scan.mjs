@@ -401,9 +401,93 @@ function shouldSkipUrl(url) {
     /tel:/i,
     /javascript:/i,
     /#$/,
-    /\?.*page=\d+/i, // pagination - skip for now
   ];
-  return skip.some((r) => r.test(url));
+  if (skip.some((r) => r.test(url))) return true;
+
+  // Pagination: skip ?page=N unless it's a listing/archive path where
+  // pagination is the only way to reach older items.
+  if (/\?.*\bpage=\d+/i.test(url)) {
+    const isListing = /\/(nieuws|news|blog|archief|archive|pers|press|media|publicaties|publications)(\/|\?|$)/i.test(url);
+    if (!isListing) return true;
+  }
+  return false;
+}
+
+// Discover URLs via robots.txt → sitemap (handles sitemapindex recursion).
+// Returns same-domain, non-skip URLs only. Best-effort: any error → empty.
+async function discoverSitemapUrls(startUrl, domain, { maxUrls = 5000, fetchTimeout = 30000 } = {}) {
+  const origin = new URL(startUrl).origin;
+  const targetProtocol = new URL(startUrl).protocol;
+  const sitemapCandidates = new Set();
+
+  // 1. Try robots.txt first
+  try {
+    const robotsRes = await fetchWithTimeout(`${origin}/robots.txt`, fetchTimeout);
+    if (robotsRes?.ok) {
+      const text = await robotsRes.text();
+      for (const m of text.matchAll(/^\s*Sitemap:\s*(\S+)/gim)) {
+        sitemapCandidates.add(m[1].trim());
+      }
+    }
+  } catch {}
+
+  // 2. Fallback to common locations
+  if (sitemapCandidates.size === 0) {
+    sitemapCandidates.add(`${origin}/sitemap.xml`);
+    sitemapCandidates.add(`${origin}/sitemap`);
+  }
+
+  const visitedSitemaps = new Set();
+  const found = new Set();
+  const MAX_SITEMAP_DEPTH = 3;
+
+  async function processSitemap(url, depth = 0) {
+    if (depth > MAX_SITEMAP_DEPTH || visitedSitemaps.has(url) || found.size >= maxUrls) return;
+    visitedSitemaps.add(url);
+    let xml;
+    try {
+      const res = await fetchWithTimeout(url, fetchTimeout);
+      if (!res?.ok) return;
+      xml = await res.text();
+    } catch { return; }
+
+    const isIndex = /<sitemapindex\b/i.test(xml);
+    const locs = [...xml.matchAll(/<loc>\s*([^<]+?)\s*<\/loc>/gi)].map((m) => m[1]);
+    if (isIndex) {
+      for (const loc of locs) {
+        if (found.size >= maxUrls) break;
+        // Only follow sub-sitemaps on the same domain to avoid arbitrary outbound fetches
+        if (!isSameDomain(loc.replace(/^https?:/, targetProtocol), domain)) continue;
+        await processSitemap(loc, depth + 1);
+      }
+    } else {
+      for (const loc of locs) {
+        if (found.size >= maxUrls) break;
+        // Normalize scheme to match the site's protocol (sitemaps often use http://)
+        const schemeMatched = loc.replace(/^https?:/, targetProtocol);
+        const normalized = normalizeUrl(schemeMatched, startUrl);
+        if (normalized && isSameDomain(normalized, domain) && !shouldSkipUrl(normalized)) {
+          found.add(normalized);
+        }
+      }
+    }
+  }
+
+  for (const sm of sitemapCandidates) {
+    if (found.size >= maxUrls) break;
+    await processSitemap(sm);
+  }
+  return [...found];
+}
+
+async function fetchWithTimeout(url, timeoutMs) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { signal: ctrl.signal, redirect: "follow" });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // Pages with these path segments are more likely to have video content.
@@ -799,7 +883,7 @@ function setupInterruptHandler() {
   process.on('SIGTERM', handler);
 }
 
-async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile = null, concurrency = DEFAULT_CONCURRENCY, delay = 200 } = {}) {
+async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile = null, concurrency = DEFAULT_CONCURRENCY, delay = 200, sitemap = true, maxSitemapUrls = 5000 } = {}) {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     userAgent:
@@ -897,6 +981,26 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
 
   // Parallel crawl loop
   const queuedSet = new Set(queue);
+
+  // Seed queue from sitemap (skip when resuming — already in state)
+  if (sitemap && !resumeFile) {
+    const sitemapUrls = await discoverSitemapUrls(startUrl, domain, { maxUrls: maxSitemapUrls }).catch(() => []);
+    let added = 0;
+    for (const u of sitemapUrls) {
+      if (!visited.has(u) && !queuedSet.has(u)) {
+        queuedSet.add(u);
+        queue.push(u);
+        added++;
+      }
+    }
+    if (added > 0) {
+      queue.splice(0, queue.length, ...prioritizeUrls(queue));
+      console.log(chalk.gray(`  Sitemap: ${sitemapUrls.length} URLs found, ${added} new added to queue`));
+    } else if (sitemapUrls.length === 0) {
+      console.log(chalk.gray(`  Sitemap: none found (or unreachable)`));
+    }
+  }
+
   let batchNum = 0;
   let lastProgressAt = Date.now();
   const scanStartTime = Date.now();
@@ -1267,6 +1371,8 @@ ${chalk.bold("Opties:")}
   --delay <ms>          Vertraging tussen batches in ms (standaard: 200)
   --resume <json-file>  Hervat scan vanuit eerder resultaat
   --urls <urls|file>    Scan explicit URLs (comma-separated or JSON file path)
+  --no-sitemap          Skip sitemap-based URL discovery
+  --max-sitemap-urls <n> Max URLs uit sitemap toevoegen aan queue (standaard: 5000)
 
 ${chalk.bold("Voorbeelden:")}
   node scan.mjs https://www.menzis.nl
@@ -1335,9 +1441,11 @@ async function main() {
   }
 
   const maxPages = parseInt(args[args.indexOf("--max-pages") + 1]) || 50;
+  const sitemap = !args.includes("--no-sitemap");
+  const maxSitemapUrls = parseInt(args[args.indexOf("--max-sitemap-urls") + 1]) || 5000;
 
   try {
-    const scanResult = await crawlSite(url, { maxPages, timeout, resumeFile, concurrency, delay });
+    const scanResult = await crawlSite(url, { maxPages, timeout, resumeFile, concurrency, delay, sitemap, maxSitemapUrls });
     generateReport(scanResult);
   } catch (err) {
     console.error(chalk.red(`Scan mislukt: ${err.message}`));
