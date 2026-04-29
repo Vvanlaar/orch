@@ -187,7 +187,6 @@ const DETECTORS = {
       /facebook\.com\/plugins\/video\.php/i,
       /facebook\.com\/watch/i,
       /class="fb-video/i,
-      /data-href.*facebook\.com/i,
     ],
     scripts: [/connect\.facebook\.net\/.+\/sdk\.js/i],
   },
@@ -365,6 +364,35 @@ function filterToHighestTier(players) {
   if (players.length <= 1) return players;
   const minTier = Math.min(...players.map((p) => DETECTOR_TIER[p.player] ?? 5));
   return players.filter((p) => (DETECTOR_TIER[p.player] ?? 5) === minTier);
+}
+
+// Social embeds where the regex matches both video and non-video posts.
+// Each confirmer returns true only if positive video evidence is present.
+const SOCIAL_VIDEO_CONFIRMERS = {
+  Instagram: (html, net) =>
+    /data-instgrm-permalink="[^"]*\/(reel|tv)\//i.test(html) ||
+    net.some((r) => /cdninstagram\.com\/.+\.mp4/i.test(r)),
+  "X (Twitter)": (html, net) =>
+    /class="[^"]*twitter-video/i.test(html) ||
+    net.some(
+      (r) =>
+        /video\.twimg\.com/i.test(r) ||
+        /pbs\.twimg\.com\/(ext_tw_video_thumb|amplify_video_thumb)/i.test(r)
+    ),
+  "Facebook Video": (html, net) =>
+    /class="[^"]*fb-video/i.test(html) ||
+    /facebook\.com\/(plugins\/video\.php|watch)/i.test(html) ||
+    net.some((r) => /video\.xx\.fbcdn\.net/i.test(r) || /fbcdn\.net\/.+\.mp4/i.test(r)),
+  LinkedIn: (html, net) =>
+    net.some((r) => /dms\.licdn\.com\/playlist/i.test(r) || /dms\.licdn\.com\/.+\.mp4/i.test(r)) ||
+    /<video[^>]+(?:src|data-src)="[^"]*dms\.licdn\.com/i.test(html),
+};
+
+function filterNonVideoSocials(detected, html, networkRequests) {
+  return detected.filter(({ player }) => {
+    const confirm = SOCIAL_VIDEO_CONFIRMERS[player];
+    return !confirm || confirm(html, networkRequests);
+  });
 }
 
 // ── Crawler ─────────────────────────────────────────────────────────
@@ -1136,7 +1164,7 @@ function detectPlayers(html, networkRequests) {
     }
   }
 
-  return filterToHighestTier(found);
+  return filterNonVideoSocials(filterToHighestTier(found), html, networkRequests);
 }
 
 // ── Explicit URL scanning (no crawl) ────────────────────────────────
