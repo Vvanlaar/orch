@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getScans, fetchScans, startScan, startGroupScan, resumeScan, addUrlsToScan, mergeDomainScans, regenerateReport, regeneratePreview, isLoading, importDigiToegankelijk, type ScanSummary, type DigiImportResult, type ReportOptions } from '../stores/videoscan.svelte';
+  import { getScans, fetchScans, startScan, startGroupScan, resumeScan, addUrlsToScan, mergeDomainScans, regenerateReport, regeneratePreview, isLoading, importDigiToegankelijk, classifyGroupUrls, type ScanSummary, type DigiImportResult, type ReportOptions } from '../stores/videoscan.svelte';
   import { getTasks, getTaskOutput, isExpanded, toggleExpanded } from '../stores/tasks.svelte';
   import VideoscanLiveProgress from './VideoscanLiveProgress.svelte';
   import { readPreference, writePreference } from '../lib/preferences';
@@ -100,10 +100,21 @@
     bulkProgress = 0;
   }
 
-  let bulkGroupCount = $derived.by(() => {
-    if (!importPreview) return 0;
-    return importPreview.groups.filter(g => g.sites.some(s => selectedUrls.has(s.url))).length;
+  let bulkPlan = $derived.by(() => {
+    if (!importPreview) return [] as { domain: string; crawls: string[]; explicit: string[] }[];
+    return importPreview.groups
+      .map(g => {
+        const urls = g.sites.map(s => s.url).filter(u => selectedUrls.has(u));
+        if (urls.length === 0) return null;
+        const { crawls, explicit } = classifyGroupUrls(urls);
+        return { domain: g.rootDomain, crawls, explicit };
+      })
+      .filter((g): g is { domain: string; crawls: string[]; explicit: string[] } => g !== null);
   });
+
+  let bulkTaskCount = $derived(
+    bulkPlan.reduce((n, g) => n + g.crawls.length + (g.explicit.length > 0 ? 1 : 0), 0)
+  );
 
   async function handleBulkStart() {
     if (!importPreview || bulkStarting) return;
@@ -112,20 +123,23 @@
     error = '';
     const errors: string[] = [];
 
-    const groupScans = importPreview.groups
-      .map(g => ({
-        domain: g.rootDomain,
-        urls: g.sites.map(s => s.url).filter(u => selectedUrls.has(u)),
-      }))
-      .filter(g => g.urls.length > 0);
-
-    for (const group of groupScans) {
-      try {
-        await startGroupScan(group.urls, maxPages, concurrency, delay);
-      } catch (err: any) {
-        errors.push(`${group.domain}: ${err.message}`);
+    for (const group of bulkPlan) {
+      for (const crawlUrl of group.crawls) {
+        try {
+          await startScan(crawlUrl, maxPages, concurrency, delay);
+        } catch (err: any) {
+          errors.push(`${group.domain} (crawl ${crawlUrl}): ${err.message}`);
+        }
+        bulkProgress++;
       }
-      bulkProgress++;
+      if (group.explicit.length > 0) {
+        try {
+          await startGroupScan(group.explicit, maxPages, concurrency, delay);
+        } catch (err: any) {
+          errors.push(`${group.domain} (explicit): ${err.message}`);
+        }
+        bulkProgress++;
+      }
     }
     if (errors.length > 0) {
       error = `${errors.length} scan(s) failed to start`;
@@ -327,13 +341,13 @@
       <div class="digi-actions">
         {#if bulkStarting}
           <div class="digi-progress">
-            <div class="digi-progress-bar" style="width:{bulkGroupCount > 0 ? Math.round((bulkProgress / bulkGroupCount) * 100) : 0}%"></div>
+            <div class="digi-progress-bar" style="width:{bulkTaskCount > 0 ? Math.round((bulkProgress / bulkTaskCount) * 100) : 0}%"></div>
           </div>
-          <span class="digi-progress-text">{bulkProgress} / {bulkGroupCount} domains</span>
+          <span class="digi-progress-text">{bulkProgress} / {bulkTaskCount} tasks</span>
         {:else}
           <button class="cmd-go" onclick={handleBulkStart} disabled={selectedCount === 0}>
             <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
-            Start {bulkGroupCount} domain scan{bulkGroupCount !== 1 ? 's' : ''} ({selectedCount} URLs)
+            Start {bulkTaskCount} scan{bulkTaskCount !== 1 ? 's' : ''} ({selectedCount} URLs)
           </button>
           <button class="digi-cancel" onclick={dismissImport}>Cancel</button>
         {/if}

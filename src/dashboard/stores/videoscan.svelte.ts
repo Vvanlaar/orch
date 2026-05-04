@@ -105,3 +105,29 @@ export async function mergeDomainScans(filenames: string[]) {
   await fetchScans();
   return result;
 }
+
+// Buckets a group's URLs by hostname (www-stripped). Per bucket: if any URL is
+// a domain root (pathname === "/"), seed a crawl from the first such URL;
+// otherwise fold subpages into a combined explicit-scan list. Subpages from
+// hostnames without a root are merged together since scanExplicitUrls is
+// hostname-agnostic.
+export function classifyGroupUrls(urls: string[]): { crawls: string[]; explicit: string[] } {
+  const buckets = new Map<string, string[]>();
+  for (const u of urls) {
+    let host: string;
+    try { host = new URL(u).hostname.replace(/^www\./, ''); } catch { continue; }
+    if (!buckets.has(host)) buckets.set(host, []);
+    buckets.get(host)!.push(u);
+  }
+
+  const crawls: string[] = [];
+  const explicit: string[] = [];
+  for (const [, bucketUrls] of buckets) {
+    const root = bucketUrls.find(u => {
+      try { return new URL(u).pathname === '/'; } catch { return false; }
+    });
+    if (root) crawls.push(root);
+    else explicit.push(...bucketUrls);
+  }
+  return { crawls, explicit };
+}
