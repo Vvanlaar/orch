@@ -41,12 +41,23 @@ async function postJson(url: string, body: Record<string, unknown>) {
   return data;
 }
 
-export function startScan(url: string, maxPages: number, concurrency: number, delay: number) {
-  return postJson('/api/actions/start-videoscan', { url, maxPages, concurrency, delay });
+export interface BatchCtx {
+  id: string;
+  label: string;
 }
 
-export function startGroupScan(urls: string[], maxPages: number, concurrency: number, delay: number) {
-  return postJson('/api/actions/start-videoscan-urls', { urls, maxPages, concurrency, delay });
+export function startScan(url: string, maxPages: number, concurrency: number, delay: number, batch?: BatchCtx) {
+  return postJson('/api/actions/start-videoscan', {
+    url, maxPages, concurrency, delay,
+    ...(batch ? { batchId: batch.id, batchLabel: batch.label } : {}),
+  });
+}
+
+export function startGroupScan(urls: string[], maxPages: number, concurrency: number, delay: number, batch?: BatchCtx) {
+  return postJson('/api/actions/start-videoscan-urls', {
+    urls, maxPages, concurrency, delay,
+    ...(batch ? { batchId: batch.id, batchLabel: batch.label } : {}),
+  });
 }
 
 export function resumeScan(filename: string, maxPages: number, concurrency: number, delay: number) {

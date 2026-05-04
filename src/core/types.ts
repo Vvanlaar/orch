@@ -69,6 +69,8 @@ export interface TaskContext {
   delay?: number; // inter-batch delay in ms for rate limit throttling
   urls?: string[]; // explicit URL list (no crawl mode)
   targetFilename?: string; // merge into this existing scan after
+  batchId?: string; // groups multiple videoscan tasks under one live block (e.g. digi import)
+  batchLabel?: string; // human-readable label for the batch group header
 }
 
 export interface Config {

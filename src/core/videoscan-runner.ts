@@ -329,6 +329,20 @@ function findLatestScanFile(): string | undefined {
   }
 }
 
+export function findLatestScanFileForDomain(domain: string): string | null {
+  if (!domain) return null;
+  const prefix = `videoscan-${domain}-`;
+  try {
+    const files = readdirSync(VIDEOSCAN_DIR)
+      .filter(f => f.startsWith(prefix) && f.endsWith('.json'))
+      .map(f => ({ name: f, mtime: statSync(join(VIDEOSCAN_DIR, f)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime);
+    return files[0]?.name ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function killVideoscan(taskId: number): boolean {
   const proc = runningProcesses.get(taskId);
   if (!proc) return false;

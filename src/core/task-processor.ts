@@ -12,6 +12,7 @@ import {
   getRunningTasks,
   claimTask,
   completeTask,
+  createTask,
   failTask,
   appendStreamingOutput,
   clearStreamingOutput,
@@ -40,7 +41,7 @@ import {
   checkoutPRInWorktree,
   findRemoteForRepo,
 } from './git-ops.js';
-import { runVideoscan } from './videoscan-runner.js';
+import { runVideoscan, findLatestScanFileForDomain, getVideoscanDir } from './videoscan-runner.js';
 import { MACHINE_ID, isSupabaseConfigured } from './db/client.js';
 import type { Task } from './types.js';
 
@@ -658,10 +659,37 @@ export async function startProcessor(intervalMs = 5000): Promise<void> {
     if (isTerminalTask) {
       await updateTaskStatus(t.id, 'pending');
       log.warn(`Reset terminal task #${t.id} to pending (may still have active terminal)`);
-    } else {
-      await failTask(t.id, 'Server restarted while task was running');
-      log.warn(`Marked orphaned task #${t.id} as failed`);
+      continue;
     }
+
+    // Auto-resume orphaned crawl-mode videoscans if a prior scan JSON exists.
+    // Explicit-URL mode (context.urls set) has no resumable on-disk state — fail it.
+    if (t.type === 'videoscan' && t.context.scanUrl && !t.context.urls) {
+      let domain = '';
+      try { domain = new URL(t.context.scanUrl).hostname.replace(/^www\./, ''); } catch {}
+      const resumeName = domain ? findLatestScanFileForDomain(domain) : null;
+      if (resumeName) {
+        const resumePath = path.join(getVideoscanDir(), resumeName);
+        await failTask(t.id, 'Server restarted; auto-resume task created');
+        const resumed = await createTask('videoscan', t.context.scanUrl, getVideoscanDir(), {
+          source: 'github',
+          event: 'videoscan-resume',
+          title: `Resume videoscan: ${domain}`,
+          scanUrl: t.context.scanUrl,
+          maxPages: t.context.maxPages ?? 200,
+          concurrency: t.context.concurrency,
+          delay: t.context.delay,
+          resumeFile: resumePath,
+          ...(t.context.batchId ? { batchId: t.context.batchId } : {}),
+          ...(t.context.batchLabel ? { batchLabel: t.context.batchLabel } : {}),
+        });
+        log.warn(`Orphaned videoscan #${t.id} (${domain}) — auto-resume created as task #${resumed.id}`);
+        continue;
+      }
+    }
+
+    await failTask(t.id, 'Server restarted while task was running');
+    log.warn(`Marked orphaned task #${t.id} as failed`);
   }
 
   log.info('Task processor started');

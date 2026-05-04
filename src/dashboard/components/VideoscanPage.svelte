@@ -3,6 +3,8 @@
   import { getScans, fetchScans, startScan, startGroupScan, resumeScan, addUrlsToScan, mergeDomainScans, regenerateReport, regeneratePreview, isLoading, importDigiToegankelijk, classifyGroupUrls, type ScanSummary, type DigiImportResult, type ReportOptions } from '../stores/videoscan.svelte';
   import { getTasks, getTaskOutput, isExpanded, toggleExpanded } from '../stores/tasks.svelte';
   import VideoscanLiveProgress from './VideoscanLiveProgress.svelte';
+  import VideoscanLiveBatch from './VideoscanLiveBatch.svelte';
+  import type { Task } from '../lib/types';
   import { readPreference, writePreference } from '../lib/preferences';
 
   let url = $state('');
@@ -17,6 +19,29 @@
   let allTasks = $derived(getTasks());
   let videoscanTasks = $derived(allTasks.filter(t => t.type === 'videoscan'));
   let activeTasks = $derived(videoscanTasks.filter(t => t.status === 'running' || t.status === 'pending'));
+
+  type ActiveItem =
+    | { kind: 'single'; task: Task }
+    | { kind: 'batch'; batchId: string; label: string; tasks: Task[] };
+
+  let activeItems = $derived.by<ActiveItem[]>(() => {
+    const items: ActiveItem[] = [];
+    const batches = new Map<string, { label: string; tasks: Task[] }>();
+    for (const task of activeTasks) {
+      const id = task.context?.batchId;
+      if (id) {
+        const label = task.context?.batchLabel || `Batch ${id}`;
+        if (!batches.has(id)) batches.set(id, { label, tasks: [] });
+        batches.get(id)!.tasks.push(task);
+      } else {
+        items.push({ kind: 'single', task });
+      }
+    }
+    for (const [batchId, { label, tasks }] of batches) {
+      items.push({ kind: 'batch', batchId, label, tasks });
+    }
+    return items;
+  });
   let historyTasks = $derived(videoscanTasks.filter(t => t.status !== 'running' && t.status !== 'pending'));
   let resumableScans = $derived(scans.filter(s => s.canResume));
 
@@ -123,10 +148,16 @@
     error = '';
     const errors: string[] = [];
 
+    const orgSlug = importPreview.orgName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'import';
+    const batch = {
+      id: `digi-${orgSlug}-${Date.now()}`,
+      label: `Digi import — ${importPreview.orgName}`,
+    };
+
     for (const group of bulkPlan) {
       for (const crawlUrl of group.crawls) {
         try {
-          await startScan(crawlUrl, maxPages, concurrency, delay);
+          await startScan(crawlUrl, maxPages, concurrency, delay, batch);
         } catch (err: any) {
           errors.push(`${group.domain} (crawl ${crawlUrl}): ${err.message}`);
         }
@@ -134,7 +165,7 @@
       }
       if (group.explicit.length > 0) {
         try {
-          await startGroupScan(group.explicit, maxPages, concurrency, delay);
+          await startGroupScan(group.explicit, maxPages, concurrency, delay, batch);
         } catch (err: any) {
           errors.push(`${group.domain} (explicit): ${err.message}`);
         }
@@ -520,19 +551,26 @@
               Live
               <span class="live-n">{activeTasks.length}</span>
             </h3>
-            {#each activeTasks as task (task.id)}
-              {@const output = getTaskOutput(task.id)}
-              {@const exp = isExpanded(task.id)}
-              <div class="side-item">
-                <VideoscanLiveProgress {task} />
-                <button class="side-row" onclick={() => toggleExpanded(task.id)}>
-                  <span class="side-title">#{task.id} {task.context?.title || 'Videoscan'}</span>
-                  <span class="side-badge run">{task.status}</span>
-                </button>
-                {#if exp && output}
-                  <pre class="side-out">{output}</pre>
-                {/if}
-              </div>
+            {#each activeItems as item (item.kind === 'batch' ? `b:${item.batchId}` : `t:${item.task.id}`)}
+              {#if item.kind === 'batch'}
+                <div class="side-item">
+                  <VideoscanLiveBatch batchId={item.batchId} label={item.label} tasks={item.tasks} />
+                </div>
+              {:else}
+                {@const task = item.task}
+                {@const output = getTaskOutput(task.id)}
+                {@const exp = isExpanded(task.id)}
+                <div class="side-item">
+                  <VideoscanLiveProgress {task} />
+                  <button class="side-row" onclick={() => toggleExpanded(task.id)}>
+                    <span class="side-title">#{task.id} {task.context?.title || 'Videoscan'}</span>
+                    <span class="side-badge run">{task.status}</span>
+                  </button>
+                  {#if exp && output}
+                    <pre class="side-out">{output}</pre>
+                  {/if}
+                </div>
+              {/if}
             {/each}
           </div>
         {/if}

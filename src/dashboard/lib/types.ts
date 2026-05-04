@@ -52,6 +52,10 @@ export interface Task {
     url?: string;
     retryCount?: number;
     maxPages?: number;
+    scanUrl?: string;
+    urls?: string[];
+    batchId?: string;
+    batchLabel?: string;
   };
 }
 

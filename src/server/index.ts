@@ -1413,7 +1413,7 @@ app.post('/api/actions/review-resolution', asyncHandler(async (req, res) => {
 // --- Videoscan API ---
 
 app.post('/api/actions/start-videoscan', asyncHandler(async (req, res) => {
-  const { url, maxPages, concurrency, delay } = req.body;
+  const { url, maxPages, concurrency, delay, batchId, batchLabel } = req.body;
   if (!url || typeof url !== 'string') {
     res.status(400).json({ error: 'url required' });
     return;
@@ -1428,6 +1428,8 @@ app.post('/api/actions/start-videoscan', asyncHandler(async (req, res) => {
     maxPages: maxPages || 50,
     concurrency: concurrency || 6,
     delay: delay ?? 200,
+    ...(typeof batchId === 'string' && batchId ? { batchId } : {}),
+    ...(typeof batchLabel === 'string' && batchLabel ? { batchLabel } : {}),
   });
   triggerUpdate();
   await broadcastTasks();
@@ -1435,7 +1437,7 @@ app.post('/api/actions/start-videoscan', asyncHandler(async (req, res) => {
 }));
 
 app.post('/api/actions/start-videoscan-urls', asyncHandler(async (req, res) => {
-  const { urls, maxPages, concurrency, delay } = req.body;
+  const { urls, maxPages, concurrency, delay, batchId, batchLabel } = req.body;
   if (!Array.isArray(urls) || urls.length === 0 || urls.length > 500) {
     res.status(400).json({ error: 'urls must be an array of 1-500 URLs' });
     return;
@@ -1453,6 +1455,8 @@ app.post('/api/actions/start-videoscan-urls', asyncHandler(async (req, res) => {
     maxPages: maxPages || 50,
     concurrency: concurrency || 6,
     delay: delay ?? 200,
+    ...(typeof batchId === 'string' && batchId ? { batchId } : {}),
+    ...(typeof batchLabel === 'string' && batchLabel ? { batchLabel } : {}),
   });
   triggerUpdate();
   await broadcastTasks();
