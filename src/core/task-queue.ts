@@ -19,6 +19,7 @@ import {
   dbApproveSuggestion,
   dbDismissSuggestion,
   dbClaimTask,
+  dbGetTasksByBatchId,
 } from './db/tasks.js';
 import { createLogger } from './logger.js';
 
@@ -203,6 +204,11 @@ export async function getRunningTasks(): Promise<Task[]> {
 export async function getAllTasks(limit = 50): Promise<Task[]> {
   if (useDb) return dbGetAllTasks(limit);
   return jsonGetAllTasks(limit);
+}
+
+export async function getTasksByBatchId(batchId: string): Promise<Task[]> {
+  if (useDb) return dbGetTasksByBatchId(batchId);
+  return loadDb().tasks.filter(t => t.context?.batchId === batchId);
 }
 
 export async function startTask(id: number): Promise<void> {

@@ -7,6 +7,7 @@ const log = createLogger('task-processor');
 import { createIssueComment, createReviewCommentReply, getReviewThreads, resolveReviewThread } from './github-api.js';
 import {
   getAllTasks,
+  getTasksByBatchId,
   getPendingTasks,
   getRunningCount,
   getRunningTasks,
@@ -41,7 +42,8 @@ import {
   checkoutPRInWorktree,
   findRemoteForRepo,
 } from './git-ops.js';
-import { runVideoscan, findLatestScanFileForDomain, getVideoscanDir } from './videoscan-runner.js';
+import { runVideoscan, findLatestScanFileForDomain, getVideoscanDir, mergeScans, syncScanToSupabase, generateReport as generateVideoscanReport } from './videoscan-runner.js';
+import { dbArchiveVideoscans } from './db/videoscans.js';
 import { MACHINE_ID, isSupabaseConfigured } from './db/client.js';
 import type { Task } from './types.js';
 
@@ -384,6 +386,82 @@ async function processVideoscan(task: Task): Promise<void> {
     await failTask(task.id, error);
   }
   notifyUpdate();
+
+  // Auto-merge digi-import batches once every sibling task has finished.
+  if (ctx.batchId && !ctx.targetFilename) {
+    try {
+      await tryAutoMergeBatch(ctx.batchId);
+    } catch (err) {
+      log.error(`Batch auto-merge failed for ${ctx.batchId}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+}
+
+// In-memory lock so concurrent task completions don't double-merge a batch on this process.
+const batchMergeLocks = new Set<string>();
+
+const JSON_LINE = /^JSON:\s*(.+\.json)\s*$/m;
+const DIGI_BATCH_RE = /^digi-(.+)-\d+$/;
+
+async function tryAutoMergeBatch(batchId: string): Promise<void> {
+  if (batchMergeLocks.has(batchId)) return;
+
+  // Query siblings directly by batchId — no row-cap risk for large imports.
+  const siblings = (await getTasksByBatchId(batchId)).filter(t => t.type === 'videoscan');
+  if (siblings.length < 2) return;
+
+  // Only proceed once every sibling has reached a terminal state. Adding new task statuses
+  // in the future will keep the gate closed until we explicitly opt them in.
+  const TERMINAL: ReadonlyArray<string> = ['completed', 'failed', 'dismissed'];
+  const allTerminal = siblings.every(t => TERMINAL.includes(t.status));
+  if (!allTerminal) return;
+
+  // Atomically claim the batch on this process.
+  if (batchMergeLocks.has(batchId)) return;
+  batchMergeLocks.add(batchId);
+
+  let succeeded = false;
+  try {
+    const filenames: string[] = [];
+    for (const t of siblings) {
+      if (t.status !== 'completed' || !t.result) continue;
+      const m = t.result.match(JSON_LINE);
+      if (m) filenames.push(m[1].trim());
+    }
+    // Dedupe — re-runs into the same target file would otherwise list a single file twice.
+    const unique = [...new Set(filenames)];
+    if (unique.length < 2) {
+      log.info(`Batch ${batchId}: only ${unique.length} successful scan(s), skipping auto-merge`);
+      succeeded = true; // not a real failure — nothing to merge, don't retry
+      return;
+    }
+
+    // Derive merge label from "digi-<orgSlug>-<timestamp>" → "<orgSlug>-organisatie".
+    const slugMatch = batchId.match(DIGI_BATCH_RE);
+    const label = slugMatch ? `${slugMatch[1]}-organisatie` : `${batchId}-merged`;
+
+    log.info(`Batch ${batchId}: auto-merging ${unique.length} scans into ${label}`);
+    const result = mergeScans(unique, label);
+    await syncScanToSupabase(result.filename);
+    if (isSupabaseConfigured()) {
+      try { await dbArchiveVideoscans(unique); } catch (err) { log.warn(`dbArchiveVideoscans failed: ${err}`); }
+    }
+
+    // Generate report + PDF so the merged scan is immediately viewable.
+    try {
+      await generateVideoscanReport(result.filename);
+    } catch (err) {
+      log.warn(`Auto report generation failed for ${result.filename}: ${err}`);
+    }
+
+    log.info(`Batch ${batchId}: merged into ${result.filename}`);
+    notifyUpdate();
+    succeeded = true;
+  } finally {
+    // Release the lock on transient failure so the next sibling completion (or a manual
+    // retrigger) can retry. On success the lock stays — merge is one-shot per process.
+    if (!succeeded) batchMergeLocks.delete(batchId);
+  }
 }
 
 function generateBranchName(task: Task): string {

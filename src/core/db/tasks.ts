@@ -107,6 +107,17 @@ export async function dbGetAllTasks(limit = 50): Promise<Task[]> {
   return (data as TaskRow[]).map(rowToTask);
 }
 
+export async function dbGetTasksByBatchId(batchId: string): Promise<Task[]> {
+  const { data, error } = await getSupabase()
+    .from('tasks')
+    .select(TASK_COLUMNS_NO_OUTPUT)
+    .eq('context->>batchId', batchId)
+    .order('created_at', { ascending: true });
+
+  if (error) throw new Error(`Failed to get tasks for batch ${batchId}: ${error.message}`);
+  return (data as TaskRow[]).map(rowToTask);
+}
+
 export async function dbUpdateTask(id: number, updates: Record<string, unknown>): Promise<void> {
   const { error } = await getSupabase()
     .from('tasks')
