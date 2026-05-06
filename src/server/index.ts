@@ -31,7 +31,7 @@ import { initSettings } from '../core/settings.js';
 import { isSupabaseConfigured, MACHINE_ID } from '../core/db/client.js';
 import { dbGetNotifications, dbInsertNotification } from '../core/db/notifications.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
-import { getVideoscanDir, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan } from '../core/videoscan-runner.js';
+import { getVideoscanDir, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, setVideoscanControl } from '../core/videoscan-runner.js';
 import { downloadFile } from '../core/db/storage.js';
 import { dbArchiveVideoscans } from '../core/db/videoscans.js';
 import type { TerminalId } from '../core/types.js';
@@ -179,6 +179,38 @@ app.post('/api/tasks/:id/stop', asyncHandler(async (req, res) => {
   await failTask(id, isLocal ? 'Stopped by user' : `Stopped by user (was remote on ${task.machineId})`);
   await broadcastTasks();
   res.json({ success: true });
+}));
+
+// Live videoscan control: bump concurrency / delay on a running scan
+app.post('/api/tasks/:id/videoscan-control', asyncHandler(async (req, res) => {
+  const id = parseInt(req.params.id as string);
+  const task = await getTask(id);
+  if (!task || task.type !== 'videoscan') {
+    res.status(404).json({ error: 'Videoscan task not found' });
+    return;
+  }
+  if (task.status !== 'running') {
+    res.status(400).json({ error: 'Task not running' });
+    return;
+  }
+  if (task.machineId && task.machineId !== MACHINE_ID) {
+    res.status(400).json({ error: `Task running on ${task.machineId}, not this machine` });
+    return;
+  }
+  const { concurrency, delay } = req.body || {};
+  const hasValid =
+    (typeof concurrency === 'number' && concurrency >= 1 && concurrency <= 64) ||
+    (typeof delay === 'number' && delay >= 0 && delay <= 60_000);
+  if (!hasValid) {
+    res.status(400).json({ error: 'Provide concurrency (1-64) and/or delay (0-60000ms)' });
+    return;
+  }
+  const ok = setVideoscanControl(id, { concurrency, delay });
+  if (!ok) {
+    res.status(409).json({ error: 'Task has no live control file (not running on this server process)' });
+    return;
+  }
+  res.json({ success: true, concurrency, delay });
 }));
 
 // Delete task

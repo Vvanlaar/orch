@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import type { Task } from '../lib/types';
-  import { getTaskOutput } from '../stores/tasks.svelte';
+  import { getTaskOutput, setVideoscanControl } from '../stores/tasks.svelte';
   import { parseScanProgress, formatDuration, formatEta } from '../lib/videoscan-progress';
 
   let { task }: { task: Task } = $props();
@@ -12,6 +12,30 @@
 
   let output = $derived(getTaskOutput(task.id));
   let progress = $derived(parseScanProgress(output, task.context?.maxPages ?? 0));
+
+  let concInput = $state<number | null>(null);
+  let concBusy = $state(false);
+  let concError = $state<string | null>(null);
+
+  let displayConc = $derived(progress.baseConcurrency ?? progress.concurrency ?? task.context?.concurrency ?? null);
+
+  async function bumpConc(delta: number) {
+    const base = displayConc ?? 6;
+    await applyConc(Math.max(1, Math.min(64, base + delta)));
+  }
+
+  async function applyConc(value: number) {
+    concBusy = true;
+    concError = null;
+    try {
+      await setVideoscanControl(task.id, { concurrency: value });
+      concInput = null;
+    } catch (err) {
+      concError = err instanceof Error ? err.message : String(err);
+    } finally {
+      concBusy = false;
+    }
+  }
 
   let startTs = $derived.by(() => {
     const s = task.startedAt || task.createdAt;
@@ -58,6 +82,39 @@
       <div class="vsp-lbl">Est. left</div>
     </div>
   </div>
+
+  {#if isRunning}
+    <div class="vsp-conc">
+      <div class="vsp-conc-row">
+        <span class="vsp-conc-lbl">Concurrency</span>
+        <span class="vsp-conc-val">
+          {displayConc ?? '?'}
+          {#if progress.concurrency !== null && progress.baseConcurrency !== null && progress.concurrency !== progress.baseConcurrency}
+            <span class="vsp-conc-cur">(now {progress.concurrency})</span>
+          {/if}
+        </span>
+        <button class="vsp-btn" onclick={() => bumpConc(-1)} disabled={concBusy}>−</button>
+        <button class="vsp-btn" onclick={() => bumpConc(+1)} disabled={concBusy}>+</button>
+        <input
+          class="vsp-input"
+          type="number"
+          min="1"
+          max="64"
+          placeholder="set"
+          bind:value={concInput}
+          disabled={concBusy}
+        />
+        <button
+          class="vsp-btn vsp-btn-apply"
+          onclick={() => concInput && applyConc(concInput)}
+          disabled={concBusy || !concInput}
+        >Set</button>
+      </div>
+      {#if concError}
+        <div class="vsp-conc-err">{concError}</div>
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -139,5 +196,75 @@
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--text-muted, #5e7389);
+  }
+  .vsp-conc {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-subtle);
+  }
+  .vsp-conc-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .vsp-conc-lbl {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    margin-right: 4px;
+  }
+  .vsp-conc-val {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text, #c9d5e0);
+    min-width: 24px;
+  }
+  .vsp-conc-cur {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--text-muted);
+    margin-left: 4px;
+  }
+  .vsp-btn {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-subtle);
+    color: var(--text, #c9d5e0);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 12px;
+    cursor: pointer;
+    line-height: 1.4;
+  }
+  .vsp-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .vsp-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .vsp-btn-apply {
+    background: var(--accent, #06b6d4);
+    color: #001;
+    border-color: transparent;
+    font-weight: 700;
+  }
+  .vsp-input {
+    width: 50px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-subtle);
+    color: var(--text, #c9d5e0);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .vsp-conc-err {
+    margin-top: 6px;
+    font-size: 11px;
+    color: #f87171;
   }
 </style>

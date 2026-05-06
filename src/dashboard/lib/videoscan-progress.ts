@@ -4,12 +4,16 @@ export interface ScanProgress {
   pagesPerMin: number | null;
   etaMin: number | null;
   maxPages: number;
+  concurrency: number | null;
+  baseConcurrency: number | null;
   hasData: boolean;
 }
 
 const ANSI = /\x1b\[[0-9;]*m/g;
 
 const SUMMARY = /(\d+(?:\.\d+)?)\s*pages\/min\s*\|\s*queue=(\d+)\s*\|\s*~(\d+(?:\.\d+)?|\?)\s*min\s*left/i;
+const SUMMARY_CONC = /\bconcurrency=(\d+)/i;
+const CONTROL = /Live control:\s*concurrency=(\d+)(?:\s*\(base=(\d+)\))?/i;
 const PER_URL = /\[(\d+)\/(\d+)\](?:\s*\(queue:\s*(\d+)\))?/;
 const RESUME = /Previously scanned:\s*(\d+)\s*pages,\s*Queue:\s*(\d+)\s*URLs/i;
 const FINAL = /Pagina['']s gescand:\s*(\d+)/i;
@@ -22,6 +26,8 @@ export function parseScanProgress(rawOutput: string, maxPagesHint: number): Scan
     pagesPerMin: null,
     etaMin: null,
     maxPages: maxPagesHint || 0,
+    concurrency: null,
+    baseConcurrency: null,
     hasData: false,
   };
 
@@ -34,8 +40,20 @@ export function parseScanProgress(rawOutput: string, maxPagesHint: number): Scan
       result.pagesPerMin = parseFloat(m[1]);
       result.queue = parseInt(m[2], 10);
       result.etaMin = m[3] === '?' ? null : parseFloat(m[3]);
+      const c = lines[i].match(SUMMARY_CONC);
+      if (c) result.concurrency = parseInt(c[1], 10);
       result.hasData = true;
       summarySeen = true;
+      break;
+    }
+  }
+
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = lines[i].match(CONTROL);
+    if (m) {
+      const cur = parseInt(m[1], 10);
+      result.concurrency = cur;
+      result.baseConcurrency = m[2] ? parseInt(m[2], 10) : cur;
       break;
     }
   }

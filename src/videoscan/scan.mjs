@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { chromium } from "playwright";
 import chalk from "chalk";
-import { readFileSync, writeFileSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, statSync } from "fs";
 
 // ── Video Player Detectors ──────────────────────────────────────────
 // Each detector checks page HTML + network requests for a specific player.
@@ -894,6 +894,51 @@ function tryRecover(throttle) {
   throttle.concurrency = Math.min(throttle.baseConcurrency, throttle.concurrency + 1);
 }
 
+// Live control file: { concurrency?: number, delay?: number }. Re-applied only when the file's mtime changes,
+// so the rate-limiter's backoff (onRateLimit) and recovery (tryRecover) aren't overwritten every batch.
+function applyControlFile(throttle, controlFile) {
+  if (!controlFile) return;
+  let mtimeMs;
+  try {
+    mtimeMs = statSync(controlFile).mtimeMs;
+  } catch {
+    return; // file doesn't exist or unreadable
+  }
+  if (throttle._lastControlMtime === mtimeMs) return;
+  throttle._lastControlMtime = mtimeMs;
+  let ctrl;
+  try {
+    const raw = readFileSync(controlFile, 'utf-8');
+    if (!raw.trim()) return;
+    ctrl = JSON.parse(raw);
+  } catch (err) {
+    console.log(chalk.yellow(`  ⚠ Control file parse error: ${err.message}`));
+    return;
+  }
+  let changed = false;
+  if (typeof ctrl.concurrency === 'number' && ctrl.concurrency >= 1 && ctrl.concurrency <= 64) {
+    const next = Math.floor(ctrl.concurrency);
+    if (next !== throttle.baseConcurrency) {
+      throttle.baseConcurrency = next;
+      // Cap current concurrency if user lowered base; otherwise let tryRecover() climb back up to new base.
+      throttle.concurrency = Math.min(next, throttle.concurrency);
+      changed = true;
+    }
+  }
+  if (typeof ctrl.delay === 'number' && ctrl.delay >= 0 && ctrl.delay <= 60_000) {
+    const next = Math.floor(ctrl.delay);
+    if (next !== throttle.baseDelay) {
+      throttle.baseDelay = next;
+      // Raise floor only — don't undo rate-limit backoff that pushed delay above base.
+      throttle.delay = Math.max(next, throttle.delay);
+      changed = true;
+    }
+  }
+  if (changed) {
+    console.log(chalk.magenta(`  ⚡ Live control: concurrency=${throttle.concurrency} (base=${throttle.baseConcurrency}), delay=${throttle.delay}ms (base=${throttle.baseDelay}ms)`));
+  }
+}
+
 // SIGINT/SIGTERM graceful shutdown
 let interrupted = false;
 function setupInterruptHandler() {
@@ -911,7 +956,7 @@ function setupInterruptHandler() {
   process.on('SIGTERM', handler);
 }
 
-async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile = null, concurrency = DEFAULT_CONCURRENCY, delay = 200, sitemap = true, maxSitemapUrls = 5000 } = {}) {
+async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile = null, concurrency = DEFAULT_CONCURRENCY, delay = 200, sitemap = true, maxSitemapUrls = 5000, controlFile = null } = {}) {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     userAgent:
@@ -1039,6 +1084,9 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       await sleep(throttle.delay);
     }
     batchNum++;
+
+    // Apply live control-file overrides (concurrency/delay) before sizing batch
+    applyControlFile(throttle, controlFile);
 
     // Grab a batch of URLs to scan in parallel (use throttle.concurrency)
     const batch = [];
@@ -1179,7 +1227,7 @@ function detectPlayers(html, networkRequests) {
 
 // ── Explicit URL scanning (no crawl) ────────────────────────────────
 
-async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_CONCURRENCY, delay = 200 } = {}) {
+async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_CONCURRENCY, delay = 200, controlFile = null } = {}) {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     userAgent:
@@ -1231,6 +1279,8 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
   while (remaining.length > 0 && !interrupted) {
     if (batchNum > 0 && throttle.delay > 0) await sleep(throttle.delay);
     batchNum++;
+
+    applyControlFile(throttle, controlFile);
 
     const batch = remaining.splice(0, throttle.concurrency);
 
@@ -1411,6 +1461,7 @@ ${chalk.bold("Opties:")}
   --urls <urls|file>    Scan explicit URLs (comma-separated or JSON file path)
   --no-sitemap          Skip sitemap-based URL discovery
   --max-sitemap-urls <n> Max URLs uit sitemap toevoegen aan queue (standaard: 5000)
+  --control-file <path> JSON file polled per batch for live { concurrency, delay } overrides
 
 ${chalk.bold("Voorbeelden:")}
   node scan.mjs https://www.menzis.nl
@@ -1432,6 +1483,8 @@ async function main() {
   const timeout = parseInt(args[args.indexOf("--timeout") + 1]) || 15000;
   const concurrency = parseInt(args[args.indexOf("--concurrency") + 1]) || DEFAULT_CONCURRENCY;
   const delay = parseInt(args[args.indexOf("--delay") + 1]) || 200;
+  const controlFileIdx = args.indexOf("--control-file");
+  const controlFile = controlFileIdx !== -1 ? args[controlFileIdx + 1] : null;
 
   // --urls mode: scan explicit URLs without crawling
   const urlsIdx = args.indexOf("--urls");
@@ -1448,7 +1501,7 @@ async function main() {
       process.exit(1);
     }
     try {
-      const scanResult = await scanExplicitUrls(urls, { timeout, concurrency, delay });
+      const scanResult = await scanExplicitUrls(urls, { timeout, concurrency, delay, controlFile });
       generateReport(scanResult);
     } catch (err) {
       console.error(chalk.red(`Scan mislukt: ${err.message}`));
@@ -1483,7 +1536,7 @@ async function main() {
   const maxSitemapUrls = parseInt(args[args.indexOf("--max-sitemap-urls") + 1]) || 5000;
 
   try {
-    const scanResult = await crawlSite(url, { maxPages, timeout, resumeFile, concurrency, delay, sitemap, maxSitemapUrls });
+    const scanResult = await crawlSite(url, { maxPages, timeout, resumeFile, concurrency, delay, sitemap, maxSitemapUrls, controlFile });
     generateReport(scanResult);
   } catch (err) {
     console.error(chalk.red(`Scan mislukt: ${err.message}`));

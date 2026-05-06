@@ -33,6 +33,32 @@ export function getVideoscanDir(): string {
 // Running videoscan processes (for kill support)
 const runningProcesses = new Map<number, ChildProcess>();
 
+// Per-task control-file paths (for live concurrency/delay overrides)
+const controlFiles = new Map<number, string>();
+
+function controlFilePath(taskId: number): string {
+  return join(VIDEOSCAN_DIR, `_control-${taskId}.json`);
+}
+
+export function getVideoscanControlFile(taskId: number): string | undefined {
+  return controlFiles.get(taskId);
+}
+
+export function setVideoscanControl(taskId: number, payload: { concurrency?: number; delay?: number }): boolean {
+  const path = controlFiles.get(taskId);
+  if (!path) return false;
+  const sanitized: Record<string, number> = {};
+  if (typeof payload.concurrency === 'number' && payload.concurrency >= 1 && payload.concurrency <= 64) {
+    sanitized.concurrency = Math.floor(payload.concurrency);
+  }
+  if (typeof payload.delay === 'number' && payload.delay >= 0 && payload.delay <= 60_000) {
+    sanitized.delay = Math.floor(payload.delay);
+  }
+  if (Object.keys(sanitized).length === 0) return false;
+  writeFileSync(path, JSON.stringify(sanitized));
+  return true;
+}
+
 export interface VideoscanResult {
   success: boolean;
   jsonFile?: string;
@@ -99,6 +125,12 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
   if (options.resumeFile) args.push('--resume', options.resumeFile);
   if (options.delay) args.push('--delay', String(options.delay));
 
+  // Per-task control file for live concurrency/delay overrides
+  const controlFile = controlFilePath(taskId);
+  tryUnlink(controlFile);
+  args.push('--control-file', controlFile);
+  controlFiles.set(taskId, controlFile);
+
   log.info(`Task #${taskId} Starting videoscan: ${tempUrlFile ? `${options.urls!.length} explicit URLs` : options.scanUrl} (max ${options.maxPages || 50} pages)`);
 
   return new Promise((resolve) => {
@@ -122,6 +154,8 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
       if (resolved) return;
       resolved = true;
       runningProcesses.delete(taskId);
+      controlFiles.delete(taskId);
+      tryUnlink(controlFile);
       resolve({ success: false, error });
     };
 
@@ -140,6 +174,8 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
     proc.on('close', async (code) => {
       if (resolved) return;
       runningProcesses.delete(taskId);
+      controlFiles.delete(taskId);
+      tryUnlink(controlFile);
 
       // Clean up temp URL file
       if (tempUrlFile && existsSync(tempUrlFile)) tryUnlink(tempUrlFile);

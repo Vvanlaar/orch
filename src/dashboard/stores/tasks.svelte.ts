@@ -160,6 +160,18 @@ export async function dismissTask(taskId: number) {
   }
 }
 
+export async function setVideoscanControl(taskId: number, payload: { concurrency?: number; delay?: number }) {
+  const res = await fetch(`/api/tasks/${taskId}/videoscan-control`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const result = await res.json().catch(() => ({} as { error?: string }));
+    throw new Error(result.error || `${res.status} ${res.statusText}`);
+  }
+}
+
 export async function setRepoPath(taskId: number, repoPath: string) {
   const res = await fetch(`/api/tasks/${taskId}/repo-path`, {
     method: 'PUT',

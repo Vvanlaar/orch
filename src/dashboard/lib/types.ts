@@ -56,6 +56,7 @@ export interface Task {
     urls?: string[];
     batchId?: string;
     batchLabel?: string;
+    concurrency?: number;
   };
 }
 
