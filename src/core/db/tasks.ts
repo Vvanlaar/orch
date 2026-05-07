@@ -73,11 +73,18 @@ export async function dbGetTask(id: number): Promise<Task | undefined> {
 
 const TASK_COLUMNS_NO_OUTPUT = 'id, type, status, repo, repo_path, context, result, error, pid, machine_id, created_at, started_at, completed_at';
 
-export async function dbGetPendingTasks(limit = 10): Promise<Task[]> {
-  const { data, error } = await getSupabase()
+export async function dbGetPendingTasks(limit = 10, forMachineId?: string): Promise<Task[]> {
+  let q = getSupabase()
     .from('tasks')
     .select(TASK_COLUMNS_NO_OUTPUT)
-    .eq('status', 'pending')
+    .eq('status', 'pending');
+
+  if (forMachineId) {
+    // Either unpinned, or pinned to this machine.
+    q = q.or(`context->>targetMachineId.is.null,context->>targetMachineId.eq.${forMachineId}`);
+  }
+
+  const { data, error } = await q
     .order('created_at', { ascending: true })
     .limit(limit);
 

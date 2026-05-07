@@ -26,7 +26,7 @@ import {
 import { startPoller } from '../core/poller.js';
 import { getEffectiveRepoMapping, getScannedRepos } from '../core/repo-scanner.js';
 import { getAuthenticatedUser, getPull, listPullReviewComments, listOrgRepos } from '../core/github-api.js';
-import { approveSuggestion, completeTask, createTask, deleteTask, dismissSuggestion, failTask, getAllTasks, getAllTasksWithOutput, getTask, getTasksWithPids, retryTask, updateTaskRepoPath } from '../core/task-queue.js';
+import { approveSuggestion, completeTask, createTask, deleteTask, dismissSuggestion, failTask, getAllTasks, getAllTasksWithOutput, getTask, getTasksWithPids, pinTask, retryTask, updateTaskRepoPath } from '../core/task-queue.js';
 import { initSettings } from '../core/settings.js';
 import { isSupabaseConfigured, MACHINE_ID } from '../core/db/client.js';
 import { dbGetNotifications, dbInsertNotification } from '../core/db/notifications.js';
@@ -223,6 +223,21 @@ app.delete('/api/tasks/:id', asyncHandler(async (req, res) => {
   }
   await broadcastTasks();
   res.json({ success: true });
+}));
+
+// Pin task to a specific machine (or clear pin). Body: { machineId: string | null } | { self: true }
+app.post('/api/tasks/:id/pin', asyncHandler(async (req, res) => {
+  const id = parseInt(req.params.id as string);
+  const body = req.body || {};
+  const target: string | null = body.self ? MACHINE_ID : (body.machineId ?? null);
+  const updated = await pinTask(id, target);
+  if (!updated) {
+    res.status(404).json({ error: 'Task not found' });
+    return;
+  }
+  triggerUpdate();
+  await broadcastTasks();
+  res.json({ success: true, taskId: id, targetMachineId: target });
 }));
 
 // Retry failed task

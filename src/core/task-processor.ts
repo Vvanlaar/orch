@@ -696,11 +696,13 @@ async function processTask(task: Task): Promise<void> {
 export async function processQueue(): Promise<void> {
   const [runningTasks, allPending] = await Promise.all([
     getRunningTasks(),
-    getPendingTasks(config.claude.maxConcurrentTasks + config.claude.maxConcurrentVideoscans),
+    getPendingTasks(config.claude.maxConcurrentTasks + config.claude.maxConcurrentVideoscans, MACHINE_ID),
   ]);
 
-  let videoscanSlots = config.claude.maxConcurrentVideoscans - runningTasks.filter(t => t.type === 'videoscan').length;
-  let otherSlots = config.claude.maxConcurrentTasks - runningTasks.filter(t => t.type !== 'videoscan').length;
+  // Slot budget is per-machine: don't count other machines' running tasks against this machine's capacity.
+  const myRunning = runningTasks.filter(t => !t.machineId || t.machineId === MACHINE_ID);
+  let videoscanSlots = config.claude.maxConcurrentVideoscans - myRunning.filter(t => t.type === 'videoscan').length;
+  let otherSlots = config.claude.maxConcurrentTasks - myRunning.filter(t => t.type !== 'videoscan').length;
 
   for (const task of allPending) {
     if (task.type === 'videoscan') {

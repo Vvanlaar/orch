@@ -20,6 +20,7 @@ import {
   dbDismissSuggestion,
   dbClaimTask,
   dbGetTasksByBatchId,
+  dbUpdateTask,
 } from './db/tasks.js';
 import { createLogger } from './logger.js';
 
@@ -186,9 +187,13 @@ export async function getTask(id: number): Promise<Task | undefined> {
   return jsonGetTask(id);
 }
 
-export async function getPendingTasks(limit = 10): Promise<Task[]> {
-  if (useDb) return dbGetPendingTasks(limit);
-  return jsonGetPendingTasks(limit);
+export async function getPendingTasks(limit = 10, forMachineId?: string): Promise<Task[]> {
+  if (useDb) return dbGetPendingTasks(limit, forMachineId);
+  const all = jsonGetPendingTasks(limit * 4);
+  const filtered = forMachineId
+    ? all.filter(t => !t.context?.targetMachineId || t.context.targetMachineId === forMachineId)
+    : all;
+  return filtered.slice(0, limit);
 }
 
 export async function getRunningCount(): Promise<number> {
@@ -261,6 +266,20 @@ export async function deleteTask(id: number): Promise<boolean> {
   streamingOutputs.delete(id);
   if (useDb) return dbDeleteTask(id);
   return jsonDeleteTask(id);
+}
+
+export async function pinTask(id: number, machineId: string | null): Promise<Task | null> {
+  const task = await getTask(id);
+  if (!task) return null;
+  const ctx: TaskContext = { ...task.context };
+  if (machineId) ctx.targetMachineId = machineId;
+  else delete ctx.targetMachineId;
+  if (useDb) {
+    await dbUpdateTask(id, { context: ctx });
+  } else {
+    jsonUpdateTask(id, { context: ctx });
+  }
+  return { ...task, context: ctx };
 }
 
 export async function getTasksWithPids(): Promise<Task[]> {
