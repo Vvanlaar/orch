@@ -70,6 +70,30 @@ export async function uploadScanFiles(jsonFilename: string, localDir: string): P
 }
 
 /**
+ * Delete all file variants for a scan from Supabase Storage.
+ */
+export async function deleteScanFiles(jsonFilename: string): Promise<void> {
+  if (!isSupabaseConfigured()) return;
+
+  const base = jsonFilename.replace('.json', '');
+  const variants = [
+    `${base}.json`,
+    `${base}.html`,
+    `${base}.pdf`,
+    `${base}-preview.html`,
+    `${base}-preview.pdf`,
+  ];
+
+  await ensureBucket();
+  const { error } = await getSupabase().storage
+    .from(BUCKET)
+    .remove(variants);
+
+  if (error) log.warn(`Storage delete failed for ${jsonFilename}: ${error.message}`);
+  else log.info(`Deleted storage files for ${jsonFilename}`);
+}
+
+/**
  * Download a file from Supabase Storage to local dir. Returns true if successful.
  */
 export async function downloadFile(filename: string, localDir: string): Promise<boolean> {

@@ -96,3 +96,11 @@ export async function dbArchiveVideoscans(filenames: string[]): Promise<void> {
     .in('filename', filenames);
   if (error) throw new Error(`Failed to archive videoscans: ${error.message}`);
 }
+
+export async function dbDeleteVideoscans(filenames: string[]): Promise<void> {
+  const { error } = await getSupabase()
+    .from('videoscans')
+    .delete()
+    .in('filename', filenames);
+  if (error) throw new Error(`Failed to delete videoscans: ${error.message}`);
+}

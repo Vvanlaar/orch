@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getScans, fetchScans, startScan, startGroupScan, resumeScan, addUrlsToScan, mergeDomainScans, regenerateReport, regeneratePreview, isLoading, importDigiToegankelijk, classifyGroupUrls, type ScanSummary, type DigiImportResult, type ReportOptions } from '../stores/videoscan.svelte';
+  import { getScans, fetchScans, startScan, startGroupScan, resumeScan, addUrlsToScan, mergeDomainScans, deleteScans, regenerateReport, regeneratePreview, isLoading, importDigiToegankelijk, classifyGroupUrls, type ScanSummary, type DigiImportResult, type ReportOptions } from '../stores/videoscan.svelte';
   import { getTasks, getTaskOutput, isExpanded, toggleExpanded } from '../stores/tasks.svelte';
   import VideoscanLiveProgress from './VideoscanLiveProgress.svelte';
   import VideoscanLiveBatch from './VideoscanLiveBatch.svelte';
@@ -286,6 +286,21 @@
     urlListStarting = false;
     dismissUrlList();
     setTimeout(() => fetchScans(), 2000);
+  }
+
+  let deleting = $state<string | null>(null);
+
+  async function handleDelete(scan: ScanSummary) {
+    if (deleting) return;
+    if (!confirm(`Delete scan ${scan.domain} (${scan.pagesScanned} pages)?`)) return;
+    deleting = scan.filename;
+    try {
+      await deleteScans([scan.filename]);
+    } catch (err: any) {
+      error = err.message;
+    } finally {
+      deleting = null;
+    }
   }
 
   async function handleMerge(domainScans: ScanSummary[]) {
@@ -617,6 +632,9 @@
                           <button class="sb res" onclick={() => handleResume(scan)}>Resume</button>
                         {/if}
                         <button class="sb" onclick={() => { addingUrlsTo = addingUrlsTo === scan.filename ? null : scan.filename; addUrlsText = ''; }}>+ URLs</button>
+                        <button class="sb del" onclick={() => handleDelete(scan)} disabled={deleting === scan.filename}>
+                          {deleting === scan.filename ? '...' : '✕'}
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -1372,6 +1390,18 @@
   .sb.res:hover {
     background: rgba(245, 158, 11, 0.12);
     border-color: var(--warning);
+  }
+
+  .sb.del {
+    border-color: rgba(239, 68, 68, 0.35);
+    color: #ef4444;
+    min-width: unset;
+    padding: 2px 6px;
+  }
+
+  .sb.del:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.12);
+    border-color: #ef4444;
   }
 
   .sb:disabled {

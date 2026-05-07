@@ -30,9 +30,9 @@ export async function fetchScans() {
   }
 }
 
-async function postJson(url: string, body: Record<string, unknown>) {
+async function apiJson(url: string, body: Record<string, unknown>, method = 'POST') {
   const res = await fetch(url, {
-    method: 'POST',
+    method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
@@ -47,25 +47,25 @@ export interface BatchCtx {
 }
 
 export function startScan(url: string, maxPages: number, concurrency: number, delay: number, batch?: BatchCtx) {
-  return postJson('/api/actions/start-videoscan', {
+  return apiJson('/api/actions/start-videoscan', {
     url, maxPages, concurrency, delay,
     ...(batch ? { batchId: batch.id, batchLabel: batch.label } : {}),
   });
 }
 
 export function startGroupScan(urls: string[], maxPages: number, concurrency: number, delay: number, batch?: BatchCtx) {
-  return postJson('/api/actions/start-videoscan-urls', {
+  return apiJson('/api/actions/start-videoscan-urls', {
     urls, maxPages, concurrency, delay,
     ...(batch ? { batchId: batch.id, batchLabel: batch.label } : {}),
   });
 }
 
 export function resumeScan(filename: string, maxPages: number, concurrency: number, delay: number) {
-  return postJson('/api/actions/resume-videoscan', { filename, maxPages, concurrency, delay });
+  return apiJson('/api/actions/resume-videoscan', { filename, maxPages, concurrency, delay });
 }
 
 export function addUrlsToScan(filename: string, urls: string[], concurrency: number, delay: number) {
-  return postJson('/api/actions/add-urls-to-scan', { filename, urls, concurrency, delay });
+  return apiJson('/api/actions/add-urls-to-scan', { filename, urls, concurrency, delay });
 }
 
 export interface ReportOptions {
@@ -78,13 +78,13 @@ export interface ReportOptions {
 }
 
 export async function regenerateReport(filename: string, options?: ReportOptions) {
-  const result = await postJson('/api/videoscans/generate-report', { filename, ...options });
+  const result = await apiJson('/api/videoscans/generate-report', { filename, ...options });
   await fetchScans();
   return result;
 }
 
 export async function regeneratePreview(filename: string, options?: ReportOptions) {
-  const result = await postJson('/api/videoscans/generate-preview', { filename, ...options });
+  const result = await apiJson('/api/videoscans/generate-preview', { filename, ...options });
   await fetchScans();
   return result;
 }
@@ -108,11 +108,17 @@ export interface DigiImportResult {
 }
 
 export async function importDigiToegankelijk(id: number): Promise<DigiImportResult> {
-  return postJson('/api/videoscans/import-digitoegankelijk', { id });
+  return apiJson('/api/videoscans/import-digitoegankelijk', { id });
+}
+
+export async function deleteScans(filenames: string[]) {
+  const result = await apiJson('/api/videoscans', { filenames }, 'DELETE');
+  await fetchScans();
+  return result;
 }
 
 export async function mergeDomainScans(filenames: string[]) {
-  const result = await postJson('/api/videoscans/merge', { filenames });
+  const result = await apiJson('/api/videoscans/merge', { filenames });
   await fetchScans();
   return result;
 }

@@ -31,7 +31,7 @@ import { initSettings } from '../core/settings.js';
 import { isSupabaseConfigured, MACHINE_ID } from '../core/db/client.js';
 import { dbGetNotifications, dbInsertNotification } from '../core/db/notifications.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
-import { getVideoscanDir, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, setVideoscanControl } from '../core/videoscan-runner.js';
+import { getVideoscanDir, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, setVideoscanControl, deleteScans } from '../core/videoscan-runner.js';
 import { downloadFile } from '../core/db/storage.js';
 import { dbArchiveVideoscans } from '../core/db/videoscans.js';
 import type { TerminalId } from '../core/types.js';
@@ -1586,6 +1586,22 @@ app.post('/api/actions/add-urls-to-scan', asyncHandler(async (req, res) => {
 
 app.get('/api/videoscans', asyncHandler(async (_req, res) => {
   res.json(await listScans());
+}));
+
+app.delete('/api/videoscans', asyncHandler(async (req, res) => {
+  const { filenames } = req.body;
+  if (!Array.isArray(filenames) || filenames.length === 0) {
+    res.status(400).json({ error: 'filenames array required' });
+    return;
+  }
+  for (const f of filenames) {
+    if (typeof f !== 'string' || f.includes('..') || f.includes('/') || f.includes('\\')) {
+      res.status(400).json({ error: `Invalid filename: ${f}` });
+      return;
+    }
+  }
+  await deleteScans(filenames);
+  res.json({ deleted: filenames.length });
 }));
 
 app.post('/api/videoscans/merge', asyncHandler(async (req, res) => {

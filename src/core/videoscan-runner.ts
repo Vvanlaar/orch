@@ -6,8 +6,8 @@ import { chromium } from 'playwright';
 import { claudeEmitter } from './claude-runner.js';
 import { createLogger } from './logger.js';
 import { isSupabaseConfigured } from './db/client.js';
-import { dbListScans, dbUpsertVideoscan } from './db/videoscans.js';
-import { downloadFile, uploadScanFiles } from './db/storage.js';
+import { dbListScans, dbUpsertVideoscan, dbDeleteVideoscans } from './db/videoscans.js';
+import { downloadFile, uploadScanFiles, deleteScanFiles } from './db/storage.js';
 
 const log = createLogger('videoscan-runner');
 
@@ -604,6 +604,20 @@ function listScansFromDisk(): ScanSummary[] {
   } catch {
     return [];
   }
+}
+
+export async function deleteScans(filenames: string[]): Promise<void> {
+  const dir = getVideoscanDir();
+  for (const jsonFilename of filenames) {
+    const base = jsonFilename.replace('.json', '');
+    const variants = ['.json', '.html', '.pdf', '-preview.html', '-preview.pdf'];
+    for (const ext of variants) {
+      tryUnlink(join(dir, base + ext));
+    }
+    await deleteScanFiles(jsonFilename);
+  }
+  if (isSupabaseConfigured()) await dbDeleteVideoscans(filenames);
+  log.info(`Deleted ${filenames.length} scan(s)`);
 }
 
 export async function listScans(): Promise<ScanSummary[]> {
