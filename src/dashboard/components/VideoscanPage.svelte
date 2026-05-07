@@ -225,6 +225,69 @@
 
   const digiPattern = /^https?:\/\/dashboard\.digitoegankelijk\.nl\/organisaties\/(\d+)/;
 
+  let showUrlList = $state(false);
+  let urlListLabel = $state('');
+  let urlListText = $state('');
+  let urlListStarting = $state(false);
+  let urlListProgress = $state(0);
+
+  let urlListPlan = $derived.by(() => {
+    const urls = urlListText
+      .split(/\r?\n/)
+      .map(l => l.trim())
+      .filter(l => /^https?:\/\//i.test(l));
+    const { crawls, explicit } = classifyGroupUrls(urls);
+    return { count: urls.length, crawls, explicit, total: crawls.length + (explicit.length > 0 ? 1 : 0) };
+  });
+
+  function dismissUrlList() {
+    if (urlListStarting) return;
+    showUrlList = false;
+    urlListLabel = '';
+    urlListText = '';
+    urlListProgress = 0;
+  }
+
+  async function handleUrlListStart() {
+    if (urlListStarting) return;
+    const labelTrim = urlListLabel.trim();
+    if (!labelTrim) { error = 'Label is required'; return; }
+    if (urlListPlan.total === 0) { error = 'Add at least one valid URL'; return; }
+
+    const slug = labelTrim.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'list';
+    const batch = {
+      id: `urls-${slug}-${Date.now()}`,
+      label: `URL list — ${labelTrim}`,
+    };
+
+    urlListStarting = true;
+    urlListProgress = 0;
+    error = '';
+    const errors: string[] = [];
+
+    for (const crawlUrl of urlListPlan.crawls) {
+      try {
+        await startScan(crawlUrl, maxPages, concurrency, delay, batch);
+      } catch (err: any) {
+        errors.push(`crawl ${crawlUrl}: ${err.message}`);
+      }
+      urlListProgress++;
+    }
+    if (urlListPlan.explicit.length > 0) {
+      try {
+        await startGroupScan(urlListPlan.explicit, maxPages, concurrency, delay, batch);
+      } catch (err: any) {
+        errors.push(`explicit: ${err.message}`);
+      }
+      urlListProgress++;
+    }
+
+    if (errors.length > 0) error = `${errors.length} scan(s) failed to start`;
+    urlListStarting = false;
+    dismissUrlList();
+    setTimeout(() => fetchScans(), 2000);
+  }
+
   async function handleMerge(domainScans: ScanSummary[]) {
     if (merging) return;
     merging = true;
@@ -302,6 +365,10 @@
             Launch
           {/if}
         </button>
+        <button class="cmd-alt" onclick={() => { showUrlList = true; error = ''; }} title="Start scan from a list of URLs">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/></svg>
+          URL list
+        </button>
       </div>
       <div class="cmd-opts">
         <label class="cmd-opt">
@@ -324,6 +391,58 @@
     </div>
     <div class="scan-line"></div>
   </div>
+
+  <!-- URL list import modal -->
+  {#if showUrlList}
+    <div class="modal-backdrop" onclick={dismissUrlList} role="presentation"></div>
+    <div class="modal" role="dialog" aria-label="Start scan from URL list">
+      <div class="modal-head">
+        <span class="modal-title">Start scan from URL list</span>
+        <button class="digi-dismiss" onclick={dismissUrlList} disabled={urlListStarting} aria-label="Close">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <label class="modal-field">
+          <span class="modal-flabel">Label</span>
+          <input class="modal-input" type="text" placeholder="e.g. Acme Q2" bind:value={urlListLabel} disabled={urlListStarting} />
+          <span class="modal-help">Becomes the merged file name (slugified) and live block header.</span>
+        </label>
+        <label class="modal-field">
+          <span class="modal-flabel">URLs (one per line)</span>
+          <textarea class="modal-ta" rows="10" placeholder={'https://example.com/\nhttps://other.com/some-page\nhttps://third.com/'} bind:value={urlListText} disabled={urlListStarting}></textarea>
+        </label>
+        <div class="modal-plan">
+          {#if urlListPlan.count === 0}
+            <span class="modal-plan-empty">Paste URLs to scan. Roots (ending in <code>/</code>) get crawled, subpages get scanned explicitly.</span>
+          {:else}
+            <span class="digi-chip">{urlListPlan.count} URL{urlListPlan.count !== 1 ? 's' : ''}</span>
+            {#if urlListPlan.crawls.length > 0}
+              <span class="digi-chip">{urlListPlan.crawls.length} crawl{urlListPlan.crawls.length !== 1 ? 's' : ''}</span>
+            {/if}
+            {#if urlListPlan.explicit.length > 0}
+              <span class="digi-chip">{urlListPlan.explicit.length} subpage{urlListPlan.explicit.length !== 1 ? 's' : ''}</span>
+            {/if}
+            <span class="digi-chip accent">{urlListPlan.total} task{urlListPlan.total !== 1 ? 's' : ''}</span>
+          {/if}
+        </div>
+      </div>
+      <div class="modal-actions">
+        {#if urlListStarting}
+          <div class="digi-progress">
+            <div class="digi-progress-bar" style="width:{urlListPlan.total > 0 ? Math.round((urlListProgress / urlListPlan.total) * 100) : 0}%"></div>
+          </div>
+          <span class="digi-progress-text">{urlListProgress} / {urlListPlan.total} tasks</span>
+        {:else}
+          <button class="cmd-go" onclick={handleUrlListStart} disabled={urlListPlan.total === 0 || !urlListLabel.trim()}>
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+            Start {urlListPlan.total} scan{urlListPlan.total !== 1 ? 's' : ''}
+          </button>
+          <button class="digi-cancel" onclick={dismissUrlList}>Cancel</button>
+        {/if}
+      </div>
+    </div>
+  {/if}
 
   <!-- DigiToegankelijk Import Preview -->
   {#if importPreview}
@@ -800,6 +919,29 @@
     background: var(--border);
     color: var(--text-muted);
     cursor: not-allowed;
+  }
+
+  .cmd-alt {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    background: var(--surface-deep);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+  }
+
+  .cmd-alt:hover {
+    border-color: var(--accent-dim);
+    color: var(--accent-bright);
+    background: var(--surface-raised);
   }
 
   .cmd-opts {
@@ -1873,5 +2015,146 @@
     display: flex;
     gap: 6px;
     margin-top: 6px;
+  }
+
+  /* === URL list modal === */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(3, 8, 15, 0.7);
+    backdrop-filter: blur(2px);
+    z-index: 90;
+  }
+
+  .modal {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 91;
+    width: min(640px, calc(100vw - 32px));
+    max-height: calc(100vh - 64px);
+    display: flex;
+    flex-direction: column;
+    background: linear-gradient(145deg, var(--surface), var(--surface-deep));
+    border: 1px solid var(--accent-dim);
+    border-radius: 12px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), 0 0 30px var(--accent-glow);
+    overflow: hidden;
+  }
+
+  .modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .modal-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--accent-bright);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .modal-body {
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    overflow-y: auto;
+  }
+
+  .modal-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .modal-flabel {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    font-weight: 700;
+  }
+
+  .modal-input,
+  .modal-ta {
+    background: var(--surface-deep);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+
+  .modal-input {
+    padding: 8px 12px;
+    font-size: 13px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .modal-ta {
+    padding: 10px 12px;
+    font: 12px/1.5 'IBM Plex Mono', monospace;
+    resize: vertical;
+    min-height: 140px;
+  }
+
+  .modal-input:focus,
+  .modal-ta:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+  }
+
+  .modal-input:disabled,
+  .modal-ta:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .modal-input::placeholder,
+  .modal-ta::placeholder {
+    color: var(--text-muted);
+  }
+
+  .modal-help {
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+
+  .modal-plan {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--surface-deep);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    align-items: center;
+  }
+
+  .modal-plan-empty {
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.4;
+  }
+
+  .modal-plan-empty code {
+    font-size: 10px;
+    background: var(--surface);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--accent-bright);
+  }
+
+  .modal-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 18px;
+    border-top: 1px solid var(--border-subtle);
   }
 </style>

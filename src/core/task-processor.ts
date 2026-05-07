@@ -402,6 +402,7 @@ const batchMergeLocks = new Set<string>();
 
 const JSON_LINE = /^JSON:\s*(.+\.json)\s*$/m;
 const DIGI_BATCH_RE = /^digi-(.+)-\d+$/;
+const URLS_BATCH_RE = /^urls-(.+)-\d+$/;
 
 async function tryAutoMergeBatch(batchId: string): Promise<void> {
   if (batchMergeLocks.has(batchId)) return;
@@ -436,8 +437,8 @@ async function tryAutoMergeBatch(batchId: string): Promise<void> {
       return;
     }
 
-    // Derive merge label from "digi-<orgSlug>-<timestamp>" → "<orgSlug>-organisatie".
-    const slugMatch = batchId.match(DIGI_BATCH_RE);
+    // Derive merge label from "digi-<slug>-<ts>" or "urls-<slug>-<ts>" → "<slug>-organisatie".
+    const slugMatch = batchId.match(DIGI_BATCH_RE) ?? batchId.match(URLS_BATCH_RE);
     const label = slugMatch ? `${slugMatch[1]}-organisatie` : `${batchId}-merged`;
 
     log.info(`Batch ${batchId}: auto-merging ${unique.length} scans into ${label}`);
