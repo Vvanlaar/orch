@@ -4,7 +4,7 @@ Event-driven orchestrator that connects GitHub and Azure DevOps to Claude Code.
 
 ## Features
 
-- **Real-time Dashboard**: Monitor tasks at http://localhost:3004 (GitHub PRs + ADO items)
+- **Real-time Dashboard**: Monitor tasks at http://localhost:3011 in production, or http://localhost:3010 in dev (GitHub PRs + ADO items)
 - **PR Reviews**: Auto-review PRs when opened/updated
 - **PR Comment Fixes**: Auto-fix review comments on PRs
 - **Issue Analysis**: Analyze and propose fixes for issues/work items
@@ -28,8 +28,8 @@ npm start          # Production server
 
 ```bash
 npm run dev           # Server + dashboard (hot reload)
-npm run dev:server    # Server only on :3004 (hot reload)
-npm run dev:dashboard # Vite dev server on :5173 (proxies to :3004)
+npm run dev:server    # Server only on :3011 (hot reload)
+npm run dev:dashboard # Vite dev server on :3010 (proxies API/WS to :3011)
 ```
 
 ## Tech Stack
@@ -68,7 +68,7 @@ POLLING_ENABLED=false
 
 | Variable | Description |
 |----------|-------------|
-| `PORT` | Server port (default: 3004) |
+| `PORT` | Server port (default: 3011) |
 | `MAX_CONCURRENT_TASKS` | Concurrent Claude tasks (default: 2) |
 | `CLAUDE_TIMEOUT` | Claude task timeout in ms (default: 300000) |
 | `PREFERRED_TERMINAL` | Terminal for Claude (default: auto) |
@@ -144,7 +144,7 @@ ADO_REVIEWED_BY_FIELD=Custom.ReviewedBy
 
 ### Usage
 
-1. Open dashboard at http://localhost:3004
+1. Open dashboard at http://localhost:3011
 2. Find "Testing Assignment" section - shows all reviewed items in current sprint
 3. Select team members who are available for testing
 4. Click "Copy Assign Command"

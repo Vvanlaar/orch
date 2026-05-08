@@ -2,6 +2,7 @@
 import { chromium } from "playwright";
 import chalk from "chalk";
 import { readFileSync, writeFileSync, existsSync, statSync } from "fs";
+import { basename } from "path";
 import { acquire } from "./wake-lock.mjs";
 
 // ── Video Player Detectors ──────────────────────────────────────────
@@ -1351,7 +1352,7 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
 
 // ── Report ──────────────────────────────────────────────────────────
 
-function generateReport({ domain, results, pagesScanned, _state, rateLimits, batchId, batchLabel }) {
+function generateReport({ domain, results, pagesScanned, _state, rateLimits, batchId, batchLabel, resumeFile }) {
   const playerSummary = {};
   const pagesWithPlayers = [];
   const pagesWithoutPlayers = [];
@@ -1425,9 +1426,15 @@ function generateReport({ domain, results, pagesScanned, _state, rateLimits, bat
 
   console.log(chalk.bold.blue("\n" + "═".repeat(70)));
 
-  // Save JSON report
-  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const jsonFile = `videoscan-${domain}-${ts}.json`;
+  // Save JSON report. On --resume, overwrite the source file so a scan-chain
+  // stays in one entry; otherwise mint a timestamped name for a fresh scan.
+  let jsonFile;
+  if (resumeFile) {
+    jsonFile = basename(resumeFile);
+  } else {
+    const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    jsonFile = `videoscan-${domain}-${ts}.json`;
+  }
   const jsonReport = {
     domain,
     scanDate: new Date().toISOString(),
@@ -1569,7 +1576,7 @@ async function main() {
 
   try {
     const scanResult = await crawlSite(url, { maxPages, timeout, resumeFile, concurrency, delay, sitemap, maxSitemapUrls, controlFile });
-    generateReport({ ...scanResult, batchId, batchLabel });
+    generateReport({ ...scanResult, batchId, batchLabel, resumeFile });
   } catch (err) {
     console.error(chalk.red(`Scan mislukt: ${err.message}`));
     process.exit(1);
