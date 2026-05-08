@@ -2,6 +2,7 @@
 import { chromium } from "playwright";
 import chalk from "chalk";
 import { readFileSync, writeFileSync, existsSync, statSync } from "fs";
+import { acquire } from "./wake-lock.mjs";
 
 // ── Video Player Detectors ──────────────────────────────────────────
 // Each detector checks page HTML + network requests for a specific player.
@@ -1340,7 +1341,7 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
 
 // ── Report ──────────────────────────────────────────────────────────
 
-function generateReport({ domain, results, pagesScanned, _state, rateLimits }) {
+function generateReport({ domain, results, pagesScanned, _state, rateLimits, batchId, batchLabel }) {
   const playerSummary = {};
   const pagesWithPlayers = [];
   const pagesWithoutPlayers = [];
@@ -1423,6 +1424,8 @@ function generateReport({ domain, results, pagesScanned, _state, rateLimits }) {
     pagesScanned,
     pagesWithVideo: pagesWithPlayers.length,
     uniquePlayers: playerNames.length,
+    ...(batchId ? { batchId } : {}),
+    ...(batchLabel ? { batchLabel } : {}),
     playerSummary: Object.fromEntries(
       Object.entries(playerSummary).map(([p, urls]) => [p, { count: urls.length, pages: urls }])
     ),
@@ -1462,6 +1465,8 @@ ${chalk.bold("Opties:")}
   --no-sitemap          Skip sitemap-based URL discovery
   --max-sitemap-urls <n> Max URLs uit sitemap toevoegen aan queue (standaard: 5000)
   --control-file <path> JSON file polled per batch for live { concurrency, delay } overrides
+  --batch-id <id>       Stamp scan output with a batch identifier (for grouping in dashboard)
+  --batch-label <text>  Stamp scan output with a human-readable batch label
 
 ${chalk.bold("Voorbeelden:")}
   node scan.mjs https://www.menzis.nl
@@ -1480,11 +1485,24 @@ async function main() {
     process.exit(0);
   }
 
+  const release = await acquire();
+  process.on('exit', release);
+  process.on('uncaughtException', err => { release(); console.error(err); process.exit(1); });
+  process.on('unhandledRejection', err => { release(); console.error(err); process.exit(1); });
+
   const timeout = parseInt(args[args.indexOf("--timeout") + 1]) || 15000;
   const concurrency = parseInt(args[args.indexOf("--concurrency") + 1]) || DEFAULT_CONCURRENCY;
   const delay = parseInt(args[args.indexOf("--delay") + 1]) || 200;
   const controlFileIdx = args.indexOf("--control-file");
   const controlFile = controlFileIdx !== -1 ? args[controlFileIdx + 1] : null;
+  const flagValue = (name) => {
+    const i = args.indexOf(name);
+    if (i === -1) return null;
+    const v = args[i + 1];
+    return v && !v.startsWith("--") ? v : null;
+  };
+  let batchId = flagValue("--batch-id");
+  let batchLabel = flagValue("--batch-label");
 
   // --urls mode: scan explicit URLs without crawling
   const urlsIdx = args.indexOf("--urls");
@@ -1502,7 +1520,7 @@ async function main() {
     }
     try {
       const scanResult = await scanExplicitUrls(urls, { timeout, concurrency, delay, controlFile });
-      generateReport(scanResult);
+      generateReport({ ...scanResult, batchId, batchLabel });
     } catch (err) {
       console.error(chalk.red(`Scan mislukt: ${err.message}`));
       process.exit(1);
@@ -1523,6 +1541,10 @@ async function main() {
     // Get URL from resume file or from args
     const prevData = JSON.parse(readFileSync(resumeFile, "utf-8"));
     url = args.find((a) => a.startsWith("http")) || `https://www.${prevData.domain}`;
+    // Inherit batch metadata from the resume file when CLI flags weren't supplied,
+    // so resumed scans don't drift out of their batch on next list/sync.
+    if (!batchId && typeof prevData.batchId === "string") batchId = prevData.batchId;
+    if (!batchLabel && typeof prevData.batchLabel === "string") batchLabel = prevData.batchLabel;
   } else {
     url = args[0];
     if (!url.startsWith("http")) {
@@ -1537,7 +1559,7 @@ async function main() {
 
   try {
     const scanResult = await crawlSite(url, { maxPages, timeout, resumeFile, concurrency, delay, sitemap, maxSitemapUrls, controlFile });
-    generateReport(scanResult);
+    generateReport({ ...scanResult, batchId, batchLabel });
   } catch (err) {
     console.error(chalk.red(`Scan mislukt: ${err.message}`));
     process.exit(1);

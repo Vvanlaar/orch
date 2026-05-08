@@ -10,6 +10,8 @@ export interface ScanSummary {
   hasPreview: boolean;
   hasPreviewPdf: boolean;
   canResume: boolean;
+  batchId?: string;
+  batchLabel?: string;
 }
 
 let scans = $state<ScanSummary[]>([]);

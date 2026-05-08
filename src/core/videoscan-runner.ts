@@ -98,6 +98,8 @@ export interface VideoscanOptions {
   delay?: number;
   urls?: string[];
   targetFilename?: string;
+  batchId?: string;
+  batchLabel?: string;
 }
 
 export async function runVideoscan(taskId: number, options: VideoscanOptions): Promise<VideoscanResult> {
@@ -124,6 +126,8 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
   if (options.concurrency) args.push('--concurrency', String(options.concurrency));
   if (options.resumeFile) args.push('--resume', options.resumeFile);
   if (options.delay) args.push('--delay', String(options.delay));
+  if (options.batchId) args.push('--batch-id', options.batchId);
+  if (options.batchLabel) args.push('--batch-label', options.batchLabel);
 
   // Per-task control file for live concurrency/delay overrides
   const controlFile = controlFilePath(taskId);
@@ -537,6 +541,8 @@ export async function syncScanToSupabase(jsonFilename: string): Promise<void> {
       hasPreview: existsSync(join(VIDEOSCAN_DIR, previewFile)),
       hasPreviewPdf: existsSync(join(VIDEOSCAN_DIR, previewPdfFile)),
       canResume: (data._state?.queue?.length || 0) > 0,
+      batchId: typeof data.batchId === 'string' ? data.batchId : undefined,
+      batchLabel: typeof data.batchLabel === 'string' ? data.batchLabel : undefined,
     });
 
     log.info(`Synced ${jsonFilename} to Supabase`);
@@ -557,6 +563,8 @@ export interface ScanSummary {
   hasPreview: boolean;
   hasPreviewPdf: boolean;
   canResume: boolean;
+  batchId?: string;
+  batchLabel?: string;
 }
 
 function listScansFromDisk(): ScanSummary[] {
@@ -584,6 +592,8 @@ function listScansFromDisk(): ScanSummary[] {
           hasPreview: existsSync(join(VIDEOSCAN_DIR, previewFile)),
           hasPreviewPdf: existsSync(join(VIDEOSCAN_DIR, previewPdfFile)),
           canResume: (data._state?.queue?.length || 0) > 0,
+          ...(typeof data.batchId === 'string' && data.batchId ? { batchId: data.batchId } : {}),
+          ...(typeof data.batchLabel === 'string' && data.batchLabel ? { batchLabel: data.batchLabel } : {}),
         };
       } catch {
         return {

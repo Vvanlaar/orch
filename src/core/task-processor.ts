@@ -370,6 +370,8 @@ async function processVideoscan(task: Task): Promise<void> {
       delay: ctx.delay,
       urls: ctx.urls,
       targetFilename: ctx.targetFilename,
+      batchId: ctx.batchId,
+      batchLabel: ctx.batchLabel,
     });
 
     if (result.success) {

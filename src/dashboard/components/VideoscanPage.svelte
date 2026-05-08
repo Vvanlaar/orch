@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { getScans, fetchScans, startScan, startGroupScan, resumeScan, addUrlsToScan, mergeDomainScans, regenerateReport, regeneratePreview, isLoading, importDigiToegankelijk, classifyGroupUrls, type ScanSummary, type DigiImportResult, type ReportOptions } from '../stores/videoscan.svelte';
   import { getTasks, getTaskOutput, isExpanded, toggleExpanded } from '../stores/tasks.svelte';
   import VideoscanLiveProgress from './VideoscanLiveProgress.svelte';
@@ -45,27 +45,76 @@
   let historyTasks = $derived(videoscanTasks.filter(t => t.status !== 'running' && t.status !== 'pending'));
   let resumableScans = $derived(scans.filter(s => s.canResume));
 
-  let groupedScans = $derived.by(() => {
-    const groups = new Map<string, ScanSummary[]>();
+  const UNGROUPED_BATCH = '__ungrouped__';
+  type DomainBucket = { domain: string; scans: ScanSummary[] };
+  type BatchBucket = { batchId: string; label: string; domains: DomainBucket[]; scanCount: number };
+
+  let groupedByBatch = $derived.by<BatchBucket[]>(() => {
+    const byBatch = new Map<string, { label: string; domains: Map<string, ScanSummary[]> }>();
     for (const scan of scans) {
-      if (!groups.has(scan.domain)) groups.set(scan.domain, []);
-      groups.get(scan.domain)!.push(scan);
+      const id = scan.batchId || UNGROUPED_BATCH;
+      const label = scan.batchId ? (scan.batchLabel || `Batch ${scan.batchId}`) : 'Ungrouped';
+      if (!byBatch.has(id)) byBatch.set(id, { label, domains: new Map() });
+      const b = byBatch.get(id)!;
+      if (!b.domains.has(scan.domain)) b.domains.set(scan.domain, []);
+      b.domains.get(scan.domain)!.push(scan);
     }
-    return groups;
+    const toBucket = (batchId: string, v: { label: string; domains: Map<string, ScanSummary[]> }): BatchBucket => {
+      const domains: DomainBucket[] = [...v.domains.entries()].map(([domain, scans]) => ({ domain, scans }));
+      const scanCount = domains.reduce((n, d) => n + d.scans.length, 0);
+      return { batchId, label: v.label, domains, scanCount };
+    };
+    const out: BatchBucket[] = [];
+    const ungrouped = byBatch.get(UNGROUPED_BATCH);
+    byBatch.delete(UNGROUPED_BATCH);
+    // Newest batch first — ids end with the timestamp, so reverse-lex order ≈ newest-first.
+    const ordered = [...byBatch.entries()].sort(([a], [b]) => b.localeCompare(a));
+    for (const [id, v] of ordered) out.push(toBucket(id, v));
+    if (ungrouped) out.push(toBucket(UNGROUPED_BATCH, ungrouped));
+    return out;
   });
+
+  let collapsedBatches = $state(new Set<string>());
   let collapsedDomains = $state(new Set<string>());
+  // Hydrate per-batch collapse from localStorage as new batches appear.
+  // Read `collapsedBatches` via untrack so the effect only re-fires when groupedByBatch changes.
+  const hydratedBatchPrefs = new Set<string>();
+  $effect(() => {
+    const newlyCollapsed: string[] = [];
+    for (const b of groupedByBatch) {
+      if (hydratedBatchPrefs.has(b.batchId)) continue;
+      hydratedBatchPrefs.add(b.batchId);
+      if (readPreference<boolean>(`videoscan.results.batch.collapsed.${b.batchId}`, false)) {
+        newlyCollapsed.push(b.batchId);
+      }
+    }
+    if (newlyCollapsed.length > 0) {
+      untrack(() => {
+        collapsedBatches = new Set([...collapsedBatches, ...newlyCollapsed]);
+      });
+    }
+  });
 
   let totalPages = $derived(scans.reduce((s, scan) => s + scan.pagesScanned, 0));
   let totalWithVideo = $derived(scans.reduce((s, scan) => s + scan.pagesWithVideo, 0));
   let totalPlayers = $derived(scans.reduce((s, scan) => s + scan.uniquePlayers, 0));
-  let domainCount = $derived(groupedScans.size);
+  let domainCount = $derived(new Set(scans.map(s => s.domain)).size);
   let isScanning = $derived(starting || activeTasks.length > 0);
   let hasActivity = $derived(activeTasks.length > 0 || resumableScans.length > 0 || historyTasks.length > 0);
 
-  function toggleDomain(domain: string) {
+  function toggleBatch(batchId: string) {
+    const next = new Set(collapsedBatches);
+    if (next.has(batchId)) next.delete(batchId);
+    else next.add(batchId);
+    collapsedBatches = next;
+    writePreference(`videoscan.results.batch.collapsed.${batchId}`, next.has(batchId));
+  }
+
+  function toggleDomain(batchId: string, domain: string) {
+    const key = `${batchId}::${domain}`;
     const next = new Set(collapsedDomains);
-    if (next.has(domain)) next.delete(domain);
-    else next.add(domain);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
     collapsedDomains = next;
   }
 
@@ -552,12 +601,23 @@
           <span>No scans yet — enter a URL above to start</span>
         </div>
       {:else}
-        {#each [...groupedScans.entries()] as [domain, domainScans] (domain)}
+        {#each groupedByBatch as batch (batch.batchId)}
+          {@const batchCollapsed = collapsedBatches.has(batch.batchId)}
+          <div class="bat" class:collapsed={batchCollapsed} class:bat-ungrouped={batch.batchId === UNGROUPED_BATCH}>
+            <button class="bat-head" aria-expanded={!batchCollapsed} onclick={() => toggleBatch(batch.batchId)}>
+              <span class="bat-chev">&#9662;</span>
+              <span class="bat-label">{batch.label}</span>
+              <span class="bat-meta">{batch.domains.length} {batch.domains.length === 1 ? 'site' : 'sites'} · {batch.scanCount} {batch.scanCount === 1 ? 'scan' : 'scans'}</span>
+            </button>
+            {#if !batchCollapsed}
+              <div class="bat-body">
+        {#each batch.domains as { domain, scans: domainScans } (domain)}
           {@const complete = domainScans.filter(s => !s.canResume && s.pagesScanned > 0)}
-          {@const collapsed = collapsedDomains.has(domain)}
+          {@const domainKey = `${batch.batchId}::${domain}`}
+          {@const collapsed = collapsedDomains.has(domainKey)}
           <div class="dom" class:collapsed>
             <div class="dom-head">
-              <button class="dom-toggle" aria-expanded={!collapsedDomains.has(domain)} onclick={() => toggleDomain(domain)}>
+              <button class="dom-toggle" aria-expanded={!collapsed} onclick={() => toggleDomain(batch.batchId, domain)}>
                 <span class="dom-chev">&#9662;</span>
                 <span class="dom-name">{domain}</span>
                 <span class="dom-pill">{domainScans.length}</span>
@@ -653,6 +713,10 @@
                     </div>
                   {/if}
                 {/each}
+              </div>
+            {/if}
+          </div>
+        {/each}
               </div>
             {/if}
           </div>
@@ -1106,6 +1170,75 @@
     background: var(--surface);
     border: 1px solid var(--border-subtle);
     border-radius: 10px;
+  }
+
+  /* === Batch Sections === */
+  .bat {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .bat-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 14px;
+    background: none;
+    border: none;
+    border-bottom: 1px solid var(--border-subtle);
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    text-align: left;
+    cursor: pointer;
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    transition: color 0.15s, background 0.1s;
+  }
+
+  .bat-head:hover {
+    color: var(--text);
+    background: var(--surface-raised);
+  }
+
+  .bat-chev {
+    font-size: 10px;
+    transition: transform 0.2s;
+    display: inline-block;
+  }
+
+  .bat.collapsed .bat-chev {
+    transform: rotate(-90deg);
+  }
+
+  .bat-label {
+    color: var(--text);
+    text-transform: none;
+    letter-spacing: normal;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .bat-ungrouped .bat-label {
+    color: var(--text-muted);
+  }
+
+  .bat-meta {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: none;
+    letter-spacing: 0.02em;
+  }
+
+  .bat-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-left: 6px;
   }
 
   /* === Domain Sections === */
