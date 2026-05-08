@@ -1078,6 +1078,10 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   let batchNum = 0;
   let lastProgressAt = Date.now();
   const scanStartTime = Date.now();
+  // Baseline of pages already scanned at the moment this run begins.
+  // Used to keep pages/min and ETA accurate after a resume — without this,
+  // we'd divide *all* visited pages (including pre-resume ones) by *this run's* elapsed time.
+  const resumeBaseline = visited.size;
 
   while (queue.length > 0 && visited.size < maxPages && !interrupted) {
     // Inter-batch delay (skip first batch)
@@ -1168,7 +1172,8 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     // Progress stats every 30s
     if (Date.now() - lastProgressAt > 30_000) {
       const elapsed = (Date.now() - scanStartTime) / 60_000;
-      const ppm = (visited.size / elapsed).toFixed(1);
+      const newlyScanned = visited.size - resumeBaseline;
+      const ppm = elapsed > 0 ? (newlyScanned / elapsed).toFixed(1) : "0.0";
       const remaining = Math.min(queue.length, maxPages - visited.size);
       const etaMin = ppm > 0 ? (remaining / ppm).toFixed(1) : "?";
       console.log(chalk.cyan(`  ── ${ppm} pages/min | queue=${queue.length} | ~${etaMin}min left | delay=${throttle.delay}ms | concurrency=${throttle.concurrency}`));
