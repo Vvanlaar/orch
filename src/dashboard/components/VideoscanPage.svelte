@@ -18,7 +18,7 @@
   let loading = $derived(isLoading());
   let allTasks = $derived(getTasks());
   let videoscanTasks = $derived(allTasks.filter(t => t.type === 'videoscan'));
-  let activeTasks = $derived(videoscanTasks.filter(t => t.status === 'running' || t.status === 'pending'));
+  let activeTasks = $derived(videoscanTasks.filter(t => t.status === 'running' || t.status === 'pending' || t.status === 'paused'));
 
   type ActiveItem =
     | { kind: 'single'; task: Task }
@@ -42,7 +42,7 @@
     }
     return items;
   });
-  let historyTasks = $derived(videoscanTasks.filter(t => t.status !== 'running' && t.status !== 'pending'));
+  let historyTasks = $derived(videoscanTasks.filter(t => t.status !== 'running' && t.status !== 'pending' && t.status !== 'paused'));
   let resumableScans = $derived(scans.filter(s => s.canResume));
 
   const UNGROUPED_BATCH = '__ungrouped__';

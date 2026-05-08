@@ -895,8 +895,9 @@ function tryRecover(throttle) {
   throttle.concurrency = Math.min(throttle.baseConcurrency, throttle.concurrency + 1);
 }
 
-// Live control file: { concurrency?: number, delay?: number }. Re-applied only when the file's mtime changes,
-// so the rate-limiter's backoff (onRateLimit) and recovery (tryRecover) aren't overwritten every batch.
+// Live control file: { concurrency?: number, delay?: number, paused?: boolean }.
+// Re-applied only when the file's mtime changes, so the rate-limiter's backoff (onRateLimit)
+// and recovery (tryRecover) aren't overwritten every batch.
 function applyControlFile(throttle, controlFile) {
   if (!controlFile) return;
   let mtimeMs;
@@ -937,6 +938,10 @@ function applyControlFile(throttle, controlFile) {
   }
   if (changed) {
     console.log(chalk.magenta(`  ⚡ Live control: concurrency=${throttle.concurrency} (base=${throttle.baseConcurrency}), delay=${throttle.delay}ms (base=${throttle.baseDelay}ms)`));
+  }
+  if (ctrl.paused === true && !interrupted) {
+    interrupted = true;
+    console.log(chalk.yellow('\n⏸  Pause requested via control file — finishing current batch and saving state…'));
   }
 }
 
@@ -1469,7 +1474,7 @@ ${chalk.bold("Opties:")}
   --urls <urls|file>    Scan explicit URLs (comma-separated or JSON file path)
   --no-sitemap          Skip sitemap-based URL discovery
   --max-sitemap-urls <n> Max URLs uit sitemap toevoegen aan queue (standaard: 5000)
-  --control-file <path> JSON file polled per batch for live { concurrency, delay } overrides
+  --control-file <path> JSON file polled per batch for live { concurrency, delay, paused } overrides
   --batch-id <id>       Stamp scan output with a batch identifier (for grouping in dashboard)
   --batch-label <text>  Stamp scan output with a human-readable batch label
 

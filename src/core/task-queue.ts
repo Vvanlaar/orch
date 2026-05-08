@@ -243,6 +243,32 @@ export async function failTask(id: number, error: string): Promise<void> {
   jsonUpdateTask(id, { status: 'failed', error, output, pid: undefined, completedAt: new Date().toISOString() });
 }
 
+/**
+ * Mark a task as paused. Persists the streaming output so the dashboard keeps the log,
+ * clears the pid (the subprocess is exiting), and leaves `result` / `error` unchanged.
+ * Restart-safe: callers should invoke this BEFORE writing the control file, so the row
+ * is durably 'paused' even if the server crashes mid-call.
+ */
+export async function pauseTask(id: number): Promise<void> {
+  const output = streamingOutputs.get(id);
+  streamingOutputs.delete(id);
+  if (useDb) return dbUpdateTask(id, { status: 'paused', output: output ?? null, pid: null });
+  jsonUpdateTask(id, { status: 'paused', output, pid: undefined });
+}
+
+/**
+ * Merge a partial context patch onto a task's existing context. Used to record the resume
+ * filename after a paused scan finishes writing its JSON.
+ */
+export async function updateTaskContext(id: number, patch: Partial<TaskContext>): Promise<Task | null> {
+  const task = await getTask(id);
+  if (!task) return null;
+  const ctx: TaskContext = { ...task.context, ...patch };
+  if (useDb) await dbUpdateTask(id, { context: ctx });
+  else jsonUpdateTask(id, { context: ctx });
+  return { ...task, context: ctx };
+}
+
 export async function updateTaskPid(id: number, pid: number | undefined): Promise<void> {
   if (useDb) return dbUpdateTaskPid(id, pid);
   jsonUpdateTask(id, { pid });

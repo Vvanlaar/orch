@@ -104,6 +104,22 @@ export async function stopTask(taskId: number) {
   }
 }
 
+export async function pauseVideoscanTask(taskId: number) {
+  const res = await fetch(`/api/tasks/${taskId}/pause`, { method: 'POST' });
+  if (!res.ok) {
+    const result = await res.json();
+    throw new Error(result.error || 'Pause failed');
+  }
+}
+
+export async function resumeVideoscanTask(taskId: number) {
+  const res = await fetch(`/api/tasks/${taskId}/resume`, { method: 'POST' });
+  if (!res.ok) {
+    const result = await res.json();
+    throw new Error(result.error || 'Resume failed');
+  }
+}
+
 export async function deleteTask(taskId: number) {
   const res = await fetch(`/api/tasks/${taskId}`, { method: 'DELETE' });
   if (!res.ok) {
