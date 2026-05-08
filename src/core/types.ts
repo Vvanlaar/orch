@@ -1,4 +1,4 @@
-export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'needs-repo' | 'suggestion' | 'dismissed';
+export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'needs-repo' | 'suggestion' | 'dismissed' | 'paused';
 
 export type TerminalId = 'auto' | 'wt' | 'cmd' | 'powershell' | 'pwsh' | 'git-bash' | 'gnome-terminal' | 'xterm' | 'tmux' | 'terminal-app' | 'iterm2';
 
@@ -71,6 +71,7 @@ export interface TaskContext {
   targetFilename?: string; // merge into this existing scan after
   batchId?: string; // groups multiple videoscan tasks under one live block (e.g. digi import)
   batchLabel?: string; // human-readable label for the batch group header
+  targetMachineId?: string; // pin task to a specific machine; only that machine claims it
 }
 
 export interface Config {

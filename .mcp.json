@@ -12,6 +12,10 @@
         "AZURE_DEVOPS_AUTH_METHOD": "pat",
         "AZURE_DEVOPS_PAT": "${ADO_PAT}"
       }
+    },
+    "supabase": {
+      "command": "npx.cmd",
+      "args": ["-y", "@supabase/mcp-server-supabase", "--access-token", "${SUPABASE_ACCESS_TOKEN2}"]
     }
   }
 }

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import type { Task } from '../lib/types';
-  import { getTaskOutput, setVideoscanControl } from '../stores/tasks.svelte';
+  import { getTaskOutput, setVideoscanControl, pauseVideoscanTask, resumeVideoscanTask } from '../stores/tasks.svelte';
   import { parseScanProgress, formatDuration, formatEta } from '../lib/videoscan-progress';
 
   let { task }: { task: Task } = $props();
@@ -49,16 +49,59 @@
   });
 
   let isRunning = $derived(task.status === 'running' || task.status === 'pending');
+  let isPaused = $derived(task.status === 'paused');
+  // Explicit-URL scans (Digi imports / URL list batches) can't be paused yet —
+  // scanExplicitUrls' resume path isn't implemented; we'd silently drop the unvisited URLs.
+  let canPause = $derived(!task.context?.urls?.length);
+
+  let pauseBusy = $state(false);
+  let pauseError = $state<string | null>(null);
+
+  async function handlePause() {
+    pauseBusy = true;
+    pauseError = null;
+    try {
+      await pauseVideoscanTask(task.id);
+    } catch (err) {
+      pauseError = err instanceof Error ? err.message : String(err);
+    } finally {
+      pauseBusy = false;
+    }
+  }
+
+  async function handleResume() {
+    pauseBusy = true;
+    pauseError = null;
+    try {
+      await resumeVideoscanTask(task.id);
+    } catch (err) {
+      pauseError = err instanceof Error ? err.message : String(err);
+    } finally {
+      pauseBusy = false;
+    }
+  }
 </script>
 
-<div class="vsp-card">
+<div class="vsp-card" class:paused={isPaused}>
   <div class="vsp-head">
-    <span class="vsp-dot" class:running={isRunning}></span>
-    <span class="vsp-title">Live progress</span>
-    {#if progress.pagesPerMin !== null}
+    <span class="vsp-dot" class:running={isRunning} class:paused={isPaused}></span>
+    <span class="vsp-title">{isPaused ? 'Paused' : 'Live progress'}</span>
+    {#if progress.pagesPerMin !== null && !isPaused}
       <span class="vsp-rate">{progress.pagesPerMin.toFixed(1)} pg/min</span>
     {/if}
+    {#if isRunning && canPause}
+      <button class="vsp-pause-btn" onclick={handlePause} disabled={pauseBusy} title="Pause this scan — state is saved so you can resume later">
+        {pauseBusy ? '…' : '⏸ Pause'}
+      </button>
+    {:else if isPaused}
+      <button class="vsp-pause-btn vsp-resume-btn" onclick={handleResume} disabled={pauseBusy} title="Resume this paused scan">
+        {pauseBusy ? '…' : '▶ Resume'}
+      </button>
+    {/if}
   </div>
+  {#if pauseError}
+    <div class="vsp-pause-err">{pauseError}</div>
+  {/if}
 
   <div class="vsp-bar-wrap">
     <div class="vsp-bar" style="width: {pct}%"></div>
@@ -147,6 +190,50 @@
     background: var(--accent, #06b6d4);
     box-shadow: 0 0 0 0 rgba(6, 182, 212, 0.6);
     animation: vsp-pulse 1.6s ease-out infinite;
+  }
+  .vsp-dot.paused {
+    background: #f59e0b;
+    animation: none;
+  }
+  .vsp-card.paused {
+    border-left: 3px solid #f59e0b;
+  }
+  .vsp-pause-btn {
+    margin-left: 6px;
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    color: #f59e0b;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  }
+  .vsp-pause-btn:hover:not(:disabled) {
+    background: rgba(245, 158, 11, 0.18);
+    border-color: #f59e0b;
+  }
+  .vsp-pause-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .vsp-resume-btn {
+    background: rgba(34, 211, 238, 0.08);
+    border-color: rgba(34, 211, 238, 0.4);
+    color: var(--accent-bright, #22d3ee);
+  }
+  .vsp-resume-btn:hover:not(:disabled) {
+    background: rgba(34, 211, 238, 0.18);
+    border-color: var(--accent-bright, #22d3ee);
+  }
+  .vsp-pause-err {
+    margin-bottom: 8px;
+    font-size: 11px;
+    color: #f87171;
   }
   @keyframes vsp-pulse {
     0%   { box-shadow: 0 0 0 0 rgba(6, 182, 212, 0.55); }

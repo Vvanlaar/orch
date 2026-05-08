@@ -300,7 +300,24 @@ td {
 /* =========================================
    8. RESPONSIVE & PRINT
    ========================================= */
-@media print { .page { box-shadow: none; margin: 0; page-break-after: always; } }
+@media print {
+  body { padding: 0; gap: 0; background: white; }
+  .page {
+    box-shadow: none;
+    margin: 0;
+    /* allow content longer than one A4 to flow into additional PDF pages */
+    height: auto;
+    min-height: 297mm;
+    overflow: visible;
+    page-break-after: always;
+  }
+  /* avoid breaking inside atomic blocks */
+  tr, .stat-box, .acc-tip-box, .privacy-list li,
+  .check-item, .acc-tag, .legend-item { page-break-inside: avoid; }
+  /* hint Chromium that the table head is a header group */
+  thead { display: table-header-group; }
+}
+@page { size: A4; margin: 0; }
 
 @media screen {
   .page {

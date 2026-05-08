@@ -47,6 +47,7 @@
 
   let runningCount = $derived(tasks.filter(t => t.status === 'running').length);
   let pendingCount = $derived(tasks.filter(t => t.status === 'pending').length);
+  let pausedCount = $derived(tasks.filter(t => t.status === 'paused').length);
   let totalCount = $derived(tasks.length);
 
   let totalVisited = $derived(perTask.reduce((s, p) => s + p.progress.visited, 0));
@@ -82,6 +83,7 @@
     <span class="vsb-counts">
       {#if runningCount > 0}<span class="vsb-c run">{runningCount} running</span>{/if}
       {#if pendingCount > 0}<span class="vsb-c pend">{pendingCount} pending</span>{/if}
+      {#if pausedCount > 0}<span class="vsb-c paused">{pausedCount} paused</span>{/if}
       <span class="vsb-c tot">{totalCount} total</span>
     </span>
   </button>
@@ -102,7 +104,7 @@
         {@const exp = expandedChildren.has(task.id)}
         <button class="vsb-row" onclick={() => toggleChild(task.id)}>
           <span class="vsb-row-caret" class:open={exp}>▸</span>
-          <span class="vsb-row-status" class:run={task.status === 'running'} class:pend={task.status === 'pending'}></span>
+          <span class="vsb-row-status" class:run={task.status === 'running'} class:pend={task.status === 'pending'} class:paused={task.status === 'paused'}></span>
           <span class="vsb-row-label">{rowLabel(task)}</span>
           <span class="vsb-row-pages">
             {progress.visited.toLocaleString()}{planned > 0 ? `/${planned.toLocaleString()}` : ''} pg
@@ -183,6 +185,7 @@
   .vsb-c { padding: 2px 6px; border-radius: 4px; }
   .vsb-c.run  { background: rgba(6, 182, 212, 0.15); color: var(--accent, #06b6d4); }
   .vsb-c.pend { background: rgba(255, 255, 255, 0.06); color: var(--text-muted); }
+  .vsb-c.paused { background: rgba(245, 158, 11, 0.15); color: #f59e0b; }
   .vsb-c.tot  { background: rgba(255, 255, 255, 0.04); color: var(--text-muted); }
   .vsb-bar-wrap {
     height: 6px;
@@ -251,6 +254,7 @@
     box-shadow: 0 0 4px rgba(6, 182, 212, 0.6);
   }
   .vsb-row-status.pend { background: rgba(255, 255, 255, 0.3); }
+  .vsb-row-status.paused { background: #f59e0b; }
   .vsb-row-label {
     flex: 1;
     font-size: 11px;

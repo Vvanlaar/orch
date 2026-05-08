@@ -55,8 +55,39 @@ export function setVideoscanControl(taskId: number, payload: { concurrency?: num
     sanitized.delay = Math.floor(payload.delay);
   }
   if (Object.keys(sanitized).length === 0) return false;
-  writeFileSync(path, JSON.stringify(sanitized));
+  // Preserve any existing flags (notably `paused: true`) so a concurrency tweak between
+  // pause-write and scan.mjs's next poll doesn't silently unpause the scan.
+  let existing: Record<string, unknown> = {};
+  try {
+    const raw = readFileSync(path, 'utf-8');
+    if (raw.trim()) existing = JSON.parse(raw);
+  } catch { /* file may not exist yet — fine */ }
+  writeFileSync(path, JSON.stringify({ ...existing, ...sanitized }));
   return true;
+}
+
+/** True while a scan.mjs subprocess for this task is still alive on this machine. */
+export function isVideoscanRunning(taskId: number): boolean {
+  return runningProcesses.has(taskId);
+}
+
+/**
+ * Cross-platform graceful pause: writes { paused: true } to the task's control file.
+ * scan.mjs polls per batch and exits the crawl loop, then writes the JSON with _state.queue
+ * intact — so the scan is resumable. No SIGTERM is sent (which on Windows is a hard kill).
+ *
+ * Falls back to writing controlFilePath(taskId) directly when the in-memory map has been lost
+ * across a server restart, so a paused-then-restarted task can still receive the signal if its
+ * subprocess somehow survived (it normally won't, since child processes die with the parent).
+ */
+export function pauseVideoscan(taskId: number): boolean {
+  const path = controlFiles.get(taskId) ?? controlFilePath(taskId);
+  try {
+    writeFileSync(path, JSON.stringify({ paused: true }));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export interface VideoscanResult {
@@ -98,6 +129,8 @@ export interface VideoscanOptions {
   delay?: number;
   urls?: string[];
   targetFilename?: string;
+  batchId?: string;
+  batchLabel?: string;
 }
 
 export async function runVideoscan(taskId: number, options: VideoscanOptions): Promise<VideoscanResult> {
@@ -124,6 +157,8 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
   if (options.concurrency) args.push('--concurrency', String(options.concurrency));
   if (options.resumeFile) args.push('--resume', options.resumeFile);
   if (options.delay) args.push('--delay', String(options.delay));
+  if (options.batchId) args.push('--batch-id', options.batchId);
+  if (options.batchLabel) args.push('--batch-label', options.batchLabel);
 
   // Per-task control file for live concurrency/delay overrides
   const controlFile = controlFilePath(taskId);
@@ -537,6 +572,8 @@ export async function syncScanToSupabase(jsonFilename: string): Promise<void> {
       hasPreview: existsSync(join(VIDEOSCAN_DIR, previewFile)),
       hasPreviewPdf: existsSync(join(VIDEOSCAN_DIR, previewPdfFile)),
       canResume: (data._state?.queue?.length || 0) > 0,
+      batchId: typeof data.batchId === 'string' ? data.batchId : undefined,
+      batchLabel: typeof data.batchLabel === 'string' ? data.batchLabel : undefined,
     });
 
     log.info(`Synced ${jsonFilename} to Supabase`);
@@ -557,6 +594,8 @@ export interface ScanSummary {
   hasPreview: boolean;
   hasPreviewPdf: boolean;
   canResume: boolean;
+  batchId?: string;
+  batchLabel?: string;
 }
 
 function listScansFromDisk(): ScanSummary[] {
@@ -584,6 +623,8 @@ function listScansFromDisk(): ScanSummary[] {
           hasPreview: existsSync(join(VIDEOSCAN_DIR, previewFile)),
           hasPreviewPdf: existsSync(join(VIDEOSCAN_DIR, previewPdfFile)),
           canResume: (data._state?.queue?.length || 0) > 0,
+          ...(typeof data.batchId === 'string' && data.batchId ? { batchId: data.batchId } : {}),
+          ...(typeof data.batchLabel === 'string' && data.batchLabel ? { batchLabel: data.batchLabel } : {}),
         };
       } catch {
         return {

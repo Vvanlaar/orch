@@ -21,6 +21,7 @@ import {
   updateTaskRepoPath,
   updateTaskStatus,
   getTask,
+  updateTaskContext,
 } from './task-queue.js';
 import { extractLesson, storeLearning, updateSkillIfRelevant } from './learnings.js';
 import { runClaude, runClaudeStreaming, runClaudeInTerminal, claudeEmitter, steerTask, buildPromptForTask, buildPrCommentFixPrompt, buildCodeSimplifierPrompt, buildSelfReviewPrompt, buildCommentResolutionPrompt, buildMergeConflictPrompt } from './claude-runner.js';
@@ -370,9 +371,23 @@ async function processVideoscan(task: Task): Promise<void> {
       delay: ctx.delay,
       urls: ctx.urls,
       targetFilename: ctx.targetFilename,
+      batchId: ctx.batchId,
+      batchLabel: ctx.batchLabel,
     });
 
-    if (result.success) {
+    // If the user paused this task while runVideoscan was in flight, the row will
+    // already say 'paused'. Don't override that with completed/failed — just record
+    // the JSON filename so the resume endpoint knows where to pick up from.
+    const current = await getTask(task.id);
+    const wasPaused = current?.status === 'paused';
+
+    if (wasPaused) {
+      if (result.jsonFile) {
+        const resumePath = path.join(getVideoscanDir(), result.jsonFile);
+        await updateTaskContext(task.id, { resumeFile: resumePath });
+      }
+      log.info(`Task #${task.id} paused; subprocess exited gracefully${result.jsonFile ? ` (resume file: ${result.jsonFile})` : ''}`);
+    } else if (result.success) {
       const parts = [`Scan complete`];
       if (result.jsonFile) parts.push(`JSON: ${result.jsonFile}`);
       if (result.htmlFile) parts.push(`Report: ${result.htmlFile}`);
@@ -383,11 +398,19 @@ async function processVideoscan(task: Task): Promise<void> {
     }
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
-    await failTask(task.id, error);
+    // Don't clobber a paused row with a 'failed' status if the error was triggered by the pause.
+    const current = await getTask(task.id);
+    if (current?.status !== 'paused') {
+      await failTask(task.id, error);
+    } else {
+      log.warn(`Task #${task.id} paused; runVideoscan threw (${error}) — leaving status as paused`);
+    }
   }
   notifyUpdate();
 
   // Auto-merge digi-import batches once every sibling task has finished.
+  // Note: the TERMINAL gate below already excludes 'paused', so paused siblings naturally
+  // hold the merge until the user resumes them.
   if (ctx.batchId && !ctx.targetFilename) {
     try {
       await tryAutoMergeBatch(ctx.batchId);
@@ -696,11 +719,13 @@ async function processTask(task: Task): Promise<void> {
 export async function processQueue(): Promise<void> {
   const [runningTasks, allPending] = await Promise.all([
     getRunningTasks(),
-    getPendingTasks(config.claude.maxConcurrentTasks + config.claude.maxConcurrentVideoscans),
+    getPendingTasks(config.claude.maxConcurrentTasks + config.claude.maxConcurrentVideoscans, MACHINE_ID),
   ]);
 
-  let videoscanSlots = config.claude.maxConcurrentVideoscans - runningTasks.filter(t => t.type === 'videoscan').length;
-  let otherSlots = config.claude.maxConcurrentTasks - runningTasks.filter(t => t.type !== 'videoscan').length;
+  // Slot budget is per-machine: don't count other machines' running tasks against this machine's capacity.
+  const myRunning = runningTasks.filter(t => !t.machineId || t.machineId === MACHINE_ID);
+  let videoscanSlots = config.claude.maxConcurrentVideoscans - myRunning.filter(t => t.type === 'videoscan').length;
+  let otherSlots = config.claude.maxConcurrentTasks - myRunning.filter(t => t.type !== 'videoscan').length;
 
   for (const task of allPending) {
     if (task.type === 'videoscan') {

@@ -11,3 +11,4 @@ desktop/artifacts/
 orch-server.log
 videoscans/
 *.png
+.claude/settings.local.json

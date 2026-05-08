@@ -26,12 +26,12 @@ import {
 import { startPoller } from '../core/poller.js';
 import { getEffectiveRepoMapping, getScannedRepos } from '../core/repo-scanner.js';
 import { getAuthenticatedUser, getPull, listPullReviewComments, listOrgRepos } from '../core/github-api.js';
-import { approveSuggestion, completeTask, createTask, deleteTask, dismissSuggestion, failTask, getAllTasks, getAllTasksWithOutput, getTask, getTasksWithPids, retryTask, updateTaskRepoPath } from '../core/task-queue.js';
+import { approveSuggestion, completeTask, createTask, deleteTask, dismissSuggestion, failTask, getAllTasks, getAllTasksWithOutput, getTask, getTasksWithPids, pauseTask, pinTask, retryTask, updateTaskContext, updateTaskRepoPath, updateTaskStatus } from '../core/task-queue.js';
 import { initSettings } from '../core/settings.js';
 import { isSupabaseConfigured, MACHINE_ID } from '../core/db/client.js';
 import { dbGetNotifications, dbInsertNotification } from '../core/db/notifications.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
-import { getVideoscanDir, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, setVideoscanControl, deleteScans } from '../core/videoscan-runner.js';
+import { getVideoscanDir, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, setVideoscanControl, pauseVideoscan, findLatestScanFileForDomain, isVideoscanRunning, deleteScans } from '../core/videoscan-runner.js';
 import { downloadFile } from '../core/db/storage.js';
 import { dbArchiveVideoscans } from '../core/db/videoscans.js';
 import type { TerminalId } from '../core/types.js';
@@ -111,14 +111,28 @@ function broadcastOutput(taskId: number, chunk: string): void {
 app.use(cors({ origin: [/^https?:\/\/localhost(:\d+)?$/, /^https?:\/\/127\.0\.0\.1(:\d+)?$/] }));
 app.use(express.json());
 
-// Dashboard - serve built Svelte app or fallback to old HTML
+// Dashboard - in dev, redirect to Vite (so a stale dist/dashboard/ from a
+// previous `npm run build` can't shadow live source). In prod, serve dist.
 const distDashboard = process.env.DASHBOARD_DIR || join(__dirname, '../../dist/dashboard');
 const oldDashboard = join(__dirname, '../dashboard/index.old.html');
 
+// True when the server is running off the source tree (tsx watch / dev:server),
+// not from a compiled dist/server/index.js. The Vite config only exists in src/.
+const isDevServer = existsSync(join(__dirname, '../dashboard/vite.config.ts'));
 const dashboardIndexPath = join(distDashboard, 'index.html');
 const hasDashboardBuild = existsSync(dashboardIndexPath);
 
-if (hasDashboardBuild) {
+if (isDevServer) {
+  const vitePort = process.env.DASHBOARD_PORT || '3010';
+  if (hasDashboardBuild) {
+    log.warn(`dev mode: ignoring stale dist/dashboard/ — '/' redirects to Vite at :${vitePort}. Run 'npm run clean' to remove it.`);
+  } else {
+    log.info(`dev mode: '/' redirects to Vite dev server at :${vitePort}`);
+  }
+  app.get('/', (_req, res) => {
+    res.redirect(302, `http://localhost:${vitePort}/`);
+  });
+} else if (hasDashboardBuild) {
   // Serve built Svelte dashboard static assets
   app.use(express.static(distDashboard));
 } else if (existsSync(oldDashboard)) {
@@ -128,7 +142,7 @@ if (hasDashboardBuild) {
     res.type('html').send(html);
   });
 } else {
-  // Dev mode - Vite handles the dashboard
+  // Built but no dashboard — explain.
   app.get('/', (_req, res) => {
     res.send('Dashboard not built. Run npm run build:dashboard or use Vite dev server.');
   });
@@ -181,6 +195,96 @@ app.post('/api/tasks/:id/stop', asyncHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
+// Pause a running videoscan: writes the row as 'paused' first (restart-safe), then signals
+// scan.mjs via the control file. Cross-platform — no SIGTERM (Windows would force-kill).
+app.post('/api/tasks/:id/pause', asyncHandler(async (req, res) => {
+  const id = parseInt(req.params.id as string);
+  const task = await getTask(id);
+  if (!task) {
+    res.status(404).json({ error: 'Task not found' });
+    return;
+  }
+  if (task.type !== 'videoscan') {
+    res.status(400).json({ error: 'Only videoscan tasks support pause' });
+    return;
+  }
+  if (task.status !== 'running' && task.status !== 'pending') {
+    res.status(400).json({ error: `Task is ${task.status}, not running/pending` });
+    return;
+  }
+  const isLocal = !task.machineId || task.machineId === MACHINE_ID;
+  if (!isLocal) {
+    res.status(400).json({ error: `Task is on a different machine (${task.machineId})` });
+    return;
+  }
+  // Explicit-URL scans (--urls mode in scan.mjs) currently can't be resumed cleanly:
+  // scanExplicitUrls writes _state.queue=[] and the resume path routes through crawlSite,
+  // which would discover-crawl the start URL's domain instead of finishing the original list.
+  // Refuse pause for those rather than silently lose the unvisited URLs.
+  if (task.context.urls && task.context.urls.length > 0) {
+    res.status(400).json({ error: 'Pause is not yet supported for explicit-URL scans (Digi imports / URL list batches). Use Stop if you need to abort.' });
+    return;
+  }
+  // Mark paused FIRST so a crash here leaves a durable 'paused' row.
+  await pauseTask(id);
+  pauseVideoscan(id);
+  await broadcastTasks();
+  res.json({ success: true });
+}));
+
+// Resume a paused videoscan in-place: flips status back to pending. processQueue picks it up
+// and processVideoscan calls runVideoscan with --resume <ctx.resumeFile>. If the resume file
+// path was never captured (e.g. server died mid-pause), fall back to the latest resumable
+// JSON for that task's domain.
+app.post('/api/tasks/:id/resume', asyncHandler(async (req, res) => {
+  const id = parseInt(req.params.id as string);
+  const task = await getTask(id);
+  if (!task) {
+    res.status(404).json({ error: 'Task not found' });
+    return;
+  }
+  if (task.type !== 'videoscan') {
+    res.status(400).json({ error: 'Only videoscan tasks support resume' });
+    return;
+  }
+  if (task.status !== 'paused') {
+    res.status(400).json({ error: `Task is ${task.status}, not paused` });
+    return;
+  }
+  // Race guard: pause signals scan.mjs at the next batch boundary, which can take seconds.
+  // If the user clicks Resume while the original subprocess is still finishing its graceful
+  // shutdown, the new pending status would let processQueue spawn a SECOND scan.mjs for the
+  // same task and they'd race to write the JSON. Refuse until the original has fully exited.
+  if (isVideoscanRunning(id)) {
+    res.status(409).json({ error: 'Scan is still finishing its pause — try again in a moment' });
+    return;
+  }
+
+  let resumeFile = task.context.resumeFile;
+  if (!resumeFile) {
+    // Best-effort recovery: find the latest resumable JSON for this task's domain.
+    const url = task.context.scanUrl || task.context.urls?.[0];
+    let domain: string | undefined;
+    try { domain = url ? new URL(url).hostname.replace(/^www\./, '') : undefined; } catch { /* noop */ }
+    const candidate = domain ? findLatestScanFileForDomain(domain) : null;
+    if (candidate) {
+      // findLatestScanFileForDomain returns just the filename; resolve to absolute so
+      // it matches the format processVideoscan stores (path.join(VIDEOSCAN_DIR, jsonFile)).
+      resumeFile = path.join(getVideoscanDir(), candidate);
+      await updateTaskContext(id, { resumeFile });
+    }
+  }
+  if (!resumeFile) {
+    res.status(400).json({ error: 'No resume file available for this task' });
+    return;
+  }
+
+  await updateTaskStatus(id, 'pending');
+  triggerUpdate();
+  await broadcastTasks();
+  res.json({ success: true });
+}));
+
 // Live videoscan control: bump concurrency / delay on a running scan
 app.post('/api/tasks/:id/videoscan-control', asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id as string);
@@ -223,6 +327,21 @@ app.delete('/api/tasks/:id', asyncHandler(async (req, res) => {
   }
   await broadcastTasks();
   res.json({ success: true });
+}));
+
+// Pin task to a specific machine (or clear pin). Body: { machineId: string | null } | { self: true }
+app.post('/api/tasks/:id/pin', asyncHandler(async (req, res) => {
+  const id = parseInt(req.params.id as string);
+  const body = req.body || {};
+  const target: string | null = body.self ? MACHINE_ID : (body.machineId ?? null);
+  const updated = await pinTask(id, target);
+  if (!updated) {
+    res.status(404).json({ error: 'Task not found' });
+    return;
+  }
+  triggerUpdate();
+  await broadcastTasks();
+  res.json({ success: true, taskId: id, targetMachineId: target });
 }));
 
 // Retry failed task
