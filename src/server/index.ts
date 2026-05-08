@@ -111,14 +111,28 @@ function broadcastOutput(taskId: number, chunk: string): void {
 app.use(cors({ origin: [/^https?:\/\/localhost(:\d+)?$/, /^https?:\/\/127\.0\.0\.1(:\d+)?$/] }));
 app.use(express.json());
 
-// Dashboard - serve built Svelte app or fallback to old HTML
+// Dashboard - in dev, redirect to Vite (so a stale dist/dashboard/ from a
+// previous `npm run build` can't shadow live source). In prod, serve dist.
 const distDashboard = process.env.DASHBOARD_DIR || join(__dirname, '../../dist/dashboard');
 const oldDashboard = join(__dirname, '../dashboard/index.old.html');
 
+// True when the server is running off the source tree (tsx watch / dev:server),
+// not from a compiled dist/server/index.js. The Vite config only exists in src/.
+const isDevServer = existsSync(join(__dirname, '../dashboard/vite.config.ts'));
 const dashboardIndexPath = join(distDashboard, 'index.html');
 const hasDashboardBuild = existsSync(dashboardIndexPath);
 
-if (hasDashboardBuild) {
+if (isDevServer) {
+  const vitePort = process.env.DASHBOARD_PORT || '3010';
+  if (hasDashboardBuild) {
+    log.warn(`dev mode: ignoring stale dist/dashboard/ — '/' redirects to Vite at :${vitePort}. Run 'npm run clean' to remove it.`);
+  } else {
+    log.info(`dev mode: '/' redirects to Vite dev server at :${vitePort}`);
+  }
+  app.get('/', (_req, res) => {
+    res.redirect(302, `http://localhost:${vitePort}/`);
+  });
+} else if (hasDashboardBuild) {
   // Serve built Svelte dashboard static assets
   app.use(express.static(distDashboard));
 } else if (existsSync(oldDashboard)) {
@@ -128,7 +142,7 @@ if (hasDashboardBuild) {
     res.type('html').send(html);
   });
 } else {
-  // Dev mode - Vite handles the dashboard
+  // Built but no dashboard — explain.
   app.get('/', (_req, res) => {
     res.send('Dashboard not built. Run npm run build:dashboard or use Vite dev server.');
   });
