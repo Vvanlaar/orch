@@ -1,11 +1,12 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { getScans, fetchScans, startScan, startGroupScan, resumeScan, addUrlsToScan, mergeDomainScans, deleteScans, syncScan, regenerateReport, regeneratePreview, isLoading, importDigiToegankelijk, classifyGroupUrls, type ScanSummary, type DigiImportResult, type ReportOptions } from '../stores/videoscan.svelte';
-  import { getTasks, getTaskOutput, isExpanded, toggleExpanded } from '../stores/tasks.svelte';
+  import { getTasks, getTaskOutput, isExpanded, toggleExpanded, pauseVideoscanTask } from '../stores/tasks.svelte';
   import VideoscanLiveProgress from './VideoscanLiveProgress.svelte';
   import VideoscanLiveBatch from './VideoscanLiveBatch.svelte';
   import type { Task } from '../lib/types';
   import { readPreference, writePreference } from '../lib/preferences';
+  import { parseScanProgress } from '../lib/videoscan-progress';
 
   let url = $state('');
   let maxPages = $state(20000);
@@ -52,6 +53,46 @@
       .map(t => { try { return new URL(t.context?.scanUrl || '').hostname.replace(/^www\./, ''); } catch { return ''; } })
       .filter(Boolean)
   ));
+
+  // Single source of truth: explicit-URL scans (Digi imports / URL list batches) can't be
+  // paused yet — scanExplicitUrls' resume path silently drops unvisited URLs.
+  function isPausable(t: Task): boolean {
+    return t.status === 'running' && !t.context?.batchId && !t.context?.urls?.length;
+  }
+
+  // Aggregate stats across active (non-batch) scans — only shown when there's more than one,
+  // so a single scan doesn't get a redundant summary on top of its own card.
+  let liveAgg = $derived.by(() => {
+    const singles = activeTasks.filter(t => !t.context?.batchId);
+    if (singles.length < 2) return { show: false, count: 0, rate: 0, scanned: 0, canPauseAll: false };
+    let rate = 0, scanned = 0, pausable = 0;
+    for (const t of singles) {
+      const p = parseScanProgress(getTaskOutput(t.id), t.context?.maxPages ?? 0);
+      if (p.pagesPerMin !== null) rate += p.pagesPerMin;
+      scanned += p.visited;
+      if (isPausable(t)) pausable++;
+    }
+    return { show: true, count: singles.length, rate, scanned, canPauseAll: pausable > 0 };
+  });
+
+  let pauseAllBusy = $state(false);
+  let pauseAllError = $state<string | null>(null);
+  async function pauseAllActive() {
+    pauseAllBusy = true;
+    pauseAllError = null;
+    try {
+      const targets = activeTasks.filter(isPausable);
+      const results = await Promise.allSettled(targets.map(t => pauseVideoscanTask(t.id)));
+      const failed = results.filter(r => r.status === 'rejected') as PromiseRejectedResult[];
+      if (failed.length > 0) {
+        const first = failed[0].reason;
+        const msg = first instanceof Error ? first.message : String(first);
+        pauseAllError = `${failed.length} of ${targets.length} scans failed to pause: ${msg}`;
+      }
+    } finally {
+      pauseAllBusy = false;
+    }
+  }
 
   const UNGROUPED_BATCH = '__ungrouped__';
   type DomainBucket = { domain: string; scans: ScanSummary[] };
@@ -249,6 +290,27 @@
 
   let addingUrlsTo = $state<string | null>(null);
   let addUrlsText = $state('');
+  // Which scan row has its overflow (⋯) action menu open
+  let openActions = $state<string | null>(null);
+
+  // Close the overflow menu when clicking outside it or pressing Escape — otherwise
+  // it floats over unrelated UI until the user re-clicks the same `⋯` button.
+  $effect(() => {
+    if (openActions === null) return;
+    function onPointerDown(e: PointerEvent) {
+      const target = e.target as Element | null;
+      if (target && !target.closest('.sc-overflow')) openActions = null;
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') openActions = null;
+    }
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  });
   let addUrlsSubmitting = $state(false);
 
   async function handleAddUrls(scan: ScanSummary) {
@@ -692,39 +754,61 @@
                         <span class="sc-done">Done</span>
                       {/if}
                       <div class="sc-btns">
-                        {#if scan.hasPdf}
-                          <a class="sb pdf" href="/api/videoscans/files/{scan.filename.replace('.json', '.pdf')}" target="_blank" download>PDF</a>
-                        {/if}
                         {#if scan.hasReport}
                           <a class="sb rpt" href="/api/videoscans/files/{scan.filename.replace('.json', '.html')}" target="_blank">Report</a>
-                        {/if}
-                        {#if scan.hasPreview}
-                          <a class="sb prv" href="/api/videoscans/files/{scan.filename.replace('.json', '-preview.html')}" target="_blank">Preview</a>
-                        {/if}
-                        {#if scan.hasPreviewPdf}
-                          <a class="sb pdf" href="/api/videoscans/files/{scan.filename.replace('.json', '-preview.pdf')}" target="_blank" download>Preview PDF</a>
-                        {/if}
-                        <a class="sb" href="/api/videoscans/files/{scan.filename}" target="_blank" download>JSON</a>
-                        <button class="sb" onclick={() => { showReportOptions = showReportOptions === scan.filename ? null : scan.filename; reportOpts = readPreference(`report-opts-${scan.filename}`, {}); }} disabled={generating === scan.filename}>
-                          {generating === scan.filename ? '...' : scan.hasReport ? 'Regen' : 'Gen'}
-                        </button>
-                        {#if scan.hasReport && !scan.hasPreview}
-                          <button class="sb prv" onclick={() => handleGeneratePreview(scan)} disabled={generatingPreview === scan.filename}>
-                            {generatingPreview === scan.filename ? '...' : 'Mk Preview'}
-                          </button>
                         {/if}
                         {#if scan.canResume && !activeDomains.has(scan.domain)}
                           <button class="sb res" onclick={() => handleResume(scan)}>Resume</button>
                         {:else if scan.canResume}
                           <span class="sb sb-live" title="Already running — see live panel">Running…</span>
                         {/if}
-                        <button class="sb" onclick={() => { addingUrlsTo = addingUrlsTo === scan.filename ? null : scan.filename; addUrlsText = ''; }}>+ URLs</button>
-                        <button class="sb" onclick={() => handleSync(scan)} disabled={syncing === scan.filename} title="Sync on-disk state to Supabase">
-                          {syncing === scan.filename ? '...' : 'Sync'}
-                        </button>
-                        <button class="sb del" onclick={() => handleDelete(scan)} disabled={deleting === scan.filename}>
-                          {deleting === scan.filename ? '...' : '✕'}
-                        </button>
+                        <div class="sc-overflow">
+                          <button
+                            class="sb sb-more"
+                            class:open={openActions === scan.filename}
+                            onclick={() => (openActions = openActions === scan.filename ? null : scan.filename)}
+                            title="More actions"
+                            aria-label="More actions"
+                          >⋯</button>
+                          {#if openActions === scan.filename}
+                            <div class="sc-overflow-menu" role="menu">
+                              <div class="sc-overflow-group">
+                                <span class="sc-overflow-lbl">Open</span>
+                                {#if scan.hasPdf}
+                                  <a class="sc-overflow-item" href="/api/videoscans/files/{scan.filename.replace('.json', '.pdf')}" target="_blank" download onclick={() => (openActions = null)}>PDF</a>
+                                {/if}
+                                {#if scan.hasPreview}
+                                  <a class="sc-overflow-item" href="/api/videoscans/files/{scan.filename.replace('.json', '-preview.html')}" target="_blank" onclick={() => (openActions = null)}>Preview</a>
+                                {/if}
+                                {#if scan.hasPreviewPdf}
+                                  <a class="sc-overflow-item" href="/api/videoscans/files/{scan.filename.replace('.json', '-preview.pdf')}" target="_blank" download onclick={() => (openActions = null)}>Preview PDF</a>
+                                {/if}
+                                <a class="sc-overflow-item" href="/api/videoscans/files/{scan.filename}" target="_blank" download onclick={() => (openActions = null)}>JSON</a>
+                              </div>
+                              <div class="sc-overflow-group">
+                                <span class="sc-overflow-lbl">Generate</span>
+                                <button class="sc-overflow-item" onclick={() => { openActions = null; showReportOptions = showReportOptions === scan.filename ? null : scan.filename; reportOpts = readPreference(`report-opts-${scan.filename}`, {}); }} disabled={generating === scan.filename}>
+                                  {generating === scan.filename ? '...' : scan.hasReport ? 'Regen report' : 'Generate report'}
+                                </button>
+                                {#if scan.hasReport && !scan.hasPreview}
+                                  <button class="sc-overflow-item" onclick={() => { openActions = null; handleGeneratePreview(scan); }} disabled={generatingPreview === scan.filename}>
+                                    {generatingPreview === scan.filename ? '...' : 'Make preview'}
+                                  </button>
+                                {/if}
+                              </div>
+                              <div class="sc-overflow-group">
+                                <span class="sc-overflow-lbl">Modify</span>
+                                <button class="sc-overflow-item" onclick={() => { openActions = null; addingUrlsTo = addingUrlsTo === scan.filename ? null : scan.filename; addUrlsText = ''; }}>+ URLs</button>
+                                <button class="sc-overflow-item" onclick={() => { openActions = null; handleSync(scan); }} disabled={syncing === scan.filename} title="Sync on-disk state to Supabase">
+                                  {syncing === scan.filename ? '...' : 'Sync to Supabase'}
+                                </button>
+                                <button class="sc-overflow-item danger" onclick={() => { openActions = null; handleDelete(scan); }} disabled={deleting === scan.filename}>
+                                  {deleting === scan.filename ? '...' : 'Delete'}
+                                </button>
+                              </div>
+                            </div>
+                          {/if}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -782,6 +866,24 @@
               Live
               <span class="live-n">{activeTasks.length}</span>
             </h3>
+            {#if liveAgg.show}
+              <div class="side-agg">
+                <span class="side-agg-stat"><strong>{liveAgg.count}</strong>&nbsp;scans</span>
+                <span class="side-agg-sep">·</span>
+                <span class="side-agg-stat"><strong>{liveAgg.rate.toFixed(1)}</strong>&nbsp;pg/min</span>
+                <span class="side-agg-sep">·</span>
+                <span class="side-agg-stat"><strong>{liveAgg.scanned.toLocaleString()}</strong>&nbsp;pg total</span>
+                <span class="side-agg-spacer"></span>
+                {#if liveAgg.canPauseAll}
+                  <button class="side-agg-pause" onclick={pauseAllActive} disabled={pauseAllBusy} title="Pause every running scan">
+                    {pauseAllBusy ? '…' : '⏸ Pause all'}
+                  </button>
+                {/if}
+              </div>
+              {#if pauseAllError}
+                <div class="side-agg-err" role="alert">{pauseAllError}</div>
+              {/if}
+            {/if}
             {#each activeItems as item (item.kind === 'batch' ? `b:${item.batchId}` : `t:${item.task.id}`)}
               {#if item.kind === 'batch'}
                 <div class="side-item">
@@ -792,11 +894,7 @@
                 {@const output = getTaskOutput(task.id)}
                 {@const exp = isExpanded(task.id)}
                 <div class="side-item">
-                  <VideoscanLiveProgress {task} />
-                  <button class="side-row" onclick={() => toggleExpanded(task.id)}>
-                    <span class="side-title">#{task.id} {task.context?.title || 'Videoscan'}</span>
-                    <span class="side-badge run">{task.status}</span>
-                  </button>
+                  <VideoscanLiveProgress {task} expanded={exp} onToggleExpand={() => toggleExpanded(task.id)} />
                   {#if exp && output}
                     <pre class="side-out">{output}</pre>
                   {/if}
@@ -1300,7 +1398,6 @@
     border: 1px solid var(--border-subtle);
     border-left: 3px solid var(--accent-dim);
     border-radius: 0 10px 10px 0;
-    overflow: hidden;
     transition: border-color 0.2s;
   }
 
@@ -1492,6 +1589,89 @@
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
+    align-items: center;
+  }
+
+  /* === Overflow ⋯ menu === */
+  .sc-overflow {
+    position: relative;
+  }
+  .sb.sb-more {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-dim);
+    font-size: 14px;
+    line-height: 1;
+    padding: 2px 7px;
+    letter-spacing: 0.1em;
+    cursor: pointer;
+  }
+  .sb.sb-more:hover { background: rgba(255, 255, 255, 0.08); color: var(--text); }
+  .sb.sb-more.open {
+    background: var(--accent-dim);
+    color: var(--accent-bright);
+    border-color: var(--accent);
+  }
+  .sc-overflow-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    z-index: 30;
+    min-width: 180px;
+    padding: 6px;
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.02);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .sc-overflow-group {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 2px 0;
+  }
+  .sc-overflow-group + .sc-overflow-group {
+    border-top: 1px solid var(--border-subtle);
+    padding-top: 6px;
+    margin-top: 2px;
+  }
+  .sc-overflow-lbl {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    padding: 2px 8px 4px;
+  }
+  .sc-overflow-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: 0;
+    color: var(--text);
+    font-size: 12px;
+    padding: 5px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+    text-decoration: none;
+  }
+  .sc-overflow-item:hover:not(:disabled) {
+    background: var(--accent-dim);
+    color: var(--accent-bright);
+  }
+  .sc-overflow-item:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .sc-overflow-item.danger { color: #f87171; }
+  .sc-overflow-item.danger:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.12);
+    color: #fca5a5;
   }
 
   /* === Small Buttons === */
@@ -1538,16 +1718,6 @@
   .sb.rpt:hover {
     background: var(--accent-glow);
     border-color: var(--accent);
-  }
-
-  .sb.prv {
-    border-color: rgba(168, 85, 247, 0.45);
-    color: #c084fc;
-  }
-
-  .sb.prv:hover {
-    background: rgba(168, 85, 247, 0.12);
-    border-color: #a855f7;
   }
 
   .sb.res {
@@ -1607,18 +1777,6 @@
     border-color: rgba(34, 197, 94, 0.25) !important;
   }
 
-  .sb.del {
-    border-color: rgba(239, 68, 68, 0.35);
-    color: #ef4444;
-    min-width: unset;
-    padding: 2px 6px;
-  }
-
-  .sb.del:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.12);
-    border-color: #ef4444;
-  }
-
   .sb:disabled {
     opacity: 0.4;
     cursor: not-allowed;
@@ -1661,6 +1819,51 @@
 
   .side-h svg {
     flex-shrink: 0;
+  }
+
+  /* Aggregate strip — shown only when more than one active scan */
+  .side-agg {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 14px;
+    background: linear-gradient(180deg, rgba(6,182,212,0.06), transparent);
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+  .side-agg-stat strong {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--text);
+    font-weight: 700;
+    font-size: 11px;
+  }
+  .side-agg-sep { opacity: 0.4; }
+  .side-agg-spacer { flex: 1; }
+  .side-agg-pause {
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    color: #f59e0b;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .side-agg-pause:hover:not(:disabled) {
+    background: rgba(245, 158, 11, 0.18);
+    border-color: #f59e0b;
+  }
+  .side-agg-pause:disabled { opacity: 0.5; cursor: not-allowed; }
+  .side-agg-err {
+    padding: 6px 14px 8px;
+    font-size: 11px;
+    color: #f87171;
+    border-bottom: 1px solid var(--border-subtle);
+    background: rgba(239, 68, 68, 0.05);
   }
 
   .live-dot {
@@ -1722,20 +1925,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     min-width: 0;
-  }
-
-  .side-badge {
-    font-size: 9px;
-    font-weight: 600;
-    padding: 2px 7px;
-    border-radius: 4px;
-    flex-shrink: 0;
-    margin-left: auto;
-  }
-
-  .side-badge.run {
-    background: var(--accent-dim);
-    color: var(--accent-bright);
   }
 
   .side-icon {
