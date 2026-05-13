@@ -8,7 +8,7 @@
   import { readPreference, writePreference } from '../lib/preferences';
 
   let url = $state('');
-  let maxPages = $state(5000);
+  let maxPages = $state(20000);
   let concurrency = $state(6);
   let delay = $state(200);
   let starting = $state(false);
