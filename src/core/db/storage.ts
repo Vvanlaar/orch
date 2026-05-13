@@ -94,6 +94,26 @@ export async function deleteScanFiles(jsonFilename: string): Promise<void> {
 }
 
 /**
+ * Generate a short-lived signed URL the browser can fetch directly from Supabase Storage.
+ * Returns null if the object is missing or Supabase isn't configured.
+ *
+ * Using this for HTML/PDF report views avoids proxying the file (often 5-50MB) through
+ * the orch server, which would double-count as Supabase egress.
+ */
+export async function createSignedUrl(filename: string, expiresIn = 3600): Promise<string | null> {
+  if (!isSupabaseConfigured()) return null;
+  await ensureBucket();
+  const { data, error } = await getSupabase().storage
+    .from(BUCKET)
+    .createSignedUrl(filename, expiresIn);
+  if (error || !data?.signedUrl) {
+    log.warn(`Signed URL failed ${filename}: ${error?.message || 'no url'}`);
+    return null;
+  }
+  return data.signedUrl;
+}
+
+/**
  * Download a file from Supabase Storage to local dir. Returns true if successful.
  */
 export async function downloadFile(filename: string, localDir: string): Promise<boolean> {

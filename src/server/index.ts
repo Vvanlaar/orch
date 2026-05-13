@@ -26,14 +26,14 @@ import {
 import { startPoller } from '../core/poller.js';
 import { getEffectiveRepoMapping, getScannedRepos } from '../core/repo-scanner.js';
 import { getAuthenticatedUser, getPull, listPullReviewComments, listOrgRepos } from '../core/github-api.js';
-import { approveSuggestion, completeTask, createTask, deleteTask, dismissSuggestion, failTask, getAllTasks, getAllTasksWithOutput, getTask, getTasksWithPids, pauseTask, pinTask, retryTask, updateTaskContext, updateTaskRepoPath, updateTaskStatus } from '../core/task-queue.js';
+import { applyStreamingOutput, approveSuggestion, completeTask, createTask, deleteTask, dismissSuggestion, failTask, getAllTasks, getAllTasksWithOutput, getTask, getTasksByIds, getTasksWithPids, pauseTask, pinTask, retryTask, updateTaskContext, updateTaskRepoPath, updateTaskStatus } from '../core/task-queue.js';
 import { initSettings } from '../core/settings.js';
 import { isSupabaseConfigured, MACHINE_ID } from '../core/db/client.js';
 import { dbGetNotifications, dbInsertNotification } from '../core/db/notifications.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
 import { getVideoscanDir, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, setVideoscanControl, pauseVideoscan, findLatestScanFileForDomain, isVideoscanRunning, deleteScans } from '../core/videoscan-runner.js';
 import { isPidAlive, killProcessTree } from '../core/process-kill.js';
-import { downloadFile } from '../core/db/storage.js';
+import { createSignedUrl, downloadFile } from '../core/db/storage.js';
 import { dbArchiveVideoscans } from '../core/db/videoscans.js';
 import type { TerminalId } from '../core/types.js';
 import { getCurrentAdoUser, getMyAdoWorkItems, getMyGitHubPRs, getMyResolvedWorkItems, getResolvedWithPRComments, getReviewedItemsInSprint, getTeamMembers, getWorkItemsBySprints, type OwnerFilter } from '../core/user-items.js';
@@ -58,9 +58,10 @@ const clients = new Set<WebSocket>();
 wss.on('connection', async (ws) => {
   clients.add(ws);
   try {
-    // Send current tasks with streaming output on connect
-    const tasks = await getAllTasksWithOutput(100);
-    ws.send(JSON.stringify({ type: 'tasks', tasks }));
+    // Send current tasks with streaming output on connect. Use the shared cache so
+    // multiple reconnecting tabs don't each trigger a fresh 100-row SELECT.
+    const tasks = await refreshTaskCache();
+    ws.send(JSON.stringify({ type: 'tasks', tasks: applyStreamingOutput(tasks) }));
     // Send current orchestrator state
     ws.send(JSON.stringify({ type: 'orchestrator', state: getOrchestratorState() }));
   } catch (err) {
@@ -85,14 +86,92 @@ wss.on('connection', async (ws) => {
 
 wss.on('error', (err) => log.error('WebSocket server error', err));
 
-export async function broadcastTasks(): Promise<void> {
-  const tasks = await getAllTasksWithOutput(100);
-  const message = JSON.stringify({ type: 'tasks', tasks });
-  clients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(message);
-    }
-  });
+// ──────────────────────────────────────────────────────────────────────────────
+// Broadcast pipeline
+//
+// Each task mutation used to call `broadcastTasks()`, which re-pulled 100 task
+// rows from Supabase. Bursts of mutations (videoscan progress, batch inserts,
+// processor ticks) each produced a separate 100-row SELECT — the largest single
+// source of Supabase egress.
+//
+// We now keep an in-memory cache of the last 100 tasks and only re-read the
+// rows that callers tell us are dirty, behind a 100ms debounce. Streaming
+// output is overlaid on the fly so the cache itself stays small.
+// ──────────────────────────────────────────────────────────────────────────────
+
+const TASK_CACHE_LIMIT = 100;
+const BROADCAST_DEBOUNCE_MS = 100;
+
+let taskCache: import('../core/types.js').Task[] | null = null;
+const dirtyTaskIds = new Set<number>();
+let fullRefreshPending = false;
+let broadcastTimer: NodeJS.Timeout | null = null;
+let lastBroadcastPayload: string | null = null;
+
+async function refreshTaskCache(): Promise<import('../core/types.js').Task[]> {
+  if (taskCache === null || fullRefreshPending) {
+    taskCache = await getAllTasks(TASK_CACHE_LIMIT);
+    fullRefreshPending = false;
+    dirtyTaskIds.clear();
+    return taskCache;
+  }
+  if (dirtyTaskIds.size === 0) return taskCache;
+
+  const ids = [...dirtyTaskIds];
+  dirtyTaskIds.clear();
+  const fresh = await getTasksByIds(ids);
+  const freshById = new Map(fresh.map(t => [t.id, t]));
+
+  const wantedIds = new Set(ids);
+  // Update existing rows and drop ones that no longer exist (deleted).
+  taskCache = taskCache.filter(t => {
+    if (!wantedIds.has(t.id)) return true;
+    const updated = freshById.get(t.id);
+    return updated !== undefined; // drop if no longer in DB
+  }).map(t => freshById.get(t.id) ?? t);
+
+  // Insert newly-created tasks (ids the cache hadn't seen).
+  const cachedIds = new Set(taskCache.map(t => t.id));
+  for (const t of fresh) {
+    if (!cachedIds.has(t.id)) taskCache.push(t);
+  }
+
+  taskCache.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  if (taskCache.length > TASK_CACHE_LIMIT) taskCache.length = TASK_CACHE_LIMIT;
+  return taskCache;
+}
+
+async function flushBroadcast(): Promise<void> {
+  broadcastTimer = null;
+  try {
+    const tasks = await refreshTaskCache();
+    const payload = JSON.stringify({ type: 'tasks', tasks: applyStreamingOutput(tasks) });
+    if (payload === lastBroadcastPayload) return;
+    lastBroadcastPayload = payload;
+    clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) client.send(payload);
+    });
+  } catch (err) {
+    log.error('broadcast flush error', err);
+  }
+}
+
+function scheduleBroadcast(): void {
+  if (broadcastTimer) return;
+  broadcastTimer = setTimeout(() => { flushBroadcast(); }, BROADCAST_DEBOUNCE_MS);
+}
+
+// Public entry. Pass the ids that changed when known — the cache will refresh just
+// those rows. Pass nothing (or omit) to force a full reread; only do that when the
+// changed set is genuinely unknown (e.g. external mutations not routed through
+// task-queue).
+export async function broadcastTasks(changedIds?: number[]): Promise<void> {
+  if (changedIds && changedIds.length > 0) {
+    for (const id of changedIds) dirtyTaskIds.add(id);
+  } else {
+    fullRefreshPending = true;
+  }
+  scheduleBroadcast();
 }
 
 function broadcastOutput(taskId: number, chunk: string): void {
@@ -196,7 +275,7 @@ app.post('/api/tasks/:id/stop', asyncHandler(async (req, res) => {
     }
   }
   await failTask(id, isLocal ? 'Stopped by user' : `Stopped by user (was remote on ${task.machineId})`);
-  await broadcastTasks();
+  await broadcastTasks([id]);
   res.json({ success: true });
 }));
 
@@ -233,7 +312,7 @@ app.post('/api/tasks/:id/pause', asyncHandler(async (req, res) => {
   // Mark paused FIRST so a crash here leaves a durable 'paused' row.
   await pauseTask(id);
   pauseVideoscan(id);
-  await broadcastTasks();
+  await broadcastTasks([id]);
   res.json({ success: true });
 }));
 
@@ -286,7 +365,7 @@ app.post('/api/tasks/:id/resume', asyncHandler(async (req, res) => {
 
   await updateTaskStatus(id, 'pending');
   triggerUpdate();
-  await broadcastTasks();
+  await broadcastTasks([id]);
   res.json({ success: true });
 }));
 
@@ -330,7 +409,7 @@ app.delete('/api/tasks/:id', asyncHandler(async (req, res) => {
     res.status(400).json({ error: 'Cannot delete task (not found or running)' });
     return;
   }
-  await broadcastTasks();
+  await broadcastTasks([id]);
   res.json({ success: true });
 }));
 
@@ -345,7 +424,7 @@ app.post('/api/tasks/:id/pin', asyncHandler(async (req, res) => {
     return;
   }
   triggerUpdate();
-  await broadcastTasks();
+  await broadcastTasks([id]);
   res.json({ success: true, taskId: id, targetMachineId: target });
 }));
 
@@ -367,7 +446,7 @@ app.post('/api/tasks/:id/retry', asyncHandler(async (req, res) => {
     return;
   }
   triggerUpdate();
-  await broadcastTasks();
+  await broadcastTasks([id, newTask.id]);
   res.json({ taskId: newTask.id, message: `Retry task #${newTask.id} created (attempt ${newTask.context.retryCount})` });
 }));
 
@@ -381,7 +460,7 @@ app.post('/api/tasks/:id/approve', asyncHandler(async (req, res) => {
     return;
   }
   triggerUpdate();
-  await broadcastTasks();
+  await broadcastTasks([id]);
   res.json({ success: true, message: `Task #${id} approved` });
 }));
 
@@ -392,7 +471,7 @@ app.post('/api/tasks/:id/dismiss', asyncHandler(async (req, res) => {
     res.status(400).json({ error: 'Task not found or not a suggestion' });
     return;
   }
-  await broadcastTasks();
+  await broadcastTasks([id]);
   res.json({ success: true, message: `Task #${id} dismissed` });
 }));
 
@@ -415,7 +494,7 @@ app.put('/api/tasks/:id/repo-path', asyncHandler(async (req, res) => {
   }
   await updateTaskRepoPath(id, repoPath);
   triggerUpdate();
-  await broadcastTasks();
+  await broadcastTasks([id]);
   res.json({ success: true });
 }));
 
@@ -432,7 +511,7 @@ app.post('/api/tasks/:id/complete', asyncHandler(async (req, res) => {
     return;
   }
   await completeTask(id, req.body.result || 'Completed manually');
-  await broadcastTasks();
+  await broadcastTasks([id]);
   res.json({ success: true });
 }));
 
@@ -1247,7 +1326,7 @@ app.post('/api/actions/review-pr', asyncHandler(async (req, res) => {
     baseBranch,
   });
   triggerUpdate();
-  await broadcastTasks();
+  await broadcastTasks([task.id]);
   res.json({ taskId: task.id, message: 'PR review task created' });
 }));
 
@@ -1317,7 +1396,7 @@ app.post('/api/actions/analyze-workitem', asyncHandler(async (req, res) => {
     url,
   });
   triggerUpdate();
-  await broadcastTasks();
+  await broadcastTasks([task.id]);
   res.json({ taskId: task.id, message: `${taskType} task created` });
 }));
 
@@ -1384,7 +1463,7 @@ app.post('/api/actions/fix-pr-comments', asyncHandler(async (req, res) => {
     });
 
     triggerUpdate();
-    await broadcastTasks();
+    await broadcastTasks([task.id]);
     res.json({ taskId: task.id, message: `PR comment fix task created (${unresolvedComments.length} comments)` });
   } catch (err) {
     log.error('fix-pr-comments failed', err);
@@ -1486,7 +1565,7 @@ app.post('/api/actions/test-workitem', asyncHandler(async (req, res) => {
     ghRepoRef: remoteOnly ? ghRepoRef : undefined,
   });
   triggerUpdate();
-  await broadcastTasks();
+  await broadcastTasks([task.id]);
   const mode = remoteOnly ? ' (remote-only mode)' : '';
   res.json({ taskId: task.id, message: `Testing task created${mode} - terminal will open shortly` });
 }));
@@ -1562,7 +1641,7 @@ app.post('/api/actions/review-resolution', asyncHandler(async (req, res) => {
     testNotes,
   });
   triggerUpdate();
-  await broadcastTasks();
+  await broadcastTasks([task.id]);
   res.json({ taskId: task.id, message: 'Resolution review task created' });
 }));
 
@@ -1588,7 +1667,7 @@ app.post('/api/actions/start-videoscan', asyncHandler(async (req, res) => {
     ...(typeof batchLabel === 'string' && batchLabel ? { batchLabel } : {}),
   });
   triggerUpdate();
-  await broadcastTasks();
+  await broadcastTasks([task.id]);
   res.json({ taskId: task.id, message: `Videoscan task #${task.id} created` });
 }));
 
@@ -1615,7 +1694,7 @@ app.post('/api/actions/start-videoscan-urls', asyncHandler(async (req, res) => {
     ...(typeof batchLabel === 'string' && batchLabel ? { batchLabel } : {}),
   });
   triggerUpdate();
-  await broadcastTasks();
+  await broadcastTasks([task.id]);
   res.json({ taskId: task.id, message: `Videoscan task #${task.id} created for ${domain} (${urls.length} URLs)` });
 }));
 
@@ -1668,7 +1747,7 @@ app.post('/api/actions/resume-videoscan', asyncHandler(async (req, res) => {
     ...(batchLabel ? { batchLabel } : {}),
   });
   triggerUpdate();
-  await broadcastTasks();
+  await broadcastTasks([task.id]);
   res.json({ taskId: task.id, message: `Resume task #${task.id} created` });
 }));
 
@@ -1721,7 +1800,7 @@ app.post('/api/actions/add-urls-to-scan', asyncHandler(async (req, res) => {
     delay: delay ?? 200,
   });
   triggerUpdate();
-  await broadcastTasks();
+  await broadcastTasks([task.id]);
   res.json({ taskId: task.id, message: `Add-URLs task #${task.id} created` });
 }));
 
@@ -1764,10 +1843,25 @@ app.get('/api/videoscans/files/:filename', asyncHandler(async (req, res) => {
     return;
   }
   const dir = getVideoscanDir();
-  let filePath = join(dir, filename);
+  const filePath = join(dir, filename);
+  const localExists = existsSync(filePath);
 
-  // Fall back to Supabase Storage if file not local
-  if (!existsSync(filePath)) {
+  // For HTML/PDF report views: when the file isn't on this machine, hand the browser
+  // a signed Supabase Storage URL and let it fetch directly. Avoids proxying 5-50MB
+  // PDFs through the server (which would double-count toward Supabase egress).
+  if (!localExists && (filename.endsWith('.html') || filename.endsWith('.pdf'))) {
+    const signed = await createSignedUrl(filename);
+    if (signed) {
+      res.redirect(302, signed);
+      return;
+    }
+    res.status(404).json({ error: 'File not found' });
+    return;
+  }
+
+  // JSON is consumed server-side (e.g. for scan resume) — keep the proxy path so the
+  // file lands on disk for later reads.
+  if (!localExists) {
     const downloaded = await downloadFile(filename, dir);
     if (!downloaded) {
       res.status(404).json({ error: 'File not found' });
@@ -2096,7 +2190,10 @@ server.listen(config.server.port, '127.0.0.1', () => {
     }
   }
 
-  setTaskUpdateCallback(() => { broadcastTasks().catch(err => log.error('broadcastTasks error', err)); });
+  setTaskUpdateCallback((taskId?: number) => {
+    const ids = typeof taskId === 'number' ? [taskId] : undefined;
+    broadcastTasks(ids).catch(err => log.error('broadcastTasks error', err));
+  });
   setOutputCallback(broadcastOutput);
 
   // Initialize settings from DB, then start processor

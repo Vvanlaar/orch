@@ -1,3 +1,4 @@
+import type { RealtimeChannel } from '@supabase/supabase-js';
 import { getSupabase, MACHINE_ID } from './client.js';
 import type { Task, TaskStatus, TaskType, TaskContext } from '../types.js';
 
@@ -114,6 +115,20 @@ export async function dbGetAllTasks(limit = 50): Promise<Task[]> {
   return (data as TaskRow[]).map(rowToTask);
 }
 
+// Fetch a batch of tasks by id in one round-trip. Used by the broadcast cache layer
+// to refresh only the rows that actually changed, avoiding a full 100-row reread per
+// mutation. Excludes the heavy `output` column.
+export async function dbGetTasksByIds(ids: number[]): Promise<Task[]> {
+  if (ids.length === 0) return [];
+  const { data, error } = await getSupabase()
+    .from('tasks')
+    .select(TASK_COLUMNS_NO_OUTPUT)
+    .in('id', ids);
+
+  if (error) throw new Error(`Failed to get tasks by ids: ${error.message}`);
+  return (data as TaskRow[]).map(rowToTask);
+}
+
 export async function dbGetTasksByBatchId(batchId: string): Promise<Task[]> {
   const { data, error } = await getSupabase()
     .from('tasks')
@@ -194,6 +209,56 @@ export async function dbDeleteTask(id: number): Promise<boolean> {
   return (data?.length ?? 0) > 0;
 }
 
+// Lean projection for the processor loop — only the fields needed to compute slot budgets
+// and decide claims. Avoids pulling the full `context` JSONB on every 5s poll.
+const TASK_COLUMNS_LEAN = 'id, type, status, machine_id, pid';
+
+interface LeanTaskRow {
+  id: number;
+  type: string;
+  status: string;
+  machine_id: string | null;
+  pid: number | null;
+}
+
+function leanRowToTask(row: LeanTaskRow): Task {
+  return {
+    id: row.id,
+    type: row.type as TaskType,
+    status: row.status as TaskStatus,
+    repo: '',
+    repoPath: '',
+    context: {} as TaskContext,
+    machineId: row.machine_id ?? undefined,
+    pid: row.pid ?? undefined,
+    createdAt: '',
+  };
+}
+
+export async function dbGetRunningTasksLean(): Promise<Task[]> {
+  const { data, error } = await getSupabase()
+    .from('tasks')
+    .select(TASK_COLUMNS_LEAN)
+    .eq('status', 'running');
+
+  if (error) throw new Error(`Failed to get running tasks: ${error.message}`);
+  return (data as LeanTaskRow[]).map(leanRowToTask);
+}
+
+// Rows the orphan-check on startProcessor needs to consider. Only running rows that
+// belong to this machine (or are unowned) matter — other machines' running tasks
+// must be left alone. Replaces a 500-row scan.
+export async function dbGetOrphanCandidates(machineId: string): Promise<Task[]> {
+  const { data, error } = await getSupabase()
+    .from('tasks')
+    .select(TASK_COLUMNS_NO_OUTPUT)
+    .eq('status', 'running')
+    .or(`machine_id.is.null,machine_id.eq.${machineId}`);
+
+  if (error) throw new Error(`Failed to get orphan candidates: ${error.message}`);
+  return (data as TaskRow[]).map(rowToTask);
+}
+
 export async function dbGetTasksWithPids(): Promise<Task[]> {
   const { data, error } = await getSupabase()
     .from('tasks')
@@ -247,6 +312,35 @@ export async function dbDismissSuggestion(id: number): Promise<boolean> {
     .eq('status', 'suggestion')
     .select('id');
   return (data?.length ?? 0) > 0;
+}
+
+// Subscribe to INSERT/UPDATE events on the tasks table so the processor can wake up
+// immediately on new pending work instead of polling every 5s. The callback receives
+// the affected task id when present (we don't currently use the payload beyond that).
+// Caller is responsible for calling .unsubscribe() on the returned channel at shutdown.
+//
+// Requires the `tasks` table to be added to the `supabase_realtime` publication —
+// supabase-schema.sql does this idempotently.
+export function dbSubscribeTaskChanges(
+  onChange: (event: 'INSERT' | 'UPDATE' | 'DELETE', taskId: number | undefined) => void,
+  onStatus?: (status: string, err?: Error) => void,
+): RealtimeChannel {
+  return getSupabase()
+    .channel('orch-tasks-changes')
+    .on(
+      // The supabase-js types don't expose the postgres_changes event union cleanly,
+      // so cast through unknown to keep this single callsite compact.
+      'postgres_changes' as never,
+      { event: '*', schema: 'public', table: 'tasks' },
+      (payload: { eventType: 'INSERT' | 'UPDATE' | 'DELETE'; new: { id?: number } | null; old: { id?: number } | null }) => {
+        const id = payload.new?.id ?? payload.old?.id;
+        onChange(payload.eventType, typeof id === 'number' ? id : undefined);
+      },
+    )
+    .subscribe((status, err) => {
+      // Surface SUBSCRIBED / CLOSED / CHANNEL_ERROR / TIMED_OUT so silent drops are visible.
+      onStatus?.(status, err);
+    });
 }
 
 export async function dbClaimTask(taskId: number): Promise<boolean> {

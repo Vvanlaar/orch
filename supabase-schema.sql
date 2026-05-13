@@ -21,6 +21,18 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at DESC);
 
+-- Realtime: let orch wake up its task processor on INSERT/UPDATE events instead of
+-- polling every 5 seconds. Safe to re-run — adding an existing table is a no-op.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime' AND tablename = 'tasks'
+  ) THEN
+    EXECUTE 'ALTER PUBLICATION supabase_realtime ADD TABLE tasks';
+  END IF;
+END $$;
+
 -- Helper function for migration (reset sequence after importing existing IDs)
 CREATE OR REPLACE FUNCTION setval_tasks_id(val BIGINT)
 RETURNS void AS $$

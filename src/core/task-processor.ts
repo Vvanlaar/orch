@@ -6,11 +6,10 @@ import { config, WORKSPACES_DIR } from './config.js';
 const log = createLogger('task-processor');
 import { createIssueComment, createReviewCommentReply, getReviewThreads, resolveReviewThread } from './github-api.js';
 import {
-  getAllTasks,
   getTasksByBatchId,
   getPendingTasks,
-  getRunningCount,
-  getRunningTasks,
+  getRunningTasksLean,
+  getOrphanCandidates,
   claimTask,
   completeTask,
   createTask,
@@ -47,12 +46,14 @@ import { runVideoscan, findLatestScanFileForDomain, getVideoscanDir, mergeScans,
 import { isPidAlive, killProcessTree } from './process-kill.js';
 import { dbArchiveVideoscans } from './db/videoscans.js';
 import { MACHINE_ID, isSupabaseConfigured } from './db/client.js';
+import { dbSubscribeTaskChanges } from './db/tasks.js';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 import type { Task } from './types.js';
 
-let onTaskUpdate: (() => void) | null = null;
+let onTaskUpdate: ((taskId?: number) => void) | null = null;
 let onOutputChunk: ((taskId: number, chunk: string) => void) | null = null;
 
-export function setTaskUpdateCallback(callback: () => void): void {
+export function setTaskUpdateCallback(callback: (taskId?: number) => void): void {
   onTaskUpdate = callback;
 }
 
@@ -60,12 +61,14 @@ export function setOutputCallback(callback: (taskId: number, chunk: string) => v
   onOutputChunk = callback;
 }
 
-function notifyUpdate(): void {
-  onTaskUpdate?.();
+// Pass the changed task id when known so the broadcast cache can refresh just that row
+// instead of pulling the full 100-row list from Supabase.
+function notifyUpdate(taskId?: number): void {
+  onTaskUpdate?.(taskId);
 }
 
-export function triggerUpdate(): void {
-  notifyUpdate();
+export function triggerUpdate(taskId?: number): void {
+  notifyUpdate(taskId);
 }
 
 // Re-export steerTask for server
@@ -158,33 +161,33 @@ async function replyToReviewComment(
 
 async function processPrCommentFix(task: Task): Promise<void> {
   log.info(`Task #${task.id} Processing PR comment fix for ${task.repo}#${task.context.prNumber}`);
-  notifyUpdate();
+  notifyUpdate(task.id);
 
   const comments = task.context.reviewComments || [];
   if (comments.length === 0) {
     await completeTask(task.id, 'No review comments to fix');
-    notifyUpdate();
+    notifyUpdate(task.id);
     return;
   }
 
   const targetBranch = task.context.branch;
   if (!targetBranch) {
     await failTask(task.id, 'No branch specified for PR');
-    notifyUpdate();
+    notifyUpdate(task.id);
     return;
   }
 
   const prNumber = task.context.prNumber;
   if (!prNumber) {
     await failTask(task.id, 'No PR number specified');
-    notifyUpdate();
+    notifyUpdate(task.id);
     return;
   }
 
   const worktreePath = checkoutPRInWorktree(task.repoPath, prNumber, targetBranch);
   if (!worktreePath) {
     await failTask(task.id, `Failed to create worktree for PR #${prNumber}`);
-    notifyUpdate();
+    notifyUpdate(task.id);
     return;
   }
 
@@ -340,7 +343,7 @@ async function processPrCommentFix(task: Task): Promise<void> {
     log.info(`Task #${task.id} Completed successfully`);
     await triggerLearningExtraction(task);
     removeWorktree(task.repoPath, worktreePath);
-    notifyUpdate();
+    notifyUpdate(task.id);
 
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
@@ -348,7 +351,7 @@ async function processPrCommentFix(task: Task): Promise<void> {
     log.error(`Task #${task.id} Error: ${error}`);
     // Keep worktree on failure so user can inspect via terminal button (retry reuses it)
     log.warn(`Task #${task.id} Worktree preserved at ${worktreePath}`);
-    notifyUpdate();
+    notifyUpdate(task.id);
   }
 }
 
@@ -356,12 +359,12 @@ async function processVideoscan(task: Task): Promise<void> {
   const ctx = task.context;
   if (!ctx.scanUrl && !ctx.urls?.length) {
     await failTask(task.id, 'No scanUrl or urls in task context');
-    notifyUpdate();
+    notifyUpdate(task.id);
     return;
   }
 
   clearStreamingOutput(task.id);
-  notifyUpdate();
+  notifyUpdate(task.id);
 
   try {
     const result = await runVideoscan(task.id, {
@@ -407,7 +410,7 @@ async function processVideoscan(task: Task): Promise<void> {
       log.warn(`Task #${task.id} paused; runVideoscan threw (${error}) — leaving status as paused`);
     }
   }
-  notifyUpdate();
+  notifyUpdate(task.id);
 
   // Auto-merge digi-import batches once every sibling task has finished.
   // Note: the TERMINAL gate below already excludes 'paused', so paused siblings naturally
@@ -480,7 +483,9 @@ async function tryAutoMergeBatch(batchId: string): Promise<void> {
     }
 
     log.info(`Batch ${batchId}: merged into ${result.filename}`);
-    notifyUpdate();
+    // Batch merge touches every sibling row (archived) plus a synthetic merged scan —
+    // no single id captures the change, so force a full refresh.
+    notifyUpdate(undefined);
     succeeded = true;
   } finally {
     // Release the lock on transient failure so the next sibling completion (or a manual
@@ -610,7 +615,7 @@ async function processTask(task: Task): Promise<void> {
     if (!resolvedPath) {
       log.warn(`Task #${task.id} Repo not found and clone failed; waiting for user input`);
       await updateTaskStatus(task.id, 'needs-repo');
-      notifyUpdate();
+      notifyUpdate(task.id);
       return;
     }
     await updateTaskRepoPath(task.id, resolvedPath, false);
@@ -628,7 +633,7 @@ async function processTask(task: Task): Promise<void> {
   }
 
   clearStreamingOutput(task.id);
-  notifyUpdate();
+  notifyUpdate(task.id);
 
   // Determine if this task type should allow code edits
   const allowEdits = ['issue-fix', 'code-gen', 'pipeline-fix'].includes(task.type);
@@ -656,7 +661,7 @@ async function processTask(task: Task): Promise<void> {
       const termResult = await runClaudeInTerminal(task.id, task, prompt, { allowEdits });
       if (!termResult.success) {
         await failTask(task.id, termResult.error || 'Failed to open terminal');
-        notifyUpdate();
+        notifyUpdate(task.id);
       }
       // Task stays "running" - user must manually complete/fail via dashboard
       return;
@@ -699,17 +704,17 @@ async function processTask(task: Task): Promise<void> {
       await completeTask(task.id, resultWithPr);
       log.info(`Task #${task.id} completed${prUrl ? ` (PR: ${prUrl})` : ''}`);
       await triggerLearningExtraction(task);
-      notifyUpdate();
+      notifyUpdate(task.id);
     } else {
       await failTask(task.id, result.error || 'Unknown error');
       log.error(`Task #${task.id} failed: ${result.error}`);
-      notifyUpdate();
+      notifyUpdate(task.id);
     }
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     await failTask(task.id, error);
     log.error(`Task #${task.id} error: ${error}`);
-    notifyUpdate();
+    notifyUpdate(task.id);
   } finally {
     if (worktreePath) {
       removeWorktree(task.repoPath, worktreePath);
@@ -719,7 +724,7 @@ async function processTask(task: Task): Promise<void> {
 
 export async function processQueue(): Promise<void> {
   const [runningTasks, allPending] = await Promise.all([
-    getRunningTasks(),
+    getRunningTasksLean(),
     getPendingTasks(config.claude.maxConcurrentTasks + config.claude.maxConcurrentVideoscans, MACHINE_ID),
   ]);
 
@@ -751,14 +756,36 @@ export async function processQueue(): Promise<void> {
 }
 
 let intervalId: NodeJS.Timeout | null = null;
+let realtimeChannel: RealtimeChannel | null = null;
 
-export async function startProcessor(intervalMs = 5000): Promise<void> {
+// Coalesce a burst of realtime events into a single processQueue call so that, say,
+// inserting 50 batch tasks doesn't trigger 50 overlapping scans.
+let realtimeWakePending = false;
+function wakeProcessor(): void {
+  if (realtimeWakePending) return;
+  realtimeWakePending = true;
+  setImmediate(() => {
+    realtimeWakePending = false;
+    processQueue().catch(err => log.error('Queue processing error (realtime wake)', err));
+  });
+}
+
+// Default poll interval. When Supabase realtime is wired up we lengthen this to a
+// safety heartbeat (the realtime channel handles the immediate wake-up) — without
+// realtime we keep the original cadence so JSON-store mode still feels responsive.
+const DEFAULT_POLL_INTERVAL_MS = 5_000;
+const SAFETY_POLL_INTERVAL_MS = 60_000;
+
+export async function startProcessor(intervalMs?: number): Promise<void> {
   if (intervalId) return;
+  const realtimeAvailable = isSupabaseConfigured();
+  const effectiveInterval = intervalMs ?? (realtimeAvailable ? SAFETY_POLL_INTERVAL_MS : DEFAULT_POLL_INTERVAL_MS);
 
-  // Mark orphaned running tasks as failed (from previous server crash/restart)
-  // With Supabase: only fail tasks belonging to THIS machine (other machines may still be running them)
-  const allTasks = await getAllTasks(500);
-  const orphaned = allTasks.filter(t => t.status === 'running' && (!isSupabaseConfigured() || !t.machineId || t.machineId === MACHINE_ID));
+  // Mark orphaned running tasks as failed (from previous server crash/restart).
+  // With Supabase: only fail tasks belonging to THIS machine (other machines may still
+  // be running them). Use the orphan-specific query so we don't pull hundreds of
+  // unrelated rows on every startup.
+  const orphaned = await getOrphanCandidates(MACHINE_ID);
   for (const t of orphaned) {
     const isTerminalTask = t.type === 'testing' || ((t.type === 'code-gen' || t.type === 'issue-fix') && !!t.context.workItemId);
     if (isTerminalTask) {
@@ -806,10 +833,38 @@ export async function startProcessor(intervalMs = 5000): Promise<void> {
     log.warn(`Marked orphaned task #${t.id} as failed`);
   }
 
-  log.info('Task processor started');
+  log.info(`Task processor started (poll ${effectiveInterval}ms${realtimeAvailable ? ' + realtime' : ''})`);
   intervalId = setInterval(() => {
     processQueue().catch(err => log.error('Queue processing error', err));
-  }, intervalMs);
+  }, effectiveInterval);
+
+  // Realtime: drive immediate wake-ups off Postgres change events so the safety poll
+  // can stay long. dbClaimTask still arbitrates atomically, so duplicate notifications
+  // are harmless.
+  if (realtimeAvailable) {
+    try {
+      realtimeChannel = dbSubscribeTaskChanges(
+        (event) => {
+          // Inserts and pending-status updates are the only ones that produce new claim
+          // opportunities; ignore DELETEs (nothing to schedule).
+          if (event === 'INSERT' || event === 'UPDATE') wakeProcessor();
+        },
+        (status, err) => {
+          // Without this hook, a dropped channel is invisible and the processor falls
+          // back to the 60s poll silently. Log every status transition.
+          if (status === 'SUBSCRIBED') log.info('Realtime channel SUBSCRIBED to public.tasks');
+          else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+            log.warn(`Realtime channel status: ${status}${err ? ` (${err.message})` : ''}`);
+          } else {
+            log.info(`Realtime channel status: ${status}`);
+          }
+        },
+      );
+    } catch (err) {
+      log.warn(`Realtime subscription failed; falling back to polling: ${err}`);
+    }
+  }
+
   // Process immediately on start
   processQueue().catch(err => log.error('Queue processing error', err));
 }
@@ -819,5 +874,9 @@ export function stopProcessor(): void {
     clearInterval(intervalId);
     intervalId = null;
     log.info('Task processor stopped');
+  }
+  if (realtimeChannel) {
+    realtimeChannel.unsubscribe().catch((err: unknown) => log.warn(`Realtime unsubscribe failed: ${err}`));
+    realtimeChannel = null;
   }
 }

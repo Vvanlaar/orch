@@ -7,6 +7,7 @@ import {
   dbGetPendingTasks,
   dbGetRunningCount,
   dbGetAllTasks,
+  dbGetTasksByIds,
   dbStartTask,
   dbCompleteTask,
   dbFailTask,
@@ -15,6 +16,8 @@ import {
   dbUpdateTaskRepoPath,
   dbDeleteTask,
   dbGetTasksWithPids,
+  dbGetRunningTasksLean,
+  dbGetOrphanCandidates,
   dbGetPendingSuggestions,
   dbApproveSuggestion,
   dbDismissSuggestion,
@@ -206,6 +209,23 @@ export async function getRunningTasks(): Promise<Task[]> {
   return all.filter(t => t.status === 'running');
 }
 
+// Lean variant for hot-path scheduling: returns only id, type, status, machineId, pid.
+// Other Task fields are empty/undefined — only safe for callers that limit themselves
+// to those columns (e.g. processQueue slot accounting).
+export async function getRunningTasksLean(): Promise<Task[]> {
+  if (useDb) return dbGetRunningTasksLean();
+  return loadDb().tasks.filter(t => t.status === 'running');
+}
+
+// Running rows owned by this machine (or unowned) — used by the startup orphan-check
+// to avoid reading hundreds of unrelated rows from Supabase.
+export async function getOrphanCandidates(machineId: string): Promise<Task[]> {
+  if (useDb) return dbGetOrphanCandidates(machineId);
+  return loadDb().tasks.filter(t =>
+    t.status === 'running' && (!t.machineId || t.machineId === machineId)
+  );
+}
+
 export async function getAllTasks(limit = 50): Promise<Task[]> {
   if (useDb) return dbGetAllTasks(limit);
   return jsonGetAllTasks(limit);
@@ -319,6 +339,24 @@ export async function getAllTasksWithOutput(limit = 50): Promise<Task[]> {
     ...t,
     streamingOutput: streamingOutputs.get(t.id) || t.output,
   }));
+}
+
+// Overlay in-memory streaming output (and the persisted `output` column for completed
+// rows) onto a list of tasks. Used by the broadcast cache so we don't have to keep
+// streaming output inside the cache itself.
+export function applyStreamingOutput(tasks: Task[]): Task[] {
+  return tasks.map(t => ({
+    ...t,
+    streamingOutput: streamingOutputs.get(t.id) || t.output,
+  }));
+}
+
+// Fetch a specific batch of tasks by id (without `output`). Falls back to the JSON
+// store when Supabase isn't configured.
+export async function getTasksByIds(ids: number[]): Promise<Task[]> {
+  if (ids.length === 0) return [];
+  if (useDb) return dbGetTasksByIds(ids);
+  return loadDb().tasks.filter(t => ids.includes(t.id));
 }
 
 export async function retryTask(failedTaskId: number): Promise<Task | null> {
