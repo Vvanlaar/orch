@@ -1635,10 +1635,25 @@ app.post('/api/actions/resume-videoscan', asyncHandler(async (req, res) => {
     res.status(404).json({ error: 'Scan file not found' });
     return;
   }
-  let scanData: { domain?: string };
+  let scanData: { domain?: string; batchId?: string; batchLabel?: string };
   try { scanData = JSON.parse(readFileSync(resumePath, 'utf-8')); } catch { res.status(400).json({ error: 'Invalid JSON file' }); return; }
   const domain = scanData.domain || 'unknown';
   const scanUrl = `https://www.${domain}`;
+
+  // Preserve batch grouping across resumes. Prefer batch info on the JSON; fall
+  // back to the most recent prior videoscan task for this domain so a resume
+  // chain doesn't fall out of its batch when the JSON happens to be null.
+  let batchId = typeof scanData.batchId === 'string' ? scanData.batchId : undefined;
+  let batchLabel = typeof scanData.batchLabel === 'string' ? scanData.batchLabel : undefined;
+  if (!batchId) {
+    const prior = (await getAllTasks(500))
+      .filter(t => t.type === 'videoscan' && t.context?.scanUrl?.includes(domain) && t.context?.batchId)
+      .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))[0];
+    if (prior) {
+      batchId = prior.context?.batchId;
+      batchLabel = prior.context?.batchLabel;
+    }
+  }
 
   const task = await createTask('videoscan', scanUrl, getVideoscanDir(), {
     source: 'github',
@@ -1649,6 +1664,8 @@ app.post('/api/actions/resume-videoscan', asyncHandler(async (req, res) => {
     concurrency: concurrency || 6,
     resumeFile: resumePath,
     delay: delay ?? 200,
+    ...(batchId ? { batchId } : {}),
+    ...(batchLabel ? { batchLabel } : {}),
   });
   triggerUpdate();
   await broadcastTasks();
