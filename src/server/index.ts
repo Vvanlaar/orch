@@ -86,19 +86,14 @@ wss.on('connection', async (ws) => {
 
 wss.on('error', (err) => log.error('WebSocket server error', err));
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Broadcast pipeline
-//
-// Each task mutation used to call `broadcastTasks()`, which re-pulled 100 task
-// rows from Supabase. Bursts of mutations (videoscan progress, batch inserts,
-// processor ticks) each produced a separate 100-row SELECT — the largest single
-// source of Supabase egress.
-//
-// We now keep an in-memory cache of the last 100 tasks and only re-read the
-// rows that callers tell us are dirty, behind a 100ms debounce. Streaming
-// output is overlaid on the fly so the cache itself stays small.
-// ──────────────────────────────────────────────────────────────────────────────
+// Reject path-traversal / nested-path filenames. Returns the same string on success.
+function validateScanFilename(filename: unknown): string | null {
+  if (typeof filename !== 'string' || !filename) return null;
+  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) return null;
+  return filename;
+}
 
+// 100ms-debounced cache; only re-reads ids tagged dirty. Caps Supabase egress.
 const TASK_CACHE_LIMIT = 100;
 const BROADCAST_DEBOUNCE_MS = 100;
 
@@ -119,20 +114,17 @@ async function refreshTaskCache(): Promise<import('../core/types.js').Task[]> {
   if (dirtyTaskIds.size === 0) return taskCache;
 
   const ids = [...dirtyTaskIds];
-  // Keep dirtyTaskIds populated until fetch succeeds, so a throw here doesn't lose updates.
+  // Keep dirty until fetch succeeds — a throw here would otherwise lose updates.
   const fresh = await getTasksByIds(ids);
   for (const id of ids) dirtyTaskIds.delete(id);
   const freshById = new Map(fresh.map(t => [t.id, t]));
 
   const wantedIds = new Set(ids);
-  // Update existing rows and drop ones that no longer exist (deleted).
   taskCache = taskCache.filter(t => {
     if (!wantedIds.has(t.id)) return true;
-    const updated = freshById.get(t.id);
-    return updated !== undefined; // drop if no longer in DB
+    return freshById.get(t.id) !== undefined;
   }).map(t => freshById.get(t.id) ?? t);
 
-  // Insert newly-created tasks (ids the cache hadn't seen).
   const cachedIds = new Set(taskCache.map(t => t.id));
   for (const t of fresh) {
     if (!cachedIds.has(t.id)) taskCache.push(t);
@@ -167,10 +159,7 @@ function scheduleBroadcast(): void {
   broadcastTimer = setTimeout(() => { flushBroadcast(); }, BROADCAST_DEBOUNCE_MS);
 }
 
-// Public entry. Pass the ids that changed when known — the cache will refresh just
-// those rows. Pass nothing (or omit) to force a full reread; only do that when the
-// changed set is genuinely unknown (e.g. external mutations not routed through
-// task-queue).
+// Pass ids when known for targeted refresh; omit only when the changed set is unknown.
 export async function broadcastTasks(changedIds?: number[]): Promise<void> {
   if (changedIds && changedIds.length > 0) {
     for (const id of changedIds) dirtyTaskIds.add(id);
@@ -1712,14 +1701,10 @@ app.post('/api/actions/start-videoscan-urls', asyncHandler(async (req, res) => {
 }));
 
 app.post('/api/actions/resume-videoscan', asyncHandler(async (req, res) => {
-  const { filename, maxPages, concurrency, delay } = req.body;
-  if (!filename || typeof filename !== 'string') {
-    res.status(400).json({ error: 'filename required' });
-    return;
-  }
-  // Prevent path traversal
-  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
-    res.status(400).json({ error: 'Invalid filename' });
+  const { maxPages, concurrency, delay } = req.body;
+  const filename = validateScanFilename(req.body?.filename);
+  if (!filename) {
+    res.status(400).json({ error: 'valid filename required' });
     return;
   }
   const resumePath = join(getVideoscanDir(), filename);
@@ -1763,13 +1748,10 @@ app.post('/api/actions/resume-videoscan', asyncHandler(async (req, res) => {
 }));
 
 app.post('/api/actions/add-urls-to-scan', asyncHandler(async (req, res) => {
-  const { filename, urls, concurrency, delay } = req.body;
-  if (!filename || typeof filename !== 'string') {
-    res.status(400).json({ error: 'filename required' });
-    return;
-  }
-  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
-    res.status(400).json({ error: 'Invalid filename' });
+  const { urls, concurrency, delay } = req.body;
+  const filename = validateScanFilename(req.body?.filename);
+  if (!filename) {
+    res.status(400).json({ error: 'valid filename required' });
     return;
   }
   if (!Array.isArray(urls) || urls.length === 0 || urls.length > 100) {
@@ -1826,7 +1808,7 @@ app.delete('/api/videoscans', asyncHandler(async (req, res) => {
     return;
   }
   for (const f of filenames) {
-    if (typeof f !== 'string' || f.includes('..') || f.includes('/') || f.includes('\\')) {
+    if (!validateScanFilename(f)) {
       res.status(400).json({ error: `Invalid filename: ${f}` });
       return;
     }
@@ -1852,8 +1834,8 @@ app.post('/api/videoscans/merge', asyncHandler(async (req, res) => {
 }));
 
 app.get('/api/videoscans/files/:filename', asyncHandler(async (req, res) => {
-  const filename = req.params.filename as string;
-  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+  const filename = validateScanFilename(req.params.filename);
+  if (!filename) {
     res.status(400).json({ error: 'Invalid filename' });
     return;
   }
@@ -1901,8 +1883,8 @@ app.get('/api/videoscans/files/:filename', asyncHandler(async (req, res) => {
 }));
 
 app.get('/api/videoscans/audit/:filename', (req, res) => {
-  const filename = req.params.filename as string;
-  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+  const filename = validateScanFilename(req.params.filename);
+  if (!filename) {
     res.status(400).json({ error: 'Invalid filename' });
     return;
   }
@@ -1917,13 +1899,9 @@ app.get('/api/videoscans/audit/:filename', (req, res) => {
 });
 
 app.post('/api/videoscans/sync', asyncHandler(async (req, res) => {
-  const { filename } = req.body;
-  if (!filename || typeof filename !== 'string') {
-    res.status(400).json({ error: 'filename required' });
-    return;
-  }
-  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
-    res.status(400).json({ error: 'Invalid filename' });
+  const filename = validateScanFilename(req.body?.filename);
+  if (!filename) {
+    res.status(400).json({ error: 'valid filename required' });
     return;
   }
   if (!existsSync(join(getVideoscanDir(), filename))) {

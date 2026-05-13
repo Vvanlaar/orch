@@ -26,6 +26,7 @@ import {
   dbGetLatestVideoscanWithBatch,
   dbUpdateTask,
 } from './db/tasks.js';
+import type { LeanTask } from './db/tasks.js';
 import { createLogger } from './logger.js';
 
 const log = createLogger('task-queue');
@@ -210,12 +211,12 @@ export async function getRunningTasks(): Promise<Task[]> {
   return all.filter(t => t.status === 'running');
 }
 
-// Lean variant for hot-path scheduling: returns only id, type, status, machineId, pid.
-// Other Task fields are empty/undefined — only safe for callers that limit themselves
-// to those columns (e.g. processQueue slot accounting).
-export async function getRunningTasksLean(): Promise<Task[]> {
+// Hot-path scheduling — id/type/status/machineId/pid only.
+export async function getRunningTasksLean(): Promise<LeanTask[]> {
   if (useDb) return dbGetRunningTasksLean();
-  return loadDb().tasks.filter(t => t.status === 'running');
+  return loadDb().tasks
+    .filter(t => t.status === 'running')
+    .map(t => ({ id: t.id, type: t.type, status: t.status, machineId: t.machineId, pid: t.pid }));
 }
 
 // Running rows owned by this machine (or unowned) — used by the startup orphan-check

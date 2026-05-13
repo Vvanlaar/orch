@@ -61,8 +61,6 @@ export function setOutputCallback(callback: (taskId: number, chunk: string) => v
   onOutputChunk = callback;
 }
 
-// Pass the changed task id when known so the broadcast cache can refresh just that row
-// instead of pulling the full 100-row list from Supabase.
 function notifyUpdate(taskId?: number): void {
   onTaskUpdate?.(taskId);
 }

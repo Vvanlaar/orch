@@ -6,7 +6,7 @@ const execFileP = promisify(execFile);
 export function isPidAlive(pid: number | undefined | null): boolean {
   if (!pid || pid <= 0) return false;
   try {
-    // signal 0 doesn't deliver — it just probes whether the PID is reachable
+    // signal 0 doesn't deliver — it just probes reachability
     process.kill(pid, 0);
     return true;
   } catch {
@@ -38,7 +38,7 @@ export async function killProcessTree(pid: number): Promise<KillResult> {
       }
     }
   }
-  // Verify — PID may take a beat to disappear on Windows after taskkill returns
+  // taskkill on Windows can return before the PID is actually gone
   await new Promise((r) => setTimeout(r, 100));
   if (!isPidAlive(pid)) return { killed: true };
   return { killed: false, error: lastErr ?? 'process still alive after kill' };

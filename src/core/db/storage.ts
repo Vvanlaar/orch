@@ -8,9 +8,6 @@ const log = createLogger('storage');
 const BUCKET = 'videoscans';
 let bucketEnsured = false;
 
-/**
- * Ensure the storage bucket exists (creates on first use).
- */
 async function ensureBucket(): Promise<void> {
   if (bucketEnsured) return;
   const { error } = await getSupabase().storage.createBucket(BUCKET, { public: false });
@@ -20,9 +17,6 @@ async function ensureBucket(): Promise<void> {
   bucketEnsured = true;
 }
 
-/**
- * Upload a file to Supabase Storage. Overwrites if exists.
- */
 export async function uploadFile(filename: string, localDir: string): Promise<boolean> {
   if (!isSupabaseConfigured()) return false;
   const filePath = join(localDir, filename);
@@ -47,9 +41,6 @@ export async function uploadFile(filename: string, localDir: string): Promise<bo
   return true;
 }
 
-/**
- * Upload all files for a scan (JSON + HTML + PDF + preview variants).
- */
 export async function uploadScanFiles(jsonFilename: string, localDir: string): Promise<void> {
   if (!isSupabaseConfigured()) return;
 
@@ -69,9 +60,6 @@ export async function uploadScanFiles(jsonFilename: string, localDir: string): P
   );
 }
 
-/**
- * Delete all file variants for a scan from Supabase Storage.
- */
 export async function deleteScanFiles(jsonFilename: string): Promise<void> {
   if (!isSupabaseConfigured()) return;
 
@@ -113,9 +101,6 @@ export async function createSignedUrl(filename: string, expiresIn = 3600): Promi
   return { ok: false, reason: 'sign-failed', error: message };
 }
 
-/**
- * Download a file from Supabase Storage to local dir. Returns true if successful.
- */
 export async function downloadFile(filename: string, localDir: string): Promise<boolean> {
   if (!isSupabaseConfigured()) return false;
 

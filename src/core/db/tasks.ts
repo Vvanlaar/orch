@@ -115,9 +115,6 @@ export async function dbGetAllTasks(limit = 50): Promise<Task[]> {
   return (data as TaskRow[]).map(rowToTask);
 }
 
-// Fetch a batch of tasks by id in one round-trip. Used by the broadcast cache layer
-// to refresh only the rows that actually changed, avoiding a full 100-row reread per
-// mutation. Excludes the heavy `output` column.
 export async function dbGetTasksByIds(ids: number[]): Promise<Task[]> {
   if (ids.length === 0) return [];
   const { data, error } = await getSupabase()
@@ -129,9 +126,7 @@ export async function dbGetTasksByIds(ids: number[]): Promise<Task[]> {
   return (data as TaskRow[]).map(rowToTask);
 }
 
-// Find the most recent videoscan task for a domain that has batch info on its context.
-// Used by manual-resume to preserve batch grouping when the JSON's batchId is null.
-// Targeted query — avoids pulling hundreds of unrelated rows just to recover one field.
+// Manual-resume falls back to this when the scan JSON's batchId is null.
 export async function dbGetLatestVideoscanWithBatch(domain: string): Promise<Task | undefined> {
   const { data, error } = await getSupabase()
     .from('tasks')
@@ -227,8 +222,15 @@ export async function dbDeleteTask(id: number): Promise<boolean> {
   return (data?.length ?? 0) > 0;
 }
 
-// Lean projection for the processor loop — only the fields needed to compute slot budgets
-// and decide claims. Avoids pulling the full `context` JSONB on every 5s poll.
+export interface LeanTask {
+  id: number;
+  type: TaskType;
+  status: TaskStatus;
+  machineId?: string;
+  pid?: number;
+}
+
+// Avoids pulling the full `context` JSONB on every 5s poll.
 const TASK_COLUMNS_LEAN = 'id, type, status, machine_id, pid';
 
 interface LeanTaskRow {
@@ -239,33 +241,27 @@ interface LeanTaskRow {
   pid: number | null;
 }
 
-function leanRowToTask(row: LeanTaskRow): Task {
+function leanRow(row: LeanTaskRow): LeanTask {
   return {
     id: row.id,
     type: row.type as TaskType,
     status: row.status as TaskStatus,
-    repo: '',
-    repoPath: '',
-    context: {} as TaskContext,
     machineId: row.machine_id ?? undefined,
     pid: row.pid ?? undefined,
-    createdAt: '',
   };
 }
 
-export async function dbGetRunningTasksLean(): Promise<Task[]> {
+export async function dbGetRunningTasksLean(): Promise<LeanTask[]> {
   const { data, error } = await getSupabase()
     .from('tasks')
     .select(TASK_COLUMNS_LEAN)
     .eq('status', 'running');
 
   if (error) throw new Error(`Failed to get running tasks: ${error.message}`);
-  return (data as LeanTaskRow[]).map(leanRowToTask);
+  return (data as LeanTaskRow[]).map(leanRow);
 }
 
-// Rows the orphan-check on startProcessor needs to consider. Only running rows that
-// belong to this machine (or are unowned) matter — other machines' running tasks
-// must be left alone. Replaces a 500-row scan.
+// Only this machine's (or unowned) running rows; other machines' running tasks must be left alone.
 export async function dbGetOrphanCandidates(machineId: string): Promise<Task[]> {
   const { data, error } = await getSupabase()
     .from('tasks')
@@ -332,13 +328,7 @@ export async function dbDismissSuggestion(id: number): Promise<boolean> {
   return (data?.length ?? 0) > 0;
 }
 
-// Subscribe to INSERT/UPDATE events on the tasks table so the processor can wake up
-// immediately on new pending work instead of polling every 5s. The callback receives
-// the affected task id when present (we don't currently use the payload beyond that).
-// Caller is responsible for calling .unsubscribe() on the returned channel at shutdown.
-//
-// Requires the `tasks` table to be added to the `supabase_realtime` publication —
-// supabase-schema.sql does this idempotently.
+// Caller must .unsubscribe() the returned channel at shutdown.
 type TaskRowMinimal = { id: number };
 type TaskChangePayload = RealtimePostgresChangesPayload<TaskRowMinimal>;
 
