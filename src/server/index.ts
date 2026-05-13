@@ -110,7 +110,8 @@ let lastBroadcastPayload: string | null = null;
 
 async function refreshTaskCache(): Promise<import('../core/types.js').Task[]> {
   if (taskCache === null || fullRefreshPending) {
-    taskCache = await getAllTasks(TASK_CACHE_LIMIT);
+    const fresh = await getAllTasks(TASK_CACHE_LIMIT);
+    taskCache = fresh;
     fullRefreshPending = false;
     dirtyTaskIds.clear();
     return taskCache;
@@ -118,8 +119,9 @@ async function refreshTaskCache(): Promise<import('../core/types.js').Task[]> {
   if (dirtyTaskIds.size === 0) return taskCache;
 
   const ids = [...dirtyTaskIds];
-  dirtyTaskIds.clear();
+  // Keep dirtyTaskIds populated until fetch succeeds, so a throw here doesn't lose updates.
   const fresh = await getTasksByIds(ids);
+  for (const id of ids) dirtyTaskIds.delete(id);
   const freshById = new Map(fresh.map(t => [t.id, t]));
 
   const wantedIds = new Set(ids);
@@ -153,6 +155,10 @@ async function flushBroadcast(): Promise<void> {
     });
   } catch (err) {
     log.error('broadcast flush error', err);
+    // Dirty ids were preserved (refreshTaskCache only clears them after a successful
+    // fetch); reschedule so the next tick retries instead of waiting for the next
+    // mutation to drive a flush.
+    if (dirtyTaskIds.size > 0 || fullRefreshPending) scheduleBroadcast();
   }
 }
 
@@ -264,18 +270,25 @@ app.post('/api/tasks/:id/stop', asyncHandler(async (req, res) => {
     res.status(400).json({ error: 'Task not running' });
     return;
   }
-  // Only kill process if task is on this machine (can't kill remote processes)
   const isLocal = !task.machineId || task.machineId === MACHINE_ID;
+  let killError: string | undefined;
   if (isLocal) {
     const killed = task.type === 'videoscan' ? killVideoscan(id) : killTask(id);
-    // Fallback: process was spawned by a prior server instance and isn't in our in-memory
-    // map, so the typed kill above no-ops. Tree-kill by stored PID instead.
+    // Fallback when typed-kill no-ops (process spawned by a prior server instance).
     if (!killed && isPidAlive(task.pid)) {
-      await killProcessTree(task.pid!);
+      const result = await killProcessTree(task.pid!);
+      if (!result.killed) killError = result.error;
     }
   }
-  await failTask(id, isLocal ? 'Stopped by user' : `Stopped by user (was remote on ${task.machineId})`);
+  const failReason = killError
+    ? `Stop requested but process ${task.pid} still alive: ${killError}`
+    : isLocal ? 'Stopped by user' : `Stopped by user (was remote on ${task.machineId})`;
+  await failTask(id, failReason);
   await broadcastTasks([id]);
+  if (killError) {
+    res.status(500).json({ success: false, error: killError, stillAlive: true });
+    return;
+  }
   res.json({ success: true });
 }));
 
@@ -1831,7 +1844,11 @@ app.post('/api/videoscans/merge', asyncHandler(async (req, res) => {
     return;
   }
   const result = mergeScans(filenames, label);
-  await syncScanToSupabase(result.filename);
+  const sync = await syncScanToSupabase(result.filename);
+  if (!sync.ok) {
+    res.status(500).json({ success: false, error: `Merge OK but Supabase sync failed: ${sync.error}`, filename: result.filename });
+    return;
+  }
   if (isSupabaseConfigured()) await dbArchiveVideoscans(filenames);
   res.json(result);
 }));
@@ -1910,7 +1927,11 @@ app.post('/api/videoscans/sync', asyncHandler(async (req, res) => {
     res.status(404).json({ error: 'Scan file not found' });
     return;
   }
-  await syncScanToSupabase(filename);
+  const result = await syncScanToSupabase(filename);
+  if (!result.ok) {
+    res.status(500).json({ success: false, error: result.error });
+    return;
+  }
   res.json({ success: true });
 }));
 

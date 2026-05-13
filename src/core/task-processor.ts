@@ -770,16 +770,14 @@ function wakeProcessor(): void {
   });
 }
 
-// Default poll interval. When Supabase realtime is wired up we lengthen this to a
-// safety heartbeat (the realtime channel handles the immediate wake-up) — without
-// realtime we keep the original cadence so JSON-store mode still feels responsive.
+// Realtime lengthens the poll to a safety heartbeat; without realtime we keep the
+// original cadence so JSON-store mode still feels responsive.
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const SAFETY_POLL_INTERVAL_MS = 60_000;
 
 export async function startProcessor(intervalMs?: number): Promise<void> {
   if (intervalId) return;
   const realtimeAvailable = isSupabaseConfigured();
-  const effectiveInterval = intervalMs ?? (realtimeAvailable ? SAFETY_POLL_INTERVAL_MS : DEFAULT_POLL_INTERVAL_MS);
 
   // Mark orphaned running tasks as failed (from previous server crash/restart).
   // With Supabase: only fail tasks belonging to THIS machine (other machines may still
@@ -796,11 +794,15 @@ export async function startProcessor(intervalMs?: number): Promise<void> {
 
     // If the prior server died but its scan.mjs child survived (tsx-watch reload, etc.),
     // kill it before we spawn a respawn — otherwise two scan.mjs processes race on the
-    // same resume file. Skip if PID was recycled to a different process (best-effort).
+    // same resume file.
     if (t.type === 'videoscan' && isPidAlive(t.pid)) {
       log.warn(`Orphaned videoscan #${t.id} has live PID ${t.pid} from previous instance — killing tree`);
-      await killProcessTree(t.pid!);
-      await new Promise(r => setTimeout(r, 500));
+      const result = await killProcessTree(t.pid!);
+      if (!result.killed) {
+        log.error(`Failed to kill orphaned scan #${t.id} PID ${t.pid}: ${result.error}; skipping auto-resume to avoid double-spawn`);
+        await failTask(t.id, `Orphan kill failed: ${result.error}`);
+        continue;
+      }
     }
 
     // Auto-resume orphaned crawl-mode videoscans if a prior scan JSON exists.
@@ -833,25 +835,15 @@ export async function startProcessor(intervalMs?: number): Promise<void> {
     log.warn(`Marked orphaned task #${t.id} as failed`);
   }
 
-  log.info(`Task processor started (poll ${effectiveInterval}ms${realtimeAvailable ? ' + realtime' : ''})`);
-  intervalId = setInterval(() => {
-    processQueue().catch(err => log.error('Queue processing error', err));
-  }, effectiveInterval);
-
-  // Realtime: drive immediate wake-ups off Postgres change events so the safety poll
-  // can stay long. dbClaimTask still arbitrates atomically, so duplicate notifications
-  // are harmless.
+  // dbClaimTask arbitrates atomically, so duplicate realtime notifications are harmless.
+  let realtimeSubscribed = false;
   if (realtimeAvailable) {
     try {
       realtimeChannel = dbSubscribeTaskChanges(
         (event) => {
-          // Inserts and pending-status updates are the only ones that produce new claim
-          // opportunities; ignore DELETEs (nothing to schedule).
           if (event === 'INSERT' || event === 'UPDATE') wakeProcessor();
         },
         (status, err) => {
-          // Without this hook, a dropped channel is invisible and the processor falls
-          // back to the 60s poll silently. Log every status transition.
           if (status === 'SUBSCRIBED') log.info('Realtime channel SUBSCRIBED to public.tasks');
           else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
             log.warn(`Realtime channel status: ${status}${err ? ` (${err.message})` : ''}`);
@@ -860,12 +852,18 @@ export async function startProcessor(intervalMs?: number): Promise<void> {
           }
         },
       );
+      realtimeSubscribed = true;
     } catch (err) {
-      log.warn(`Realtime subscription failed; falling back to polling: ${err}`);
+      log.warn(`Realtime subscription failed; using ${DEFAULT_POLL_INTERVAL_MS}ms poll fallback: ${err}`);
     }
   }
 
-  // Process immediately on start
+  const effectiveInterval = intervalMs ?? (realtimeSubscribed ? SAFETY_POLL_INTERVAL_MS : DEFAULT_POLL_INTERVAL_MS);
+  log.info(`Task processor started (poll ${effectiveInterval}ms${realtimeSubscribed ? ' + realtime' : ''})`);
+  intervalId = setInterval(() => {
+    processQueue().catch(err => log.error('Queue processing error', err));
+  }, effectiveInterval);
+
   processQueue().catch(err => log.error('Queue processing error', err));
 }
 

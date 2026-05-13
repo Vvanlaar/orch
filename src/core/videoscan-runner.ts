@@ -215,20 +215,17 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
       if (tempUrlFile && existsSync(tempUrlFile)) tryUnlink(tempUrlFile);
 
       if (code !== 0) {
-        // Best-effort: sync whatever JSON state survives on disk so the dashboard
-        // reflects partial progress even when the scan crashed or was killed.
         // Pick by mtime — works for both old-behavior new-timestamp writes and
         // Part-A in-place resume overwrites.
-        try {
-          let domain = '';
-          try { domain = new URL(options.scanUrl).hostname.replace(/^www\./, ''); } catch {}
-          const latest = domain ? findLatestScanFileForDomain(domain) : null;
-          if (latest) await syncScanToSupabase(latest);
-        } catch (err) {
-          log.warn(`Task #${taskId} post-crash sync failed: ${err}`);
+        const domain = (() => { try { return new URL(options.scanUrl).hostname.replace(/^www\./, ''); } catch { return ''; } })();
+        const latest = domain ? findLatestScanFileForDomain(domain) : null;
+        let syncNote = '';
+        if (latest) {
+          const sync = await syncScanToSupabase(latest);
+          if (!sync.ok) syncNote = ` (post-crash sync also failed: ${sync.error} — dashboard view will be stale; click manual Sync)`;
         }
         resolved = true;
-        resolve({ success: false, error: stderr || `scan.mjs exited with code ${code}` });
+        resolve({ success: false, error: (stderr || `scan.mjs exited with code ${code}`) + syncNote });
         return;
       }
 
@@ -547,14 +544,13 @@ export function mergeScans(filenames: string[], label?: string): MergeResult {
   return { filename: mergedFilename, archivedFiles: archived };
 }
 
-/**
- * Sync a scan's files + metadata to Supabase (storage + DB row).
- */
-export async function syncScanToSupabase(jsonFilename: string): Promise<void> {
-  if (!isSupabaseConfigured()) return;
+export type SyncResult = { ok: true } | { ok: false; error: string };
+
+export async function syncScanToSupabase(jsonFilename: string): Promise<SyncResult> {
+  if (!isSupabaseConfigured()) return { ok: true };
 
   const jsonPath = join(VIDEOSCAN_DIR, jsonFilename);
-  if (!existsSync(jsonPath)) return;
+  if (!existsSync(jsonPath)) return { ok: false, error: 'scan json not found on disk' };
 
   try {
     const data = JSON.parse(readFileSync(jsonPath, 'utf-8'));
@@ -587,8 +583,11 @@ export async function syncScanToSupabase(jsonFilename: string): Promise<void> {
     });
 
     log.info(`Synced ${jsonFilename} to Supabase`);
+    return { ok: true };
   } catch (err) {
-    log.error(`Failed to sync ${jsonFilename}: ${err}`);
+    const message = err instanceof Error ? err.message : String(err);
+    log.error(`Failed to sync ${jsonFilename}: ${message}`);
+    return { ok: false, error: message };
   }
 }
 
