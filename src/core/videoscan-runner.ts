@@ -169,9 +169,8 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
   log.info(`Task #${taskId} Starting videoscan: ${tempUrlFile ? `${options.urls!.length} explicit URLs` : options.scanUrl} (max ${options.maxPages || 50} pages)`);
 
   return new Promise((resolve) => {
-    const proc = spawn('node', args, {
+    const proc = spawn(process.execPath, args, {
       cwd: VIDEOSCAN_DIR,
-      shell: true,
       env: { ...process.env, FORCE_COLOR: '0' }, // disable chalk colors for clean output
     });
 
@@ -267,9 +266,8 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
       // Generate HTML report
       claudeEmitter.emit('output', taskId, '\nGenerating HTML report...\n');
       try {
-        const reportProc = spawn('node', [REPORT_SCRIPT, jsonFile], {
+        const reportProc = spawn(process.execPath, [REPORT_SCRIPT, jsonFile], {
           cwd: VIDEOSCAN_DIR,
-          shell: true,
         });
 
         let reportOut = '';
@@ -334,7 +332,7 @@ export async function generateReport(jsonFilename: string, options?: ReportOptio
 
   // Generate HTML
   await new Promise<void>((resolve, reject) => {
-    const proc = spawn('node', [REPORT_SCRIPT, jsonFilename, ...reportOptionsToArgs(options)], { cwd: VIDEOSCAN_DIR, shell: true });
+    const proc = spawn(process.execPath, [REPORT_SCRIPT, jsonFilename, ...reportOptionsToArgs(options)], { cwd: VIDEOSCAN_DIR });
     proc.on('close', (code) => code === 0 ? resolve() : reject(new Error(`report.mjs exited with code ${code}`)));
     proc.on('error', reject);
   });
@@ -361,7 +359,7 @@ export async function generatePreview(jsonFilename: string, options?: ReportOpti
   if (!existsSync(jsonPath)) throw new Error(`JSON file not found: ${jsonFilename}`);
 
   await new Promise<void>((resolve, reject) => {
-    const proc = spawn('node', [REPORT_SCRIPT, jsonFilename, '--preview', ...reportOptionsToArgs(options)], { cwd: VIDEOSCAN_DIR, shell: true });
+    const proc = spawn(process.execPath, [REPORT_SCRIPT, jsonFilename, '--preview', ...reportOptionsToArgs(options)], { cwd: VIDEOSCAN_DIR });
     proc.on('close', (code) => code === 0 ? resolve() : reject(new Error(`report.mjs --preview exited with code ${code}`)));
     proc.on('error', reject);
   });
