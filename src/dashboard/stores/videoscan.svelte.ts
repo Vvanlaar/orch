@@ -125,6 +125,12 @@ export async function mergeDomainScans(filenames: string[]) {
   return result;
 }
 
+export async function syncScan(filename: string) {
+  const result = await apiJson('/api/videoscans/sync', { filename });
+  await fetchScans();
+  return result;
+}
+
 // Buckets a group's URLs by hostname (www-stripped). Per bucket: if any URL is
 // a domain root (pathname === "/"), seed a crawl from the first such URL;
 // otherwise fold subpages into a combined explicit-scan list. Subpages from

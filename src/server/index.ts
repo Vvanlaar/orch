@@ -1785,6 +1785,24 @@ app.get('/api/videoscans/audit/:filename', (req, res) => {
   else res.status(400).json({ error: 'Unsupported file type' });
 });
 
+app.post('/api/videoscans/sync', asyncHandler(async (req, res) => {
+  const { filename } = req.body;
+  if (!filename || typeof filename !== 'string') {
+    res.status(400).json({ error: 'filename required' });
+    return;
+  }
+  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+    res.status(400).json({ error: 'Invalid filename' });
+    return;
+  }
+  if (!existsSync(join(getVideoscanDir(), filename))) {
+    res.status(404).json({ error: 'Scan file not found' });
+    return;
+  }
+  await syncScanToSupabase(filename);
+  res.json({ success: true });
+}));
+
 app.post('/api/videoscans/generate-report', asyncHandler(async (req, res) => {
   const { filename, orgName, coverImageUrl, contactImageUrl, contactName, contactPhone, contactEmail } = req.body;
   if (!filename || typeof filename !== 'string') {

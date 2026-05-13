@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
-  import { getScans, fetchScans, startScan, startGroupScan, resumeScan, addUrlsToScan, mergeDomainScans, deleteScans, regenerateReport, regeneratePreview, isLoading, importDigiToegankelijk, classifyGroupUrls, type ScanSummary, type DigiImportResult, type ReportOptions } from '../stores/videoscan.svelte';
+  import { getScans, fetchScans, startScan, startGroupScan, resumeScan, addUrlsToScan, mergeDomainScans, deleteScans, syncScan, regenerateReport, regeneratePreview, isLoading, importDigiToegankelijk, classifyGroupUrls, type ScanSummary, type DigiImportResult, type ReportOptions } from '../stores/videoscan.svelte';
   import { getTasks, getTaskOutput, isExpanded, toggleExpanded } from '../stores/tasks.svelte';
   import VideoscanLiveProgress from './VideoscanLiveProgress.svelte';
   import VideoscanLiveBatch from './VideoscanLiveBatch.svelte';
@@ -338,6 +338,19 @@
   }
 
   let deleting = $state<string | null>(null);
+  let syncing = $state<string | null>(null);
+
+  async function handleSync(scan: ScanSummary) {
+    if (syncing) return;
+    syncing = scan.filename;
+    try {
+      await syncScan(scan.filename);
+    } catch (err: any) {
+      error = err.message;
+    } finally {
+      syncing = null;
+    }
+  }
 
   async function handleDelete(scan: ScanSummary) {
     if (deleting) return;
@@ -692,6 +705,9 @@
                           <button class="sb res" onclick={() => handleResume(scan)}>Resume</button>
                         {/if}
                         <button class="sb" onclick={() => { addingUrlsTo = addingUrlsTo === scan.filename ? null : scan.filename; addUrlsText = ''; }}>+ URLs</button>
+                        <button class="sb" onclick={() => handleSync(scan)} disabled={syncing === scan.filename} title="Sync on-disk state to Supabase">
+                          {syncing === scan.filename ? '...' : 'Sync'}
+                        </button>
                         <button class="sb del" onclick={() => handleDelete(scan)} disabled={deleting === scan.filename}>
                           {deleting === scan.filename ? '...' : '✕'}
                         </button>

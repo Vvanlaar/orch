@@ -216,6 +216,18 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
       if (tempUrlFile && existsSync(tempUrlFile)) tryUnlink(tempUrlFile);
 
       if (code !== 0) {
+        // Best-effort: sync whatever JSON state survives on disk so the dashboard
+        // reflects partial progress even when the scan crashed or was killed.
+        // Pick by mtime — works for both old-behavior new-timestamp writes and
+        // Part-A in-place resume overwrites.
+        try {
+          let domain = '';
+          try { domain = new URL(options.scanUrl).hostname.replace(/^www\./, ''); } catch {}
+          const latest = domain ? findLatestScanFileForDomain(domain) : null;
+          if (latest) await syncScanToSupabase(latest);
+        } catch (err) {
+          log.warn(`Task #${taskId} post-crash sync failed: ${err}`);
+        }
         resolved = true;
         resolve({ success: false, error: stderr || `scan.mjs exited with code ${code}` });
         return;
