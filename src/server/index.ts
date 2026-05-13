@@ -32,6 +32,7 @@ import { isSupabaseConfigured, MACHINE_ID } from '../core/db/client.js';
 import { dbGetNotifications, dbInsertNotification } from '../core/db/notifications.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
 import { getVideoscanDir, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, setVideoscanControl, pauseVideoscan, findLatestScanFileForDomain, isVideoscanRunning, deleteScans } from '../core/videoscan-runner.js';
+import { isPidAlive, killProcessTree } from '../core/process-kill.js';
 import { downloadFile } from '../core/db/storage.js';
 import { dbArchiveVideoscans } from '../core/db/videoscans.js';
 import type { TerminalId } from '../core/types.js';
@@ -187,8 +188,12 @@ app.post('/api/tasks/:id/stop', asyncHandler(async (req, res) => {
   // Only kill process if task is on this machine (can't kill remote processes)
   const isLocal = !task.machineId || task.machineId === MACHINE_ID;
   if (isLocal) {
-    if (task.type === 'videoscan') killVideoscan(id);
-    else killTask(id);
+    const killed = task.type === 'videoscan' ? killVideoscan(id) : killTask(id);
+    // Fallback: process was spawned by a prior server instance and isn't in our in-memory
+    // map, so the typed kill above no-ops. Tree-kill by stored PID instead.
+    if (!killed && isPidAlive(task.pid)) {
+      await killProcessTree(task.pid!);
+    }
   }
   await failTask(id, isLocal ? 'Stopped by user' : `Stopped by user (was remote on ${task.machineId})`);
   await broadcastTasks();

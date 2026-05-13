@@ -44,6 +44,7 @@ import {
   findRemoteForRepo,
 } from './git-ops.js';
 import { runVideoscan, findLatestScanFileForDomain, getVideoscanDir, mergeScans, syncScanToSupabase, generateReport as generateVideoscanReport } from './videoscan-runner.js';
+import { isPidAlive, killProcessTree } from './process-kill.js';
 import { dbArchiveVideoscans } from './db/videoscans.js';
 import { MACHINE_ID, isSupabaseConfigured } from './db/client.js';
 import type { Task } from './types.js';
@@ -764,6 +765,15 @@ export async function startProcessor(intervalMs = 5000): Promise<void> {
       await updateTaskStatus(t.id, 'pending');
       log.warn(`Reset terminal task #${t.id} to pending (may still have active terminal)`);
       continue;
+    }
+
+    // If the prior server died but its scan.mjs child survived (tsx-watch reload, etc.),
+    // kill it before we spawn a respawn — otherwise two scan.mjs processes race on the
+    // same resume file. Skip if PID was recycled to a different process (best-effort).
+    if (t.type === 'videoscan' && isPidAlive(t.pid)) {
+      log.warn(`Orphaned videoscan #${t.id} has live PID ${t.pid} from previous instance — killing tree`);
+      await killProcessTree(t.pid!);
+      await new Promise(r => setTimeout(r, 500));
     }
 
     // Auto-resume orphaned crawl-mode videoscans if a prior scan JSON exists.
