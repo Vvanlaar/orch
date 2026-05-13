@@ -45,6 +45,14 @@
   let historyTasks = $derived(videoscanTasks.filter(t => t.status !== 'running' && t.status !== 'pending' && t.status !== 'paused'));
   let resumableScans = $derived(scans.filter(s => s.canResume));
 
+  // Domains currently being scanned — used to suppress the Resume button on history rows
+  // when a live task already covers that domain.
+  let activeDomains = $derived(new Set(
+    activeTasks
+      .map(t => { try { return new URL(t.context?.scanUrl || '').hostname.replace(/^www\./, ''); } catch { return ''; } })
+      .filter(Boolean)
+  ));
+
   const UNGROUPED_BATCH = '__ungrouped__';
   type DomainBucket = { domain: string; scans: ScanSummary[] };
   type BatchBucket = { batchId: string; label: string; domains: DomainBucket[]; scanCount: number };
@@ -643,12 +651,16 @@
           {@const complete = domainScans.filter(s => !s.canResume && s.pagesScanned > 0)}
           {@const domainKey = `${batch.batchId}::${domain}`}
           {@const collapsed = collapsedDomains.has(domainKey)}
-          <div class="dom" class:collapsed>
+          {@const domainActive = activeDomains.has(domain)}
+          <div class="dom" class:collapsed class:dom-active={domainActive}>
             <div class="dom-head">
               <button class="dom-toggle" aria-expanded={!collapsed} onclick={() => toggleDomain(batch.batchId, domain)}>
                 <span class="dom-chev">&#9662;</span>
                 <span class="dom-name">{domain}</span>
                 <span class="dom-pill">{domainScans.length}</span>
+                {#if domainActive}
+                  <span class="dom-live" title="A scan is currently running for this site"><span class="dom-live-dot"></span>live</span>
+                {/if}
               </button>
               {#if complete.length >= 2}
                 <button class="merge-btn" onclick={() => handleMerge(complete)} disabled={merging}>
@@ -701,8 +713,10 @@
                             {generatingPreview === scan.filename ? '...' : 'Mk Preview'}
                           </button>
                         {/if}
-                        {#if scan.canResume}
+                        {#if scan.canResume && !activeDomains.has(scan.domain)}
                           <button class="sb res" onclick={() => handleResume(scan)}>Resume</button>
+                        {:else if scan.canResume}
+                          <span class="sb sb-live" title="Already running — see live panel">Running…</span>
                         {/if}
                         <button class="sb" onclick={() => { addingUrlsTo = addingUrlsTo === scan.filename ? null : scan.filename; addUrlsText = ''; }}>+ URLs</button>
                         <button class="sb" onclick={() => handleSync(scan)} disabled={syncing === scan.filename} title="Sync on-disk state to Supabase">
@@ -799,13 +813,18 @@
               Resumable
             </h3>
             {#each resumableScans as scan (scan.filename)}
-              <div class="side-item">
+              {@const live = activeDomains.has(scan.domain)}
+              <div class="side-item" class:side-item-live={live}>
                 <div class="side-resume">
                   <div>
                     <span class="side-domain">{scan.domain}</span>
                     <span class="side-meta">{scan.pagesScanned} pg · {scan.pagesWithVideo} vid</span>
                   </div>
-                  <button class="sb res" onclick={() => handleResume(scan)}>Resume</button>
+                  {#if live}
+                    <span class="sb sb-live" title="Already running — see live panel"><span class="dom-live-dot"></span>Running…</span>
+                  {:else}
+                    <button class="sb res" onclick={() => handleResume(scan)}>Resume</button>
+                  {/if}
                 </div>
               </div>
             {/each}
@@ -1539,6 +1558,53 @@
   .sb.res:hover {
     background: rgba(245, 158, 11, 0.12);
     border-color: var(--warning);
+  }
+
+  .sb.sb-live {
+    border-color: rgba(34, 197, 94, 0.45);
+    color: #22c55e;
+    cursor: default;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .dom-live {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 6px;
+    padding: 1px 7px;
+    border-radius: 9px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    background: rgba(34, 197, 94, 0.12);
+    color: #22c55e;
+    border: 1px solid rgba(34, 197, 94, 0.35);
+  }
+
+  .dom-live-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #22c55e;
+    box-shadow: 0 0 6px rgba(34, 197, 94, 0.7);
+    animation: live-pulse 1.6s ease-in-out infinite;
+  }
+
+  @keyframes live-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+
+  .dom.dom-active > .dom-head .dom-name {
+    color: #22c55e;
+  }
+
+  .side-item-live {
+    border-color: rgba(34, 197, 94, 0.25) !important;
   }
 
   .sb.del {
