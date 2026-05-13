@@ -23,6 +23,7 @@ import {
   dbDismissSuggestion,
   dbClaimTask,
   dbGetTasksByBatchId,
+  dbGetLatestVideoscanWithBatch,
   dbUpdateTask,
 } from './db/tasks.js';
 import { createLogger } from './logger.js';
@@ -234,6 +235,13 @@ export async function getAllTasks(limit = 50): Promise<Task[]> {
 export async function getTasksByBatchId(batchId: string): Promise<Task[]> {
   if (useDb) return dbGetTasksByBatchId(batchId);
   return loadDb().tasks.filter(t => t.context?.batchId === batchId);
+}
+
+export async function getLatestVideoscanWithBatch(domain: string): Promise<Task | undefined> {
+  if (useDb) return dbGetLatestVideoscanWithBatch(domain);
+  return loadDb().tasks
+    .filter(t => t.type === 'videoscan' && t.context?.scanUrl?.includes(domain) && t.context?.batchId)
+    .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))[0];
 }
 
 export async function startTask(id: number): Promise<void> {

@@ -93,24 +93,24 @@ export async function deleteScanFiles(jsonFilename: string): Promise<void> {
   else log.info(`Deleted storage files for ${jsonFilename}`);
 }
 
-/**
- * Generate a short-lived signed URL the browser can fetch directly from Supabase Storage.
- * Returns null if the object is missing or Supabase isn't configured.
- *
- * Using this for HTML/PDF report views avoids proxying the file (often 5-50MB) through
- * the orch server, which would double-count as Supabase egress.
- */
-export async function createSignedUrl(filename: string, expiresIn = 3600): Promise<string | null> {
-  if (!isSupabaseConfigured()) return null;
+export type SignedUrlResult =
+  | { ok: true; url: string }
+  | { ok: false; reason: 'not-configured' | 'not-found' | 'sign-failed'; error?: string };
+
+// Direct-from-Storage URL — avoids proxying 5-50MB reports through orch (doubles egress).
+export async function createSignedUrl(filename: string, expiresIn = 3600): Promise<SignedUrlResult> {
+  if (!isSupabaseConfigured()) return { ok: false, reason: 'not-configured' };
   await ensureBucket();
   const { data, error } = await getSupabase().storage
     .from(BUCKET)
     .createSignedUrl(filename, expiresIn);
-  if (error || !data?.signedUrl) {
-    log.warn(`Signed URL failed ${filename}: ${error?.message || 'no url'}`);
-    return null;
-  }
-  return data.signedUrl;
+  if (data?.signedUrl) return { ok: true, url: data.signedUrl };
+  const message = error?.message || '';
+  // supabase-js surfaces missing objects as "Object not found" / status 404
+  const isNotFound = /not[\s_-]?found/i.test(message) || (error as { statusCode?: string | number } | null)?.statusCode === '404';
+  if (isNotFound) return { ok: false, reason: 'not-found', error: message };
+  log.warn(`Signed URL failed ${filename}: ${message || 'no url'}`);
+  return { ok: false, reason: 'sign-failed', error: message };
 }
 
 /**

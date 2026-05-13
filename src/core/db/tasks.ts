@@ -1,4 +1,4 @@
-import type { RealtimeChannel } from '@supabase/supabase-js';
+import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 import { getSupabase, MACHINE_ID } from './client.js';
 import type { Task, TaskStatus, TaskType, TaskContext } from '../types.js';
 
@@ -127,6 +127,24 @@ export async function dbGetTasksByIds(ids: number[]): Promise<Task[]> {
 
   if (error) throw new Error(`Failed to get tasks by ids: ${error.message}`);
   return (data as TaskRow[]).map(rowToTask);
+}
+
+// Find the most recent videoscan task for a domain that has batch info on its context.
+// Used by manual-resume to preserve batch grouping when the JSON's batchId is null.
+// Targeted query — avoids pulling hundreds of unrelated rows just to recover one field.
+export async function dbGetLatestVideoscanWithBatch(domain: string): Promise<Task | undefined> {
+  const { data, error } = await getSupabase()
+    .from('tasks')
+    .select(TASK_COLUMNS_NO_OUTPUT)
+    .eq('type', 'videoscan')
+    .like('context->>scanUrl', `%${domain}%`)
+    .not('context->>batchId', 'is', null)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error || !data) return undefined;
+  return rowToTask(data as TaskRow);
 }
 
 export async function dbGetTasksByBatchId(batchId: string): Promise<Task[]> {
@@ -321,24 +339,26 @@ export async function dbDismissSuggestion(id: number): Promise<boolean> {
 //
 // Requires the `tasks` table to be added to the `supabase_realtime` publication —
 // supabase-schema.sql does this idempotently.
+type TaskRowMinimal = { id: number };
+type TaskChangePayload = RealtimePostgresChangesPayload<TaskRowMinimal>;
+
 export function dbSubscribeTaskChanges(
   onChange: (event: 'INSERT' | 'UPDATE' | 'DELETE', taskId: number | undefined) => void,
   onStatus?: (status: string, err?: Error) => void,
 ): RealtimeChannel {
   return getSupabase()
     .channel('orch-tasks-changes')
-    .on(
-      // The supabase-js types don't expose the postgres_changes event union cleanly,
-      // so cast through unknown to keep this single callsite compact.
-      'postgres_changes' as never,
+    .on<TaskRowMinimal>(
+      'postgres_changes',
       { event: '*', schema: 'public', table: 'tasks' },
-      (payload: { eventType: 'INSERT' | 'UPDATE' | 'DELETE'; new: { id?: number } | null; old: { id?: number } | null }) => {
-        const id = payload.new?.id ?? payload.old?.id;
+      (payload: TaskChangePayload) => {
+        const newId = (payload.new as Partial<TaskRowMinimal> | undefined)?.id;
+        const oldId = (payload.old as Partial<TaskRowMinimal> | undefined)?.id;
+        const id = newId ?? oldId;
         onChange(payload.eventType, typeof id === 'number' ? id : undefined);
       },
     )
     .subscribe((status, err) => {
-      // Surface SUBSCRIBED / CLOSED / CHANNEL_ERROR / TIMED_OUT so silent drops are visible.
       onStatus?.(status, err);
     });
 }

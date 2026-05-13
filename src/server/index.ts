@@ -26,7 +26,7 @@ import {
 import { startPoller } from '../core/poller.js';
 import { getEffectiveRepoMapping, getScannedRepos } from '../core/repo-scanner.js';
 import { getAuthenticatedUser, getPull, listPullReviewComments, listOrgRepos } from '../core/github-api.js';
-import { applyStreamingOutput, approveSuggestion, completeTask, createTask, deleteTask, dismissSuggestion, failTask, getAllTasks, getAllTasksWithOutput, getTask, getTasksByIds, getTasksWithPids, pauseTask, pinTask, retryTask, updateTaskContext, updateTaskRepoPath, updateTaskStatus } from '../core/task-queue.js';
+import { applyStreamingOutput, approveSuggestion, completeTask, createTask, deleteTask, dismissSuggestion, failTask, getAllTasks, getAllTasksWithOutput, getLatestVideoscanWithBatch, getTask, getTasksByIds, getTasksWithPids, pauseTask, pinTask, retryTask, updateTaskContext, updateTaskRepoPath, updateTaskStatus } from '../core/task-queue.js';
 import { initSettings } from '../core/settings.js';
 import { isSupabaseConfigured, MACHINE_ID } from '../core/db/client.js';
 import { dbGetNotifications, dbInsertNotification } from '../core/db/notifications.js';
@@ -1738,9 +1738,7 @@ app.post('/api/actions/resume-videoscan', asyncHandler(async (req, res) => {
   let batchId = typeof scanData.batchId === 'string' ? scanData.batchId : undefined;
   let batchLabel = typeof scanData.batchLabel === 'string' ? scanData.batchLabel : undefined;
   if (!batchId) {
-    const prior = (await getAllTasks(500))
-      .filter(t => t.type === 'videoscan' && t.context?.scanUrl?.includes(domain) && t.context?.batchId)
-      .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))[0];
+    const prior = await getLatestVideoscanWithBatch(domain);
     if (prior) {
       batchId = prior.context?.batchId;
       batchLabel = prior.context?.batchLabel;
@@ -1868,11 +1866,16 @@ app.get('/api/videoscans/files/:filename', asyncHandler(async (req, res) => {
   // PDFs through the server (which would double-count toward Supabase egress).
   if (!localExists && (filename.endsWith('.html') || filename.endsWith('.pdf'))) {
     const signed = await createSignedUrl(filename);
-    if (signed) {
-      res.redirect(302, signed);
+    if (signed.ok) {
+      res.redirect(302, signed.url);
       return;
     }
-    res.status(404).json({ error: 'File not found' });
+    if (signed.reason === 'not-found' || signed.reason === 'not-configured') {
+      res.status(404).json({ error: 'File not found' });
+      return;
+    }
+    // sign-failed — auth/policy/transient. Distinguish from genuine 404.
+    res.status(502).json({ error: `Signed URL generation failed: ${signed.error ?? 'unknown'}` });
     return;
   }
 
