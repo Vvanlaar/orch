@@ -243,15 +243,30 @@ function generateReport(scanData, socialData, options = {}) {
   // Detail table (representative pages, up to 15)
   let detailTable = "";
   if (details && details.length > 0) {
-    const selectedDetails = details
+    // Pass 1: seed with 1 page per unique player so every player gets a row
+    const seen = new Set();
+    const seedByPlayer = [];
+    for (const d of details) {
+      for (const p of d.players) {
+        if (!seen.has(p.name)) {
+          seen.add(p.name);
+          seedByPlayer.push(d);
+          break;
+        }
+      }
+    }
+    // Pass 2: fill with section-representative + first-5 logic, excluding seeds
+    const seedSet = new Set(seedByPlayer.map(d => d.url));
+    const filler = details
+      .filter(d => !seedSet.has(d.url))
       .filter((d, i, arr) => {
         const section = new URL(d.url).pathname.split("/").filter(Boolean)[0] || "";
         const isFirstInSection = arr.findIndex(
           x => (new URL(x.url).pathname.split("/").filter(Boolean)[0] || "") === section
         ) === i;
         return isFirstInSection || i < 5;
-      })
-      .slice(0, 15);
+      });
+    const selectedDetails = [...seedByPlayer, ...filler].slice(0, 15);
 
     const detailRows = selectedDetails.map(d =>
       `        <tr><td style="font-size:13px"><a href="${d.url}" target="_blank" style="color:#3578BB;text-decoration:none">${truncateUrl(d.url, 55)}</a></td><td>${d.players.map(p => p.name).join(", ")}</td></tr>`

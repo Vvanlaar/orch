@@ -319,6 +319,39 @@ const DETECTORS = {
     patterns: [/video\.js/i, /videojs/i, /vjs-/i, /video-js/i],
     scripts: [/videojs/i, /video\.js/i, /vjs/i],
   },
+  "MediaElement.js": {
+    patterns: [
+      /mejs[_-]?_?container/i,
+      /class="[^"]*\bmejs\b/i,
+      /mediaelementplayer/i,
+      /mediaelement-and-player/i,
+    ],
+    scripts: [/mediaelement(?:-and-player)?(?:\.min)?\.js/i, /mediaelementplayer/i],
+  },
+  Plyr: {
+    patterns: [
+      /class="[^"]*\bplyr\b/i,
+      /<div[^>]+data-plyr-provider/i,
+      /plyr--(?:video|audio|html5|youtube|vimeo)/i,
+    ],
+    scripts: [/(?:^|\/)plyr(?:\.polyfilled)?(?:\.min)?\.js/i],
+  },
+  Clappr: {
+    patterns: [
+      /class="[^"]*\bclappr\b/i,
+      /data-clappr/i,
+      /new Clappr\.Player/i,
+    ],
+    scripts: [/(?:^|\/)clappr(?:\.min)?\.js/i],
+  },
+  "Shaka Player": {
+    patterns: [
+      /class="[^"]*shaka-/i,
+      /data-shaka-player/i,
+      /shaka\.Player/i,
+    ],
+    scripts: [/(?:^|\/)shaka-player(?:\.compiled)?(?:\.min)?\.js/i],
+  },
   "HTML5 native": {
     patterns: [/<video[\s>]/i, /<source[^>]+type="video/i],
     scripts: [],
@@ -358,7 +391,8 @@ const DETECTOR_TIER = {
   Bilibili: 4, "VK Video": 4, SproutVideo: 4, Cincopa: 4,
   "23 Video": 4, Mediasite: 4, ThePlatform: 4,
   // Tier 5: Generic
-  "Video.js": 5, "HTML5 native": 5,
+  "Video.js": 5, "MediaElement.js": 5, Plyr: 5, Clappr: 5, "Shaka Player": 5,
+  "HTML5 native": 5,
 };
 
 /** Keep only the highest-priority tier of players found on a page. */

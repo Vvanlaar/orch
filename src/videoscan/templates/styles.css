@@ -309,7 +309,6 @@ td {
     height: auto;
     min-height: 297mm;
     overflow: visible;
-    page-break-after: always;
   }
   /* avoid breaking inside atomic blocks */
   tr, .stat-box, .acc-tip-box, .privacy-list li,
