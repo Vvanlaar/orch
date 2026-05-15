@@ -95,6 +95,15 @@ export function parseScanProgress(rawOutput: string, maxPagesHint: number): Scan
   return result;
 }
 
+export function effectivePlanned(progress: ScanProgress, urlsLength = 0): number {
+  if (urlsLength > 0) return urlsLength;
+  const discovered = progress.visited + progress.queue;
+  if (progress.maxPages > 0) {
+    return discovered > 0 ? Math.min(discovered, progress.maxPages) : progress.maxPages;
+  }
+  return discovered;
+}
+
 export function formatDuration(totalSec: number): string {
   if (!Number.isFinite(totalSec) || totalSec < 0) return '0s';
   const s = Math.floor(totalSec);

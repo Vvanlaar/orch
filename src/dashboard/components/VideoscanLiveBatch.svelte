@@ -2,7 +2,7 @@
   import { onDestroy, untrack } from 'svelte';
   import type { Task } from '../lib/types';
   import { getTaskOutput } from '../stores/tasks.svelte';
-  import { parseScanProgress, formatDuration } from '../lib/videoscan-progress';
+  import { parseScanProgress, formatDuration, effectivePlanned } from '../lib/videoscan-progress';
   import { readPreference, writePreference } from '../lib/preferences';
   import VideoscanLiveProgress from './VideoscanLiveProgress.svelte';
 
@@ -32,17 +32,11 @@
   const tick = setInterval(() => { now = Date.now(); }, 1000);
   onDestroy(() => clearInterval(tick));
 
-  // For crawl-mode tasks, planned count = scan.mjs maxPages (hint or parsed).
-  // For explicit-URL tasks, scan.mjs ignores --max-pages, so use urls.length.
-  function plannedFor(t: Task, parsedMax: number): number {
-    if (t.context?.urls && t.context.urls.length > 0) return t.context.urls.length;
-    return parsedMax || t.context?.maxPages || 0;
-  }
-
   let perTask = $derived(tasks.map(t => {
     const output = getTaskOutput(t.id);
     const progress = parseScanProgress(output, t.context?.maxPages ?? 0);
-    return { task: t, progress, planned: plannedFor(t, progress.maxPages) };
+    const planned = effectivePlanned(progress, t.context?.urls?.length ?? 0);
+    return { task: t, progress, planned };
   }));
 
   let runningCount = $derived(tasks.filter(t => t.status === 'running').length);

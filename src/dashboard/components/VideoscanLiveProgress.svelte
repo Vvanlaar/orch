@@ -2,7 +2,7 @@
   import { onDestroy } from 'svelte';
   import type { Task } from '../lib/types';
   import { getTaskOutput, setVideoscanControl, pauseVideoscanTask, resumeVideoscanTask } from '../stores/tasks.svelte';
-  import { parseScanProgress, formatDuration } from '../lib/videoscan-progress';
+  import { parseScanProgress, formatDuration, effectivePlanned } from '../lib/videoscan-progress';
 
   let { task, expanded = false, onToggleExpand }: {
     task: Task;
@@ -59,10 +59,8 @@
   });
   let elapsedSec = $derived(Math.max(0, (now - startTs) / 1000));
 
-  let pct = $derived.by(() => {
-    if (!progress.maxPages) return 0;
-    return Math.min(100, (progress.visited / progress.maxPages) * 100);
-  });
+  let planned = $derived(effectivePlanned(progress, task.context?.urls?.length ?? 0));
+  let pct = $derived(planned > 0 ? Math.min(100, (progress.visited / planned) * 100) : 0);
 
   let isRunning = $derived(task.status === 'running' || task.status === 'pending');
   let isPaused = $derived(task.status === 'paused');
@@ -147,7 +145,7 @@
       <div class="vsp-meter-fill" style="width: {pct}%"></div>
     </div>
     <span class="vsp-pct">{pct.toFixed(1)}%</span>
-    <span class="vsp-count">{progress.visited.toLocaleString()}{progress.maxPages ? ` / ${progress.maxPages.toLocaleString()}` : ''}</span>
+    <span class="vsp-count">{progress.visited.toLocaleString()}{planned ? ` / ${planned.toLocaleString()}` : ''}</span>
   </div>
 
   <div class="vsp-stats">
