@@ -90,7 +90,7 @@ export function generateAssignCommand(): string | null {
   if (selectedTeamMembers.size === 0) return null;
   if (reviewedItems.length === 0) return null;
   const users = Array.from(selectedTeamMembers).join(',');
-  return `/ado-assign-testing --users "${users}"`;
+  return `/bb-assign-testing --users "${users}"`;
 }
 
 export async function fetchReviewedItems() {

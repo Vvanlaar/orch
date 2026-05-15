@@ -502,7 +502,7 @@ ${context.testNotes || 'No test notes provided'}
 ${context.body || 'No description provided'}
 
 ## Instructions
-Follow the ado-review-resolution skill process:
+Follow the bb-review skill process:
 
 1. **Understand the Original Issue** - What problem was being solved?
 2. **Review the PR Changes** - What code changes were made?

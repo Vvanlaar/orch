@@ -1,6 +1,6 @@
 # BlueBillywig GitHub Repos
 
-Top 20 most recently updated (as of 2026-02-20). Used by `ado-investigate` skill for repo scoring.
+Top 20 most recently updated (as of 2026-02-20). Used by `bb-investigate` skill for repo scoring.
 
 ---
 
@@ -108,7 +108,7 @@ Top 20 most recently updated (as of 2026-02-20). Used by `ado-investigate` skill
 
 ---
 
-## Scoring Guide for `ado-investigate`
+## Scoring Guide for `bb-investigate`
 
 | Ticket keywords | Primary repo(s) |
 |-----------------|-----------------|

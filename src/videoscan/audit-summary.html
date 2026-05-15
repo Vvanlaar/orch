@@ -4,544 +4,193 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Toegankelijkheidsaudit Videospelers — Samenvatting</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,400;0,500;0,700;1,400;1,700&display=swap">
-  <script src="https://kit.fontawesome.com/7e772fa0fe.js" crossorigin="anonymous" defer></script>
   <style>
-/* Lokale font-face voor Gustavo (koppen & titels) */
-@font-face { font-family: 'Gustavo'; src: url('https://d3bn524hv76vco.cloudfront.net/upload/newskin.acc/f26146ff9bc1ae4ad6541812c26349c0f5d0c493.otf') format('opentype'); font-weight: 500; }
-@font-face { font-family: 'Gustavo'; src: url('https://d3bn524hv76vco.cloudfront.net/upload/newskin.acc/8077700769db7db2280aa07ecc0d70bdd665ade3.otf') format('opentype'); font-weight: 700; }
-
-/* =========================================
-   1. CSS VARIABELEN (CENTRAAL AANPASSEN)
-   ========================================= */
-:root {
-  /* Kleuren */
-  --primary: #3578BB;
-  --primary-light: #9ABBDD;
-  --cover-bg: #4C79AA;
-  --text-dark: #002837;
-  --bg-body: #525659;
-  --bg-box: #FAFBFB;
-  --border-box: #F5F6F7;
-  --border-color: #DBDBDB;
-  --white: #FFFFFF;
-  --accent-red: #ED6A5B;
-  --accent-yellow: #FAB44B;
-  --accent-green: #46AF91;
-
-  /* Afmetingen lijntje */
-  --line-height: 12px;
-}
-
-* { margin: 0; padding: 0; box-sizing: border-box; }
-
-body {
-  font-family: 'Montserrat', sans-serif;
-  background: var(--bg-body);
-  color: var(--text-dark);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 40px;
-  padding: 40px;
-}
-
-/* =========================================
-   2. PAGINA LAYOUT
-   ========================================= */
-.page {
-  background: var(--white);
-  width: 210mm;
-  height: 297mm;
-  padding: 50px 60px 140px 60px;
-  box-shadow: 0 5px 20px rgba(0,0,0,0.15);
-  position: relative;
-  overflow: hidden;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.page-cover { padding: 0; background: var(--cover-bg); }
-.page-contact { padding-bottom: 0; }
-
-/* =========================================
-   3. TYPOGRAFIE & HIGHLIGHT (HET LIJNTJE)
-   ========================================= */
-h1, h2, h3, h4 { font-family: 'Gustavo', sans-serif; color: var(--text-dark); }
-
-h1 {
-  font-size: 36px;
-  font-weight: 700;
-  margin-bottom: 40px;
-  z-index: 1;
-}
-
-.highlight-line {
-  display: inline;
-  background-image: linear-gradient(var(--primary-light), var(--primary-light));
-  background-repeat: no-repeat;
-  background-size: 100% var(--line-height);
-  background-position: 0 114%;
-  -webkit-box-decoration-break: clone;
-  box-decoration-break: clone;
-}
-
-.cover-title { font-size: 52px; margin-bottom: 30px; line-height: 1.05; }
-.cover-title .highlight-line { background-size: 100% 16px; background-position: 0 113%; }
-
-.contact-title { font-size: 34px; max-width: 600px; }
-
-h2 { font-size: 20px; font-weight: 700; margin: 32px 0 16px 0; padding-bottom: 4px; display: inline-block; }
-h3 { font-size: 16px; font-weight: 700; margin: 20px 0 8px 0; }
-p { font-size: 13px; line-height: 1.6; margin-bottom: 12px; }
-
-.text-primary { color: var(--primary); }
-.text-danger { color: var(--accent-red); }
-.font-normal { font-weight: 400; }
-.text-intro { font-size: 16px; line-height: 1.5; }
-.highlight-number { font-family: 'Gustavo', sans-serif; font-size: 18px; }
-
-.acc-tip-box--compact { margin-top: 24px; padding: 16px 20px; box-shadow: none; border: 1px solid var(--primary-light); }
-.acc-tip-box--compact i { font-size: 24px; }
-.acc-tip-box--compact .tip-title { font-size: 13px; color: var(--text-dark); font-weight: 700; }
-.acc-tip-box--compact .tip-body { margin: 0; font-size: 12px; }
-
-.btn-cover { background: var(--white); color: var(--text-dark); font-size: 18px; padding: 14px 28px; }
-.chart-label { font-size: 11px; font-weight: 700; }
-
-/* =========================================
-   4. COMPONENTEN
-   ========================================= */
-.btn {
-  display: inline-block;
-  font-family: 'Gustavo', sans-serif;
-  font-weight: 700;
-  font-size: 13px;
-  text-decoration: none;
-  padding: 10px 24px;
-  margin-top: 12px;
-  border-radius: 0 0 20px 0;
-  border: none;
-  cursor: pointer;
-  text-align: center;
-}
-.btn-red { background: var(--accent-red); color: var(--white); }
-.btn-blue { background: var(--primary); color: var(--white); }
-
-.stats-overview {
-  display: flex;
-  flex-direction: row-reverse;
-  gap: 20px;
-  margin: 32px 0;
-}
-
-.stat-box { background: var(--bg-box); border: 1px solid var(--border-box); padding: 16px; text-align: center; border-radius: 8px; min-width: 160px;}
-.stat-box .number { font-family: 'Gustavo', sans-serif; font-size: 28px; font-weight: 700; color: var(--text-dark); margin-bottom: 4px; }
-.stat-box .label { font-size: 10px; text-transform: uppercase; color: var(--primary); font-weight: 700; letter-spacing: 0.5px; }
-
-.grid-3 { display: flex; flex-direction: column; gap: 20px; }
-
-table {
-  width: calc(100% + 48px);
-  border-collapse: separate;
-  border-spacing: 24px 0;
-  margin: 16px -24px;
-  font-size: 13px;
-}
-th {
-  font-weight: 700;
-  text-align: left;
-  padding: 12px 16px;
-  background: var(--bg-box);
-  border-radius: 6px;
-  border: 1px solid var(--border-box);
-}
-td {
-  padding: 16px;
-  border-bottom: 2px solid #F0F4F5;
-  font-style: italic;
-}
-
-.tag-grid { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
-.tag { border: 1px solid var(--border-color); padding: 4px 10px; font-size: 11px; font-weight: 700; color: var(--text-dark); }
-
-/* Toegankelijkheid layout stijlen */
-.acc-subtitle { font-family: 'Montserrat', sans-serif; font-size: 18px; font-weight: 700; font-style: italic; color: var(--text-dark); margin: 20px 0 12px 0; }
-.acc-tag-grid { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
-.acc-tag { border: 1px solid var(--text-dark); border-radius: 4px; padding: 6px 12px; font-size: 13px; font-weight: 500; color: var(--text-dark); display: flex; align-items: center; gap: 8px; background: var(--white); }
-.acc-tag i { font-size: 16px; flex-shrink: 0; color: var(--text-dark); }
-.acc-row { display: flex; gap: 24px; align-items: flex-start; }
-.acc-col { flex: 1; }
-.acc-tip-box { border: 2px solid #D2E0EF; border-radius: 6px; padding: 24px 20px; display: flex; gap: 16px; align-items: center; background: var(--white); box-shadow: 4px 4px 0px 0px #D2E0EF; margin-top: 20px; }
-.acc-tip-box i { font-size: 40px; flex-shrink: 0; color: var(--primary); }
-.acc-tip-box p { margin: 0; font-size: 11px; font-weight: 400; color: var(--text-dark); line-height: 1.5; }
-
-/* Privacy layout stijlen */
-.privacy-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
-.privacy-list li { display: flex; align-items: flex-start; gap: 12px; font-size: 14px; line-height: 1.4; color: var(--text-dark); }
-.privacy-list-icon { width: 14px; height: 14px; background: var(--primary); border-radius: 4px; flex-shrink: 0; margin-top: 3px; }
-
-.privacy-row { display: flex; gap: 40px; }
-.privacy-content-col { flex: 1.2; }
-.privacy-shield-col { flex: 0.8; display: flex; justify-content: center; align-items: flex-start; padding-top: 20px; position: relative; }
-.shield-icon-bg { font-size: 130px; color: var(--primary-light); opacity: 0.6; position: absolute; transform: translate(15px, -10px); }
-.shield-icon-fg { font-size: 130px; color: var(--primary); position: relative; z-index: 2; }
-
-.cookie-row { display: flex; gap: 40px; align-items: center; margin-top: 20px; }
-.cookie-card-wrapper { position: relative; width: 340px; height: 220px; }
-.cookie-card-bg { position: absolute; top: 0; left: 20px; right: -20px; bottom: 20px; background-color: var(--primary-light); border-radius: 20px; opacity: 0.6; }
-.cookie-card { position: absolute; top: 20px; left: 0; right: 0; bottom: 0; background-color: var(--white); border-radius: 20px; border: 1px solid var(--border-color); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 2; }
-.cookie-card-icon { color: var(--accent-yellow); font-size: 36px; margin-bottom: 16px; }
-.cookie-card-text { font-size: 11px; font-weight: 500; margin-bottom: 8px; border-bottom: 1px solid var(--text-dark); padding-bottom: 4px; }
-.cookie-card-btn { background-color: var(--accent-red); color: var(--white); font-size: 11px; font-weight: 500; padding: 6px 16px; border-radius: 4px; margin-top: 8px; }
-
-/* Checklist layout stijlen */
-.checklist-heading { font-family: 'Gustavo', sans-serif; font-size: 20px; font-weight: 500; font-style: italic; color: var(--text-dark); margin: 36px 0 16px 0; display: block; }
-.check-item { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; font-size: 13px; }
-.check-box { width: 18px; height: 18px; border: 2px solid var(--primary-light); border-radius: 4px; flex-shrink: 0; background: var(--white); }
-.check-text { line-height: 1.4; color: var(--text-dark); }
-.check-text strong { font-weight: 700; color: var(--text-dark); }
-.large-checkmark-container { position: absolute; right: 60px; bottom: 160px; }
-.large-checkmark { width: 110px; height: 110px; background-color: var(--primary); border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 10px -10px 0px 0px var(--primary-light); }
-
-/* =========================================
-   5. GRAFIEKEN
-   ========================================= */
-.pie-row { background: var(--bg-box); border: 1px solid var(--border-box); width: 100%; justify-content: center; border-radius: 8px; display: flex; align-items: center; gap: 40px; padding: 20px; }
-.legend-item { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; font-size: 13px; font-weight: 700; }
-.legend-box { width: 14px; height: 14px; }
-
-.bg-red { background: var(--accent-red); }
-.bg-primary { background: var(--primary); }
-.bg-green { background: var(--accent-green); }
-
-.bar-chart { display: flex; align-items: flex-end; gap: 40px; height: 160px; border-bottom: 2px solid var(--text-dark); padding-bottom: 8px; margin: 24px 0; }
-.bar-col { display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.bar-number { font-weight: 700; font-size: 16px; color: var(--text-dark); }
-.bar { width: 40px; background: var(--bg-box); display: flex; align-items: flex-end; height: 120px; }
-.bar-fill { width: 100%; background: var(--accent-red); }
-.bar-label { font-family: 'Gustavo', sans-serif; font-size: 13px; font-weight: 700; }
-
-/* =========================================
-   6. COVER & CONTACT LAYOUTS
-   ========================================= */
-.cover-top-section { background: var(--white); padding: 50px 60px 24px 60px; }
-.cover-image-bg { height: 540px; background-size: cover; background-position: center; border-bottom-right-radius: 150px; position: relative; }
-.cover-separator { height: 6px; background: var(--text-dark); margin-top: 24px; border-radius: 1px; }
-
-.cover-mid-section { padding: 0 60px; position: relative; z-index: 2; background-color: var(--primary); }
-
-.cover-text-box {
-  background: var(--white);
-  padding: 20px 24px 40px 24px;
-  border-radius: 0 0 16px 16px;
-  position: relative;
-}
-
-.cover-text-box::before,
-.cover-text-box::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  width: 16px;
-  height: 16px;
-}
-
-.cover-text-box::before {
-  left: -16px;
-  background: radial-gradient(circle at 0 100%, transparent 16px, var(--white) 16px);
-}
-
-.cover-text-box::after {
-  right: -16px;
-  background: radial-gradient(circle at 100% 100%, transparent 16px, var(--white) 16px);
-}
-
-.cover-text { font-size: 16px; line-height: 1.6; color: var(--text-dark); }
-
-.cover-bottom-section { flex: 1; display: flex; align-items: flex-end; justify-content: space-between; background-color: var(--primary); padding: 50px 60px; position: relative; z-index: 2; }
-
-.split-layout { display: flex; flex-direction: row; gap: 80px; }
-.split-left { display: flex; flex-direction: column; gap: 32px; }
-.split-left h3 { font-size: 20px; margin: 0; margin-bottom: 6px; }
-.split-left p { font-size: 14px; margin-bottom: 8px; }
-.contact-item p { margin-bottom: 2px; }
-
-.split-right-img { background-size: cover; background-position: center; border-bottom-right-radius: 150px; height: 100%; width: 600px; min-height: 480px; }
-
-/* =========================================
-   7. UNIVERSELE FOOTER SVG & STYLING
-   ========================================= */
-.main-logo { width: 150px; }
-.main-logo img { width: 100%; height: auto; }
-
-.footer {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  height: 120px;
-  padding: 0 60px 40px 60px;
-  background-color: var(--primary);
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-}
-
-.footer-container {
-  width: 100%;
-  border-top: 4px solid var(--white);
-  padding-top: 16px;
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-}
-
-.footer-page { font-family: 'Gustavo', sans-serif; font-weight: 700; font-size: 18px; color: var(--white); }
-
-.contact-footer { background: var(--primary); margin: auto -60px 0 -60px; padding: 0px 60px 40px 60px; display: flex; flex-direction: column; }
-.contact-footer .footer-container { margin-top: 40px; }
-
-.svg-logo-white { width: 120px; }
-.svg-logo-white img { width: 100%; height: auto; }
-
-/* =========================================
-   8. RESPONSIVE & PRINT
-   ========================================= */
-@media print { .page { box-shadow: none; margin: 0; page-break-after: always; } }
-
-@media screen {
-  .page {
-    max-width: 900px;
-    height: auto;
-    margin: 0 auto 24px;
-  }
-}
-
-    /* One-pager overrides */
-    .page { min-height: 297mm; height: auto; }
-
-    /* Stats row (simpler than overview's stats-overview) */
-    .stats-row { display: flex; gap: 20px; margin: 24px 0; }
-    .stat-box .number.green { color: var(--accent-green); }
-    .stat-box .number.red { color: var(--accent-red); }
-
-    /* Badge pills */
-    .badge { padding: 4px 12px; border-radius: 14px; font-size: 12px; font-weight: 700; color: var(--white); }
-    .badge-pass { background: var(--accent-green); }
-    .badge-fail { background: var(--accent-red); }
-    .row-pass { background: rgba(70, 175, 145, 0.06); }
-
-    /* Category horizontal bars */
-    .cat-row { margin: 10px 0; }
-    .cat-header { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 4px; }
-    .cat-count { color: #666; white-space: nowrap; }
-    .cat-bar-bg { background: var(--bg-box); border: 1px solid var(--border-box); border-radius: 4px; height: 22px; overflow: hidden; }
-    .cat-bar-fill { background: var(--primary); height: 100%; border-radius: 4px; }
-
-    /* Conclusion callout */
-    .conclusion-box { border: 2px solid #D2E0EF; border-radius: 6px; padding: 20px; display: flex; gap: 16px; align-items: flex-start; background: var(--white); box-shadow: 4px 4px 0px 0px #D2E0EF; margin: 24px 0; }
-    .conclusion-box .icon { font-size: 28px; flex-shrink: 0; }
-    .conclusion-box .title { font-family: 'Gustavo', sans-serif; font-size: 15px; font-weight: 700; color: var(--text-dark); margin-bottom: 4px; }
-    .conclusion-box p { margin: 0; font-size: 13px; }
-
-    /* Source attribution */
-    .source-line { font-size: 12px; color: #666; margin-top: 8px; }
-    .source-line a { color: var(--primary); text-decoration: none; }
-
-    /* Footer links variant (one-pager uses links instead of page number) */
-    .footer-links { display: flex; gap: 16px; align-items: center; }
-    .footer-links a { color: var(--white); text-decoration: none; font-size: 13px; font-weight: 500; }
-    .footer-links span { color: rgba(255,255,255,0.5); }
-
-    /* One-pager table: reset italic from shared styles */
-    td { font-style: normal; }
-
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    body { font-family: 'Inter', -apple-system, sans-serif; color: #334155; background: #e2e8f0; line-height: 1.6; display: flex; flex-direction: column; align-items: center; padding: 2rem 0; }
+    .page { width: 210mm; height: 297mm; background: white; margin-bottom: 2rem; padding: 20mm 20mm 25mm 20mm; box-shadow: 0 10px 25px rgba(0,0,0,0.1); position: relative; overflow: hidden; }
+    .page::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 6px; background: linear-gradient(90deg, #1a3a5c 0%, #4a90d9 100%); }
+    h1 { font-size: 26px; font-weight: 800; color: #0f172a; margin-bottom: 4px; letter-spacing: -0.5px; }
+    h2 { font-size: 18px; font-weight: 700; color: #0f172a; margin: 32px 0 16px; border-bottom: 2px solid #f1f5f9; padding-bottom: 8px; }
+    p { margin: 8px 0; color: #475569; font-size: 14px; }
+    strong { color: #0f172a; }
+    .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; }
+    .header-subtitle { color: #64748b; font-size: 14px; margin-top: 2px; }
+    table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px; }
+    th { background: #f8fafc; color: #475569; padding: 12px 16px; text-align: left; font-weight: 600; border-bottom: 2px solid #e2e8f0; text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; }
+    td { padding: 12px 16px; border-bottom: 1px solid #f1f5f9; }
+    tr:nth-child(even) td { background: #fafbfc; }
+    .text-center { text-align: center; }
+    .fw-bold { font-weight: 700; color: #0f172a; }
+    .status { padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; display: inline-block; }
+    .status-pass { background: #dcfce7; color: #166534; }
+    .status-fail { background: #fee2e2; color: #991b1b; }
+    .row-success td { background-color: #f0fdf4 !important; }
+    .category-item { margin: 16px 0; }
+    .category-header { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px; }
+    .category-count { color: #64748b; font-weight: 500; }
+    .bar-bg { background: #e2e8f0; border-radius: 6px; height: 12px; overflow: hidden; }
+    .bar-fill { background: #f97316; height: 100%; border-radius: 6px; }
+    .conclusion-box { background: #f0f9ff; border-left: 4px solid #0ea5e9; padding: 20px; margin: 32px 0 0 0; border-radius: 0 8px 8px 0; }
+    .conclusion-title { font-size: 16px; color: #0369a1; font-weight: 700; margin-bottom: 8px; display: block; }
+    .conclusion-text { font-size: 14px; color: #0f172a; line-height: 1.7; }
+    .page-footer { position: absolute; bottom: 0; left: 0; right: 0; height: 20mm; padding: 0 20mm; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #e2e8f0; font-size: 12px; color: #64748b; background: #ffffff; }
+    .page-footer a { color: #0ea5e9; text-decoration: none; font-weight: 500; }
+    .footer-logo { font-weight: 700; color: #1a3a5c; }
+    @page { size: A4; margin: 0; }
+    @media print { body { background: white; margin: 0; padding: 0; display: block; } .page { margin: 0; box-shadow: none; border: none; page-break-after: always; height: 297mm; } }
   </style>
 </head>
 <body>
 
   <div class="page">
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
-      <h1><span class="highlight-line">Toegankelijkheidsaudit Videospelers</span></h1>
-      <img src="https://d3bn524hv76vco.cloudfront.net/upload/newskin.acc/780b5079ecb7d44a8d5a2d090d06882962d5ab17.svg" alt="Blue Billywig" style="width:150px;margin-top:8px">
+    <div class="header">
+      <div>
+        <h1>Toegankelijkheidsaudit Videospelers</h1>
+        <p class="header-subtitle">Samenvatting — Audit door <strong>Proper Access</strong>, december 2025</p>
+      </div>
     </div>
 
-    <p class="text-intro">
+    <p>
       Proper Access heeft <strong>9 videospelers</strong> getoetst aan de
       <strong>WCAG 2.2 Level AA</strong> richtlijnen (methode: WCAG-EM).
+      Van de 9 spelers voldoen er <strong style="color:#166534">3 volledig</strong>
+      en <strong style="color:#991b1b">6 niet</strong>.
     </p>
 
-    <div class="stats-row">
-      <div class="stat-box">
-        <div class="number">9</div>
-        <div class="label">Geteste spelers</div>
-      </div>
-      <div class="stat-box">
-        <div class="number green">3</div>
-        <div class="label">Voldoen</div>
-      </div>
-      <div class="stat-box">
-        <div class="number red">6</div>
-        <div class="label">Voldoen niet</div>
-      </div>
-    </div>
-
-    <h2><span class="highlight-line">Afgekeurde WCAG-criteria per speler</span></h2>
-    <div class="bar-chart"><div class="bar-col">
-        <div class="bar-number">4</div>
-        <div class="bar"><div class="bar-fill" style="height:28.57142857142857%"></div></div>
-        <div class="bar-label">Vimeo</div>
-      </div><div class="bar-col">
-        <div class="bar-number">10</div>
-        <div class="bar"><div class="bar-fill" style="height:71.42857142857143%"></div></div>
-        <div class="bar-label">YouTube</div>
-      </div><div class="bar-col">
-        <div class="bar-number">8</div>
-        <div class="bar"><div class="bar-fill" style="height:57.14285714285714%"></div></div>
-        <div class="bar-label">Ping Player</div>
-      </div><div class="bar-col">
-        <div class="bar-number">14</div>
-        <div class="bar"><div class="bar-fill" style="height:100%"></div></div>
-        <div class="bar-label">Hihaho</div>
-      </div><div class="bar-col">
-        <div class="bar-number">11</div>
-        <div class="bar"><div class="bar-fill" style="height:78.57142857142857%"></div></div>
-        <div class="bar-label">Ivory Media Player</div>
-      </div><div class="bar-col">
-        <div class="bar-number">14</div>
-        <div class="bar"><div class="bar-fill" style="height:100%"></div></div>
-        <div class="bar-label">Vixy Video</div>
-      </div></div>
-    <p class="chart-label">&#9632; Aantal afgekeurde WCAG-criteria per speler</p>
-
-    <h2><span class="highlight-line">Resultaten per speler</span></h2>
+    <h2>Resultaten per speler</h2>
     <table>
       <thead>
         <tr>
           <th>Videospeler</th>
-          <th style="text-align:center">Bevindingen</th>
-          <th style="text-align:center">Afgekeurde criteria</th>
-          <th style="text-align:center">Status</th>
+          <th class="text-center">Bevindingen</th>
+          <th class="text-center">Afgekeurde criteria</th>
+          <th class="text-center">Status</th>
         </tr>
       </thead>
-      <tbody><tr class="row-pass">
-        <td style="font-weight:700">Blue Billywig</td>
-        <td style="text-align:center">0</td>
-        <td style="text-align:center">0</td>
-        <td style="text-align:center"><span class="badge badge-pass">Voldoet</span></td>
-      </tr><tr class="row-pass">
-        <td style="font-weight:700">Rijksoverheidsplayer</td>
-        <td style="text-align:center">0</td>
-        <td style="text-align:center">0</td>
-        <td style="text-align:center"><span class="badge badge-pass">Voldoet</span></td>
-      </tr><tr class="row-pass">
-        <td style="font-weight:700">OpenGemeenten</td>
-        <td style="text-align:center">0</td>
-        <td style="text-align:center">0</td>
-        <td style="text-align:center"><span class="badge badge-pass">Voldoet</span></td>
-      </tr><tr>
-        <td>Vimeo</td>
-        <td style="text-align:center">4</td>
-        <td style="text-align:center">4</td>
-        <td style="text-align:center"><span class="badge badge-fail">Voldoet niet</span></td>
-      </tr><tr>
-        <td>YouTube</td>
-        <td style="text-align:center">10</td>
-        <td style="text-align:center">10</td>
-        <td style="text-align:center"><span class="badge badge-fail">Voldoet niet</span></td>
-      </tr><tr>
-        <td>Ping Player</td>
-        <td style="text-align:center">12</td>
-        <td style="text-align:center">8</td>
-        <td style="text-align:center"><span class="badge badge-fail">Voldoet niet</span></td>
-      </tr><tr>
-        <td>Hihaho</td>
-        <td style="text-align:center">12</td>
-        <td style="text-align:center">14</td>
-        <td style="text-align:center"><span class="badge badge-fail">Voldoet niet</span></td>
-      </tr><tr>
-        <td>Ivory Media Player</td>
-        <td style="text-align:center">17</td>
-        <td style="text-align:center">11</td>
-        <td style="text-align:center"><span class="badge badge-fail">Voldoet niet</span></td>
-      </tr><tr>
-        <td>Vixy Video</td>
-        <td style="text-align:center">20</td>
-        <td style="text-align:center">14</td>
-        <td style="text-align:center"><span class="badge badge-fail">Voldoet niet</span></td>
-      </tr></tbody>
+      <tbody><tr class="row-success">
+      <td class="fw-bold">Blue Billywig</td>
+      <td class="text-center">0</td>
+      <td class="text-center">0</td>
+      <td class="text-center"><span class="status status-pass">Voldoet</span></td>
+    </tr><tr class="row-success">
+      <td class="fw-bold">Rijksoverheidsplayer</td>
+      <td class="text-center">0</td>
+      <td class="text-center">0</td>
+      <td class="text-center"><span class="status status-pass">Voldoet</span></td>
+    </tr><tr class="row-success">
+      <td class="fw-bold">OpenGemeenten</td>
+      <td class="text-center">0</td>
+      <td class="text-center">0</td>
+      <td class="text-center"><span class="status status-pass">Voldoet</span></td>
+    </tr><tr>
+      <td>Vimeo</td>
+      <td class="text-center">4</td>
+      <td class="text-center">4</td>
+      <td class="text-center"><span class="status status-fail">Voldoet niet</span></td>
+    </tr><tr>
+      <td>YouTube</td>
+      <td class="text-center">10</td>
+      <td class="text-center">10</td>
+      <td class="text-center"><span class="status status-fail">Voldoet niet</span></td>
+    </tr><tr>
+      <td>Ping Player</td>
+      <td class="text-center">12</td>
+      <td class="text-center">8</td>
+      <td class="text-center"><span class="status status-fail">Voldoet niet</span></td>
+    </tr><tr>
+      <td>Hihaho</td>
+      <td class="text-center">12</td>
+      <td class="text-center">14</td>
+      <td class="text-center"><span class="status status-fail">Voldoet niet</span></td>
+    </tr><tr>
+      <td>Ivory Media Player</td>
+      <td class="text-center">17</td>
+      <td class="text-center">11</td>
+      <td class="text-center"><span class="status status-fail">Voldoet niet</span></td>
+    </tr><tr>
+      <td>Vixy Video</td>
+      <td class="text-center">20</td>
+      <td class="text-center">14</td>
+      <td class="text-center"><span class="status status-fail">Voldoet niet</span></td>
+    </tr></tbody>
     </table>
 
-    <h2><span class="highlight-line">Probleemcategorie&euml;n</span></h2>
-    <p style="font-size:12px;color:#666">Aantal spelers met problemen per categorie (van de 9 geteste spelers):</p>
-    <div class="cat-row">
-        <div class="cat-header">
-          <span><strong>Toetsenbordbediening</strong> — Bediening via toetsenbord</span>
-          <span class="cat-count">6 van 9 spelers</span>
-        </div>
-        <div class="cat-bar-bg"><div class="cat-bar-fill" style="width:100%"></div></div>
-      </div><div class="cat-row">
-        <div class="cat-header">
-          <span><strong>Schermlezer-ondersteuning</strong> — ARIA-rollen, namen en statussen</span>
-          <span class="cat-count">6 van 9 spelers</span>
-        </div>
-        <div class="cat-bar-bg"><div class="cat-bar-fill" style="width:100%"></div></div>
-      </div><div class="cat-row">
-        <div class="cat-header">
-          <span><strong>Contrast & zichtbaarheid</strong> — Focusindicatoren, tekst- en iconencontrast</span>
-          <span class="cat-count">5 van 9 spelers</span>
-        </div>
-        <div class="cat-bar-bg"><div class="cat-bar-fill" style="width:83.33333333333334%"></div></div>
-      </div><div class="cat-row">
-        <div class="cat-header">
-          <span><strong>Zoom & responsiviteit</strong> — Bruikbaarheid bij 400% zoom</span>
-          <span class="cat-count">3 van 9 spelers</span>
-        </div>
-        <div class="cat-bar-bg"><div class="cat-bar-fill" style="width:50%"></div></div>
-      </div><div class="cat-row">
-        <div class="cat-header">
-          <span><strong>Formulieren & labels</strong> — Labels, foutmeldingen, autocomplete</span>
-          <span class="cat-count">3 van 9 spelers</span>
-        </div>
-        <div class="cat-bar-bg"><div class="cat-bar-fill" style="width:50%"></div></div>
-      </div><div class="cat-row">
-        <div class="cat-header">
-          <span><strong>Taalinstellingen</strong> — Ontbrekende taalattributen</span>
-          <span class="cat-count">3 van 9 spelers</span>
-        </div>
-        <div class="cat-bar-bg"><div class="cat-bar-fill" style="width:50%"></div></div>
-      </div>
-
-    <div class="conclusion-box">
-      <div class="icon">&#x2714;&#xFE0F;</div>
+    <div class="page-footer">
+      <div>Pagina 1 van 2</div>
       <div>
-        <div class="title">Conclusie</div>
-        <p>Blue Billywig is de enige commerci&euml;le videospeler die volledig voldoet aan WCAG 2.2.
-        De Rijksoverheidsplayer en OpenGemeenten voldoen ook, maar zijn alleen beschikbaar voor overheidsorganisaties.</p>
-      </div>
-    </div>
-
-    <div class="source-line">
-      Bron: <a href="https://audit.properaccess.nl/reports/202512_videospelers_v2/">Proper Access audit rapport</a>
-      (WCAG-EM, 2025-12)
-    </div>
-
-    <div class="footer">
-      <div class="footer-container">
-        <div class="svg-logo-white">
-          <img src="https://d3bn524hv76vco.cloudfront.net/upload/newskin.acc/780b5079ecb7d44a8d5a2d090d06882962d5ab17.svg" alt="Blue Billywig">
-        </div>
-        <div class="footer-links">
-          <a href="https://www.bluebillywig.com/nl/demo/">Plan een demo</a>
-          <span>|</span>
-          <a href="https://www.bluebillywig.com/nl/contact/">Contact</a>
-        </div>
+        <span class="footer-logo">Blue Billywig</span> &nbsp;|&nbsp;
+        <a href="https://www.bluebillywig.com/nl/demo/">bluebillywig.com/nl/demo</a> &nbsp;|&nbsp;
+        <a href="https://www.bluebillywig.com/nl/contact/">Contact</a>
       </div>
     </div>
   </div>
+
+  <div class="page">
+    <div class="header">
+      <div>
+        <h1>Probleemcategorieën & Conclusie</h1>
+        <p class="header-subtitle">Vervolg — Audit door Proper Access, december 2025</p>
+      </div>
+    </div>
+
+    <h2>Knelpunten in de markt</h2>
+    <p style="margin-bottom: 24px;">Aantal spelers met specifieke problemen per categorie (van de 9 geteste spelers):</p>
+
+    <div class="category-item">
+      <div class="category-header">
+        <span><strong>Toetsenbordbediening</strong> — Bediening via toetsenbord ontbreekt of hapert</span>
+        <span class="category-count">6 van 9 spelers</span>
+      </div>
+      <div class="bar-bg"><div class="bar-fill" style="width:100.0%"></div></div>
+    </div><div class="category-item">
+      <div class="category-header">
+        <span><strong>Schermlezer-ondersteuning</strong> — Foutieve ARIA-rollen, namen en statussen</span>
+        <span class="category-count">6 van 9 spelers</span>
+      </div>
+      <div class="bar-bg"><div class="bar-fill" style="width:100.0%"></div></div>
+    </div><div class="category-item">
+      <div class="category-header">
+        <span><strong>Contrast & zichtbaarheid</strong> — Slechte focusindicatoren, tekst- en iconencontrast</span>
+        <span class="category-count">5 van 9 spelers</span>
+      </div>
+      <div class="bar-bg"><div class="bar-fill" style="width:83.3%"></div></div>
+    </div><div class="category-item">
+      <div class="category-header">
+        <span><strong>Zoom & responsiviteit</strong> — Verlies van bruikbaarheid bij 400% zoom</span>
+        <span class="category-count">3 van 9 spelers</span>
+      </div>
+      <div class="bar-bg"><div class="bar-fill" style="width:50.0%"></div></div>
+    </div><div class="category-item">
+      <div class="category-header">
+        <span><strong>Formulieren & labels</strong> — Ontbrekende labels, foutmeldingen of autocomplete</span>
+        <span class="category-count">3 van 9 spelers</span>
+      </div>
+      <div class="bar-bg"><div class="bar-fill" style="width:50.0%"></div></div>
+    </div><div class="category-item">
+      <div class="category-header">
+        <span><strong>Taalinstellingen</strong> — Ontbrekende of foutieve HTML taalattributen</span>
+        <span class="category-count">3 van 9 spelers</span>
+      </div>
+      <div class="bar-bg"><div class="bar-fill" style="width:50.0%"></div></div>
+    </div>
+
+    <div class="conclusion-box">
+      <span class="conclusion-title">Eindconclusie</span>
+      <span class="conclusion-text">
+        Uit de audit blijkt dat de meerderheid van de videospelers in de markt niet voldoet aan de basiseisen voor digitale toegankelijkheid. <strong>Blue Billywig</strong> is de enige commerciële videospeler die volledig voldoet aan WCAG 2.2. De Rijksoverheidsplayer en OpenGemeenten voldoen eveneens, maar zijn uitsluitend beschikbaar voor specifieke overheidsorganisaties.
+      </span>
+    </div>
+
+    <div class="page-footer">
+      <div>Pagina 2 van 2</div>
+      <div>
+        <span class="footer-logo">Blue Billywig</span> &nbsp;|&nbsp;
+        <a href="https://www.bluebillywig.com/nl/demo/">bluebillywig.com/nl/demo</a> &nbsp;|&nbsp;
+        <a href="https://www.bluebillywig.com/nl/contact/">Contact</a>
+      </div>
+    </div>
+  </div>
+
 </body>
 </html>
