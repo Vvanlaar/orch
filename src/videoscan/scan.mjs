@@ -3,13 +3,14 @@ import { chromium } from "playwright";
 import chalk from "chalk";
 import { readFileSync, writeFileSync, existsSync, statSync } from "fs";
 import { basename } from "path";
+import { fileURLToPath } from "url";
 import { acquire } from "./wake-lock.mjs";
 
 // ── Video Player Detectors ──────────────────────────────────────────
 // Each detector checks page HTML + network requests for a specific player.
 // Returns { found: boolean, details: string[] }
 
-const DETECTORS = {
+export const DETECTORS = {
   // ── Enterprise / OVP ────────────────────────────────────────────
   "Blue Billywig": {
     patterns: [
@@ -325,6 +326,9 @@ const DETECTORS = {
       /class="[^"]*\bmejs\b/i,
       /mediaelementplayer/i,
       /mediaelement-and-player/i,
+      // IProX deferred-markup signature (verbatim MediaElementPlayer feature list)
+      /data-playerfeatures="playpause,current,progress,duration/i,
+      /<video[^>]+class="[^"]*\bmedia-element\b/i,
     ],
     scripts: [/mediaelement(?:-and-player)?(?:\.min)?\.js/i, /mediaelementplayer/i],
   },
@@ -655,6 +659,33 @@ async function extractConsentGatedContent(page) {
   });
 }
 
+// Pull HTML-entity-encoded markup out of data-* attributes (e.g. IProX
+// `data-media-markup`, Drupal `data-media-embed-template`, WP lazy plugins)
+// and decode it so detectPlayers() can match the real <video>/<iframe>/<source>
+// regexes. Returns concatenated decoded blob or "".
+async function extractEncodedMarkup(page) {
+  return page.evaluate(() => {
+    const NEEDLES = ["&lt;video", "&lt;iframe", "&lt;source", "&lt;audio", "&lt;script"];
+    const parts = [];
+    for (const el of document.querySelectorAll("*")) {
+      for (const attr of el.attributes) {
+        if (!attr.name.startsWith("data-")) continue;
+        const v = attr.value;
+        if (!v || v.length < 12) continue;
+        const lower = v.toLowerCase();
+        if (!NEEDLES.some((n) => lower.includes(n))) continue;
+        try {
+          const decoded = new DOMParser()
+            .parseFromString(v, "text/html")
+            .documentElement.textContent;
+          if (decoded) parts.push(decoded);
+        } catch {}
+      }
+    }
+    return parts.join("\n");
+  });
+}
+
 // Check whether navigation landed on a different domain (e.g. login redirect).
 function didRedirectOffDomain(page, originalUrl) {
   const finalHost = new URL(page.url()).hostname.replace(/^www\./, "");
@@ -681,6 +712,48 @@ async function scrollPage(page) {
     }
     window.scrollTo(0, 0);
   });
+}
+
+// Click curated "activate video" placeholders so deferred players hydrate.
+// Capped per-page to bound latency. Returns scripts/iframes captured during
+// the post-click MutationObserver window so the caller can fold them into
+// networkRequests.
+export const ACTIVATE_SELECTORS = [
+  "button.activate-media",                                          // IProX
+  "lite-youtube",                                                   // web component
+  "lite-vimeo",
+  "[data-consent-element]",
+  ".youtube-placeholder, .video-placeholder, .lazyframe",
+  '[aria-label*="play" i][role="button"]',
+  'button[aria-label*="play" i]',
+  'button[aria-label*="start video" i]',
+  'button[aria-label*="video afspelen" i]',
+  ".media-content[data-media-location] .activate-control button",
+];
+
+async function activatePlayButtons(page, { max = 3, settleMs = 1000 } = {}) {
+  const captured = { scripts: [], iframes: [] };
+  const targets = await page.$$(ACTIVATE_SELECTORS.join(", "));
+  if (targets.length === 0) return captured;
+
+  const seen = new Set();
+  let clicked = 0;
+  for (const el of targets) {
+    if (clicked >= max) break;
+    try {
+      const key = await el.evaluate((n) => n.outerHTML.slice(0, 120));
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (!(await el.isVisible())) continue;
+      await el.click({ timeout: 500 }).catch(() => {});
+      clicked++;
+      await page.waitForTimeout(settleMs);
+      const drained = await waitForDynamicMedia(page, 500);
+      captured.scripts.push(...drained.scripts);
+      captured.iframes.push(...drained.iframes);
+    } catch {}
+  }
+  return captured;
 }
 
 // Wait for dynamically loaded media elements using MutationObserver.
@@ -809,9 +882,17 @@ async function scanOnePage(context, url, timeout) {
     networkRequests.push(src);
   }
 
+  // Click curated activation placeholders so deferred players hydrate
+  const activated = await activatePlayButtons(page);
+  for (const src of [...activated.scripts, ...activated.iframes]) {
+    networkRequests.push(src);
+  }
+
   // Re-grab HTML after dynamic content has loaded
   const html = await page.content();
-  const detected = await detectWithConsent(page, html, networkRequests);
+  const encoded = await extractEncodedMarkup(page);
+  const corpus = encoded ? html + "\n" + encoded : html;
+  const detected = await detectWithConsent(page, corpus, networkRequests);
 
   // Extract links for further crawling
   const links = await page.evaluate(() =>
@@ -873,8 +954,15 @@ async function scanFirstPage(context, url, timeout) {
     networkRequests.push(src);
   }
 
+  const activated = await activatePlayButtons(page);
+  for (const src of [...activated.scripts, ...activated.iframes]) {
+    networkRequests.push(src);
+  }
+
   const html = await page.content();
-  const detected = await detectWithConsent(page, html, networkRequests);
+  const encoded = await extractEncodedMarkup(page);
+  const corpus = encoded ? html + "\n" + encoded : html;
+  const detected = await detectWithConsent(page, corpus, networkRequests);
   const links = await page.evaluate(() =>
     Array.from(document.querySelectorAll("a[href]"), (a) => a.href)
   );
@@ -1244,7 +1332,7 @@ function stripAnchorHrefs(html) {
   );
 }
 
-function detectPlayers(html, networkRequests) {
+export function detectPlayers(html, networkRequests) {
   const searchable = stripAnchorHrefs(html);
   const found = [];
 
@@ -1617,4 +1705,6 @@ async function main() {
   }
 }
 
-main();
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  main();
+}

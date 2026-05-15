@@ -13,6 +13,7 @@
     "build:dashboard": "vite build src/dashboard",
     "start": "node dist/server/index.js",
     "test": "vitest",
+    "test:videoscan": "node --test src/videoscan/scan.test.mjs",
     "migrate": "tsx src/core/db/migrate.ts",
     "dev": "concurrently --kill-others \"npm:dev:server\" \"npm:dev:dashboard\"",
     "postinstall": "npx playwright install chromium",
