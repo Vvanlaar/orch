@@ -31,7 +31,7 @@ import { initSettings } from '../core/settings.js';
 import { isSupabaseConfigured, MACHINE_ID } from '../core/db/client.js';
 import { dbGetNotifications, dbInsertNotification } from '../core/db/notifications.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
-import { getVideoscanDir, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, setVideoscanControl, pauseVideoscan, findLatestScanFileForDomain, isVideoscanRunning, deleteScans } from '../core/videoscan-runner.js';
+import { getVideoscanDir, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, pauseVideoscan, findLatestScanFileForDomain, isVideoscanRunning, deleteScans } from '../core/videoscan-runner.js';
 import { isPidAlive, killProcessTree } from '../core/process-kill.js';
 import { createSignedUrl, downloadFile } from '../core/db/storage.js';
 import { dbArchiveVideoscans } from '../core/db/videoscans.js';
@@ -371,7 +371,9 @@ app.post('/api/tasks/:id/resume', asyncHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
-// Live videoscan control: bump concurrency / delay on a running scan
+// Legacy videoscan control endpoint — concurrency / delay are auto-tuned now,
+// so this endpoint accepts requests but applies nothing. Kept so older dashboard
+// builds don't see 404s during a rolling deploy.
 app.post('/api/tasks/:id/videoscan-control', asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id as string);
   const task = await getTask(id);
@@ -379,28 +381,7 @@ app.post('/api/tasks/:id/videoscan-control', asyncHandler(async (req, res) => {
     res.status(404).json({ error: 'Videoscan task not found' });
     return;
   }
-  if (task.status !== 'running') {
-    res.status(400).json({ error: 'Task not running' });
-    return;
-  }
-  if (task.machineId && task.machineId !== MACHINE_ID) {
-    res.status(400).json({ error: `Task running on ${task.machineId}, not this machine` });
-    return;
-  }
-  const { concurrency, delay } = req.body || {};
-  const hasValid =
-    (typeof concurrency === 'number' && concurrency >= 1 && concurrency <= 64) ||
-    (typeof delay === 'number' && delay >= 0 && delay <= 60_000);
-  if (!hasValid) {
-    res.status(400).json({ error: 'Provide concurrency (1-64) and/or delay (0-60000ms)' });
-    return;
-  }
-  const ok = setVideoscanControl(id, { concurrency, delay });
-  if (!ok) {
-    res.status(409).json({ error: 'Task has no live control file (not running on this server process)' });
-    return;
-  }
-  res.json({ success: true, concurrency, delay });
+  res.json({ success: true, note: 'concurrency is auto-tuned; payload ignored' });
 }));
 
 // Delete task
@@ -1650,7 +1631,7 @@ app.post('/api/actions/review-resolution', asyncHandler(async (req, res) => {
 // --- Videoscan API ---
 
 app.post('/api/actions/start-videoscan', asyncHandler(async (req, res) => {
-  const { url, maxPages, concurrency, delay, batchId, batchLabel } = req.body;
+  const { url, maxPages, delay, batchId, batchLabel } = req.body;
   if (!url || typeof url !== 'string') {
     res.status(400).json({ error: 'url required' });
     return;
@@ -1663,7 +1644,6 @@ app.post('/api/actions/start-videoscan', asyncHandler(async (req, res) => {
     title: `Videoscan: ${new URL(url).hostname}`,
     scanUrl: url,
     maxPages: maxPages || 50,
-    concurrency: concurrency || 6,
     delay: delay ?? 200,
     ...(typeof batchId === 'string' && batchId ? { batchId } : {}),
     ...(typeof batchLabel === 'string' && batchLabel ? { batchLabel } : {}),
@@ -1674,7 +1654,7 @@ app.post('/api/actions/start-videoscan', asyncHandler(async (req, res) => {
 }));
 
 app.post('/api/actions/start-videoscan-urls', asyncHandler(async (req, res) => {
-  const { urls, maxPages, concurrency, delay, batchId, batchLabel } = req.body;
+  const { urls, maxPages, delay, batchId, batchLabel } = req.body;
   if (!Array.isArray(urls) || urls.length === 0 || urls.length > 500) {
     res.status(400).json({ error: 'urls must be an array of 1-500 URLs' });
     return;
@@ -1690,7 +1670,6 @@ app.post('/api/actions/start-videoscan-urls', asyncHandler(async (req, res) => {
     scanUrl: urls[0],
     urls,
     maxPages: maxPages || 50,
-    concurrency: concurrency || 6,
     delay: delay ?? 200,
     ...(typeof batchId === 'string' && batchId ? { batchId } : {}),
     ...(typeof batchLabel === 'string' && batchLabel ? { batchLabel } : {}),
@@ -1701,7 +1680,7 @@ app.post('/api/actions/start-videoscan-urls', asyncHandler(async (req, res) => {
 }));
 
 app.post('/api/actions/resume-videoscan', asyncHandler(async (req, res) => {
-  const { maxPages, concurrency, delay } = req.body;
+  const { maxPages, delay } = req.body;
   const filename = validateScanFilename(req.body?.filename);
   if (!filename) {
     res.status(400).json({ error: 'valid filename required' });
@@ -1736,7 +1715,6 @@ app.post('/api/actions/resume-videoscan', asyncHandler(async (req, res) => {
     title: `Resume videoscan: ${domain}`,
     scanUrl,
     maxPages: maxPages || 200,
-    concurrency: concurrency || 6,
     resumeFile: resumePath,
     delay: delay ?? 200,
     ...(batchId ? { batchId } : {}),
@@ -1748,7 +1726,7 @@ app.post('/api/actions/resume-videoscan', asyncHandler(async (req, res) => {
 }));
 
 app.post('/api/actions/add-urls-to-scan', asyncHandler(async (req, res) => {
-  const { urls, concurrency, delay } = req.body;
+  const { urls, delay } = req.body;
   const filename = validateScanFilename(req.body?.filename);
   if (!filename) {
     res.status(400).json({ error: 'valid filename required' });
@@ -1789,7 +1767,6 @@ app.post('/api/actions/add-urls-to-scan', asyncHandler(async (req, res) => {
     scanUrl: urls[0],
     urls,
     targetFilename: filename,
-    concurrency: concurrency || 6,
     delay: delay ?? 200,
   });
   triggerUpdate();

@@ -48,26 +48,26 @@ export interface BatchCtx {
   label: string;
 }
 
-export function startScan(url: string, maxPages: number, concurrency: number, delay: number, batch?: BatchCtx) {
+export function startScan(url: string, maxPages: number, delay: number, batch?: BatchCtx) {
   return apiJson('/api/actions/start-videoscan', {
-    url, maxPages, concurrency, delay,
+    url, maxPages, delay,
     ...(batch ? { batchId: batch.id, batchLabel: batch.label } : {}),
   });
 }
 
-export function startGroupScan(urls: string[], maxPages: number, concurrency: number, delay: number, batch?: BatchCtx) {
+export function startGroupScan(urls: string[], maxPages: number, delay: number, batch?: BatchCtx) {
   return apiJson('/api/actions/start-videoscan-urls', {
-    urls, maxPages, concurrency, delay,
+    urls, maxPages, delay,
     ...(batch ? { batchId: batch.id, batchLabel: batch.label } : {}),
   });
 }
 
-export function resumeScan(filename: string, maxPages: number, concurrency: number, delay: number) {
-  return apiJson('/api/actions/resume-videoscan', { filename, maxPages, concurrency, delay });
+export function resumeScan(filename: string, maxPages: number, delay: number) {
+  return apiJson('/api/actions/resume-videoscan', { filename, maxPages, delay });
 }
 
-export function addUrlsToScan(filename: string, urls: string[], concurrency: number, delay: number) {
-  return apiJson('/api/actions/add-urls-to-scan', { filename, urls, concurrency, delay });
+export function addUrlsToScan(filename: string, urls: string[], delay: number) {
+  return apiJson('/api/actions/add-urls-to-scan', { filename, urls, delay });
 }
 
 export interface ReportOptions {

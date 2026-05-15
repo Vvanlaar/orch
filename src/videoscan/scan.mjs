@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { chromium } from "playwright";
 import chalk from "chalk";
-import { readFileSync, writeFileSync, existsSync, statSync } from "fs";
-import { basename } from "path";
+import { readFileSync, writeFileSync, existsSync, statSync, readdirSync, unlinkSync } from "fs";
+import { basename, dirname, join } from "path";
 import { fileURLToPath } from "url";
+import os from "node:os";
 import { acquire } from "./wake-lock.mjs";
 
 // ── Video Player Detectors ──────────────────────────────────────────
@@ -971,9 +972,106 @@ async function scanFirstPage(context, url, timeout) {
   return { detected, links };
 }
 
-const DEFAULT_CONCURRENCY = 6;
+// Initial guess before AutoTuner takes over (it'll converge within ~2 batches).
+function pickInitialConcurrency() {
+  const cpu = Math.max(1, os.cpus()?.length || 2);
+  return Math.min(8, Math.max(2, cpu));
+}
+const DEFAULT_CONCURRENCY = pickInitialConcurrency();
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ── AutoTuner ─────────────────────────────────────────────────────
+// Sizes per-scan concurrency based on (a) CPU load, (b) number of co-active
+// sibling scans (read from a heartbeat directory), (c) how many siblings share
+// our hostname. The rate-limiter (onRateLimit) still owns the floor when 429s
+// happen — AutoTuner only proposes targets and nudges one step per batch.
+//
+// No IPC: each scan writes _heartbeat-{taskId}.json to the videoscan dir every
+// batch and reads sibling files. Stale > 30s = ignored. controlFile path is
+// the only hint we have for our own taskId + dir; without it (e.g. raw CLI
+// invocation) the tuner still works but with peer count = 1 always.
+function createAutoTuner(controlFile) {
+  const cpuCount = Math.max(1, os.cpus()?.length || 2);
+  let heartbeatPath = null;
+  let selfId = null;
+  let heartbeatDir = null;
+  if (controlFile) {
+    const m = basename(controlFile).match(/_control-(.+)\.json$/);
+    if (m) {
+      selfId = m[1];
+      heartbeatDir = dirname(controlFile);
+      heartbeatPath = join(heartbeatDir, `_heartbeat-${selfId}.json`);
+    }
+  }
+
+  function writeHeartbeat(throttle, hostname) {
+    if (!heartbeatPath) return;
+    try {
+      writeFileSync(heartbeatPath, JSON.stringify({
+        taskId: selfId, hostname, concurrency: throttle.concurrency, ts: Date.now(),
+      }));
+    } catch { /* best-effort */ }
+  }
+
+  function readPeers() {
+    if (!heartbeatDir) return { total: 1, sameHost: 1 };
+    let files;
+    try { files = readdirSync(heartbeatDir); } catch { return { total: 1, sameHost: 1 }; }
+    const cutoff = Date.now() - 30_000;
+    const peers = [];
+    for (const f of files) {
+      if (!f.startsWith('_heartbeat-') || !f.endsWith('.json')) continue;
+      try {
+        const data = JSON.parse(readFileSync(join(heartbeatDir, f), 'utf-8'));
+        if (typeof data.ts === 'number' && data.ts >= cutoff) peers.push(data);
+      } catch { /* skip unreadable/stale */ }
+    }
+    return { total: Math.max(1, peers.length), peers };
+  }
+
+  function cleanup() {
+    if (!heartbeatPath) return;
+    try { unlinkSync(heartbeatPath); } catch {}
+  }
+
+  // Called once per batch. Returns nothing; mutates throttle.baseConcurrency
+  // (and throttle.concurrency where it doesn't conflict with rate-limit floor).
+  function proposeNext(throttle, hostname) {
+    writeHeartbeat(throttle, hostname);
+
+    // CPU load factor. loadavg() returns 0 on Windows — fall back to 0 (no
+    // penalty). 1.0 ≈ saturated; <0.7 = comfortable headroom.
+    const load = os.loadavg?.()[0] ?? 0;
+    const loadFactor = Math.min(2, Math.max(0, load / cpuCount));
+
+    const softCap = Math.max(2, cpuCount);
+    const loadBudget = softCap * Math.max(0.25, 1.2 - loadFactor);
+
+    const { total, peers = [] } = readPeers();
+    const sameHost = peers.filter(p => p.hostname === hostname).length;
+    // If multiple scans hit the same host, halve each scan's share to spread
+    // the rate-limit budget. Different hosts split CPU evenly.
+    const hostPenalty = sameHost > 1 ? sameHost : 1;
+    const share = Math.max(2, Math.floor(loadBudget / total / hostPenalty));
+    const target = Math.min(share, softCap);
+
+    // Don't grow base during rate-limit cooldown — tryRecover() owns climb-back.
+    if (Date.now() < throttle.cooldownUntil) return;
+
+    // Step baseConcurrency one tick toward target (±1) to dampen load noise.
+    if (throttle.baseConcurrency < target) throttle.baseConcurrency++;
+    else if (throttle.baseConcurrency > target) throttle.baseConcurrency--;
+
+    // Cap live concurrency if AutoTuner just lowered the ceiling.
+    if (throttle.concurrency > throttle.baseConcurrency) {
+      throttle.concurrency = throttle.baseConcurrency;
+    }
+    throttle.minConcurrency = Math.min(throttle.minConcurrency, throttle.concurrency);
+  }
+
+  return { proposeNext, cleanup };
+}
 
 function createThrottleState(delay, concurrency) {
   return {
@@ -1018,16 +1116,16 @@ function tryRecover(throttle) {
   throttle.concurrency = Math.min(throttle.baseConcurrency, throttle.concurrency + 1);
 }
 
-// Live control file: { concurrency?: number, delay?: number, paused?: boolean }.
-// Re-applied only when the file's mtime changes, so the rate-limiter's backoff (onRateLimit)
-// and recovery (tryRecover) aren't overwritten every batch.
+// Live control file: { paused?: boolean }.
+// Concurrency / delay used to be settable here; the AutoTuner owns those now.
+// Legacy fields are silently ignored so old control files don't crash anything.
 function applyControlFile(throttle, controlFile) {
   if (!controlFile) return;
   let mtimeMs;
   try {
     mtimeMs = statSync(controlFile).mtimeMs;
   } catch {
-    return; // file doesn't exist or unreadable
+    return;
   }
   if (throttle._lastControlMtime === mtimeMs) return;
   throttle._lastControlMtime = mtimeMs;
@@ -1039,28 +1137,6 @@ function applyControlFile(throttle, controlFile) {
   } catch (err) {
     console.log(chalk.yellow(`  ⚠ Control file parse error: ${err.message}`));
     return;
-  }
-  let changed = false;
-  if (typeof ctrl.concurrency === 'number' && ctrl.concurrency >= 1 && ctrl.concurrency <= 64) {
-    const next = Math.floor(ctrl.concurrency);
-    if (next !== throttle.baseConcurrency) {
-      throttle.baseConcurrency = next;
-      // Cap current concurrency if user lowered base; otherwise let tryRecover() climb back up to new base.
-      throttle.concurrency = Math.min(next, throttle.concurrency);
-      changed = true;
-    }
-  }
-  if (typeof ctrl.delay === 'number' && ctrl.delay >= 0 && ctrl.delay <= 60_000) {
-    const next = Math.floor(ctrl.delay);
-    if (next !== throttle.baseDelay) {
-      throttle.baseDelay = next;
-      // Raise floor only — don't undo rate-limit backoff that pushed delay above base.
-      throttle.delay = Math.max(next, throttle.delay);
-      changed = true;
-    }
-  }
-  if (changed) {
-    console.log(chalk.magenta(`  ⚡ Live control: concurrency=${throttle.concurrency} (base=${throttle.baseConcurrency}), delay=${throttle.delay}ms (base=${throttle.baseDelay}ms)`));
   }
   if (ctrl.paused === true && !interrupted) {
     interrupted = true;
@@ -1100,6 +1176,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   let results = [];
 
   const throttle = createThrottleState(delay, concurrency);
+  const autoTuner = createAutoTuner(controlFile);
   const retryCount = new Map();
   const MAX_RETRIES = 2;
 
@@ -1296,6 +1373,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     if (!batchHadRateLimit && throttle.rateLimitHits > 0) {
       tryRecover(throttle);
     }
+    autoTuner.proposeNext(throttle, domain);
 
     // Progress stats every 30s
     if (Date.now() - lastProgressAt > 30_000) {
@@ -1304,7 +1382,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       const ppm = elapsed > 0 ? (newlyScanned / elapsed).toFixed(1) : "0.0";
       const remaining = Math.min(queue.length, maxPages - visited.size);
       const etaMin = ppm > 0 ? (remaining / ppm).toFixed(1) : "?";
-      console.log(chalk.cyan(`  ── ${ppm} pages/min | queue=${queue.length} | ~${etaMin}min left | delay=${throttle.delay}ms | concurrency=${throttle.concurrency}`));
+      console.log(chalk.cyan(`  ── ${ppm} pages/min | queue=${queue.length} | ~${etaMin}min left | delay=${throttle.delay}ms | auto-conc=${throttle.concurrency} (base=${throttle.baseConcurrency})`));
       lastProgressAt = Date.now();
     }
 
@@ -1313,6 +1391,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   }
 
   await browser.close();
+  autoTuner.cleanup();
 
   return {
     domain,
@@ -1374,11 +1453,12 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
   const results = [];
 
   const throttle = createThrottleState(delay, concurrency);
+  const autoTuner = createAutoTuner(controlFile);
   const retryCount = new Map();
   const MAX_RETRIES = 2;
 
   console.log(chalk.blue(`\nScanning ${urls.length} explicit URLs (domain: ${domain})`));
-  console.log(chalk.gray(`Timeout per page: ${timeout}ms, Concurrency: ${concurrency}, Delay: ${delay}ms\n`));
+  console.log(chalk.gray(`Timeout per page: ${timeout}ms, auto-conc=${throttle.concurrency} (initial), Delay: ${delay}ms\n`));
 
   setupInterruptHandler();
 
@@ -1458,9 +1538,11 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
     }
 
     if (throttle.rateLimitHits > 0) tryRecover(throttle);
+    autoTuner.proposeNext(throttle, domain);
   }
 
   await browser.close();
+  autoTuner.cleanup();
 
   const visited = results.map(r => r.url);
   return {
@@ -1597,19 +1679,21 @@ ${chalk.bold("Gebruik:")}
 ${chalk.bold("Opties:")}
   --max-pages <n>       Max pagina's te scannen (standaard: 50)
   --timeout <ms>        Timeout per pagina in ms (standaard: 15000)
-  --concurrency <n>     Pagina's tegelijk scannen (standaard: 6)
   --delay <ms>          Vertraging tussen batches in ms (standaard: 200)
   --resume <json-file>  Hervat scan vanuit eerder resultaat
   --urls <urls|file>    Scan explicit URLs (comma-separated or JSON file path)
   --no-sitemap          Skip sitemap-based URL discovery
   --max-sitemap-urls <n> Max URLs uit sitemap toevoegen aan queue (standaard: 5000)
-  --control-file <path> JSON file polled per batch for live { concurrency, delay, paused } overrides
+  --control-file <path> JSON file polled per batch for live { paused } overrides
   --batch-id <id>       Stamp scan output with a batch identifier (for grouping in dashboard)
   --batch-label <text>  Stamp scan output with a human-readable batch label
 
+Concurrency is auto-tuned per batch based on CPU load and the number of
+co-active sibling scans; there is no manual --concurrency knob.
+
 ${chalk.bold("Voorbeelden:")}
   node scan.mjs https://www.menzis.nl
-  node scan.mjs https://www.menzis.nl --max-pages 100 --concurrency 10
+  node scan.mjs https://www.menzis.nl --max-pages 100
   node scan.mjs https://www.menzis.nl --resume videoscan-menzis.nl-2026-03-06.json --max-pages 400
   node scan.mjs --urls https://example.com/page1,https://example.com/page2
   node scan.mjs --urls urls.json
@@ -1630,7 +1714,7 @@ async function main() {
   process.on('unhandledRejection', err => { release(); console.error(err); process.exit(1); });
 
   const timeout = parseInt(args[args.indexOf("--timeout") + 1]) || 15000;
-  const concurrency = parseInt(args[args.indexOf("--concurrency") + 1]) || DEFAULT_CONCURRENCY;
+  const concurrency = DEFAULT_CONCURRENCY; // auto-tuned at runtime by createAutoTuner
   const delay = parseInt(args[args.indexOf("--delay") + 1]) || 200;
   const controlFileIdx = args.indexOf("--control-file");
   const controlFile = controlFileIdx !== -1 ? args[controlFileIdx + 1] : null;

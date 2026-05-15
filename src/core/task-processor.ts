@@ -368,7 +368,6 @@ async function processVideoscan(task: Task): Promise<void> {
     const result = await runVideoscan(task.id, {
       scanUrl: ctx.scanUrl || ctx.urls?.[0] || '',
       maxPages: ctx.maxPages,
-      concurrency: ctx.concurrency,
       resumeFile: ctx.resumeFile,
       delay: ctx.delay,
       urls: ctx.urls,
@@ -818,7 +817,6 @@ export async function startProcessor(intervalMs?: number): Promise<void> {
           title: `Resume videoscan: ${domain}`,
           scanUrl: t.context.scanUrl,
           maxPages: t.context.maxPages ?? 200,
-          concurrency: t.context.concurrency,
           delay: t.context.delay,
           resumeFile: resumePath,
           ...(t.context.batchId ? { batchId: t.context.batchId } : {}),

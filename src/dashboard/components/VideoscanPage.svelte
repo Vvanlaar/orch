@@ -10,7 +10,6 @@
 
   let url = $state('');
   let maxPages = $state(20000);
-  let concurrency = $state(6);
   let delay = $state(200);
   let starting = $state(false);
   let error = $state('');
@@ -193,7 +192,7 @@
     starting = true;
     error = '';
     try {
-      await startScan(url, maxPages, concurrency, delay);
+      await startScan(url, maxPages, delay);
       url = '';
       setTimeout(() => fetchScans(), 2000);
     } catch (err: any) {
@@ -255,7 +254,7 @@
     for (const group of bulkPlan) {
       for (const crawlUrl of group.crawls) {
         try {
-          await startScan(crawlUrl, maxPages, concurrency, delay, batch);
+          await startScan(crawlUrl, maxPages, delay, batch);
         } catch (err: any) {
           errors.push(`${group.domain} (crawl ${crawlUrl}): ${err.message}`);
         }
@@ -263,7 +262,7 @@
       }
       if (group.explicit.length > 0) {
         try {
-          await startGroupScan(group.explicit, maxPages, concurrency, delay, batch);
+          await startGroupScan(group.explicit, maxPages, delay, batch);
         } catch (err: any) {
           errors.push(`${group.domain} (explicit): ${err.message}`);
         }
@@ -281,7 +280,7 @@
 
   async function handleResume(scan: ScanSummary) {
     try {
-      await resumeScan(scan.filename, maxPages, concurrency, delay);
+      await resumeScan(scan.filename, maxPages, delay);
       setTimeout(() => fetchScans(), 2000);
     } catch (err: any) {
       error = err.message;
@@ -318,7 +317,7 @@
     if (urls.length === 0) return;
     addUrlsSubmitting = true;
     try {
-      await addUrlsToScan(scan.filename, urls, concurrency, delay);
+      await addUrlsToScan(scan.filename, urls, delay);
       addingUrlsTo = null;
       addUrlsText = '';
       setTimeout(() => fetchScans(), 2000);
@@ -386,7 +385,7 @@
 
     for (const crawlUrl of urlListPlan.crawls) {
       try {
-        await startScan(crawlUrl, maxPages, concurrency, delay, batch);
+        await startScan(crawlUrl, maxPages, delay, batch);
       } catch (err: any) {
         errors.push(`crawl ${crawlUrl}: ${err.message}`);
       }
@@ -394,7 +393,7 @@
     }
     if (urlListPlan.explicit.length > 0) {
       try {
-        await startGroupScan(urlListPlan.explicit, maxPages, concurrency, delay, batch);
+        await startGroupScan(urlListPlan.explicit, maxPages, delay, batch);
       } catch (err: any) {
         errors.push(`explicit: ${err.message}`);
       }
@@ -521,10 +520,6 @@
         <label class="cmd-opt">
           <span>Pages</span>
           <input type="number" min="1" max="50000" bind:value={maxPages} />
-        </label>
-        <label class="cmd-opt">
-          <span>Threads</span>
-          <input type="number" min="1" max="20" bind:value={concurrency} />
         </label>
         <label class="cmd-opt">
           <span>Delay</span>

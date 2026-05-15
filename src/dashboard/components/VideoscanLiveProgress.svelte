@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import type { Task } from '../lib/types';
-  import { getTaskOutput, setVideoscanControl, pauseVideoscanTask, resumeVideoscanTask } from '../stores/tasks.svelte';
+  import { getTaskOutput, pauseVideoscanTask, resumeVideoscanTask } from '../stores/tasks.svelte';
   import { parseScanProgress, formatDuration, effectivePlanned } from '../lib/videoscan-progress';
 
   let { task, expanded = false, onToggleExpand }: {
@@ -17,41 +17,9 @@
   let output = $derived(getTaskOutput(task.id));
   let progress = $derived(parseScanProgress(output, task.context?.maxPages ?? 0));
 
-  let displayConc = $derived(progress.baseConcurrency ?? progress.concurrency ?? task.context?.concurrency ?? null);
-
-  let showConc = $state(false);
-  let concInput = $state<number | null>(null);
-  let concBusy = $state(false);
-  let concError = $state<string | null>(null);
-
-  // Close the concurrency popover on Escape — outside-click handled by toggling
-  // the chip again; the popover is part of the card so most clicks land on it.
-  $effect(() => {
-    if (!showConc) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') showConc = false;
-    }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  });
-
-  async function bumpConc(delta: number) {
-    const base = displayConc ?? 6;
-    await applyConc(Math.max(1, Math.min(64, base + delta)));
-  }
-
-  async function applyConc(value: number) {
-    concBusy = true;
-    concError = null;
-    try {
-      await setVideoscanControl(task.id, { concurrency: value });
-      concInput = null;
-    } catch (err) {
-      concError = err instanceof Error ? err.message : String(err);
-    } finally {
-      concBusy = false;
-    }
-  }
+  // Auto-tuned per batch by scan.mjs; surface current + base for visibility.
+  let displayConc = $derived(progress.concurrency ?? progress.baseConcurrency ?? null);
+  let displayBase = $derived(progress.baseConcurrency ?? null);
 
   let startTs = $derived.by(() => {
     const s = task.startedAt || task.createdAt;
@@ -114,18 +82,13 @@
       </button>
     {/if}
     {#if isRunning && displayConc !== null}
-      <button
-        class="vsp-chip"
-        class:open={showConc}
-        onclick={() => (showConc = !showConc)}
-        title="Concurrency"
-      >
+      <span class="vsp-chip" title="Auto-tuned concurrency (CPU + co-active scans)">
         <span class="vsp-chip-ico">⚙</span>
-        <span>{displayConc}</span>
-        {#if progress.concurrency !== null && progress.baseConcurrency !== null && progress.concurrency !== progress.baseConcurrency}
-          <span class="vsp-chip-live">→{progress.concurrency}</span>
+        <span>auto: {displayConc}</span>
+        {#if displayBase !== null && displayBase !== displayConc}
+          <span class="vsp-chip-live">/ {displayBase}</span>
         {/if}
-      </button>
+      </span>
     {/if}
     {#if isRunning && canPause}
       <button class="vsp-pause" onclick={handlePause} disabled={pauseBusy} title="Pause this scan — state is saved" aria-label="Pause">
@@ -162,29 +125,6 @@
     {/if}
   </div>
 
-  {#if showConc && isRunning}
-    <div class="vsp-conc">
-      <span class="vsp-conc-lbl">Concurrency</span>
-      <button class="vsp-btn" onclick={() => bumpConc(-1)} disabled={concBusy} aria-label="Decrease concurrency">−</button>
-      <span class="vsp-conc-val">{displayConc ?? '?'}</span>
-      <button class="vsp-btn" onclick={() => bumpConc(+1)} disabled={concBusy} aria-label="Increase concurrency">+</button>
-      <input
-        class="vsp-input"
-        type="number"
-        min="1"
-        max="64"
-        placeholder="set"
-        bind:value={concInput}
-        disabled={concBusy}
-      />
-      <button
-        class="vsp-btn apply"
-        onclick={() => concInput && applyConc(concInput)}
-        disabled={concBusy || !concInput}
-      >Set</button>
-      {#if concError}<span class="vsp-conc-err">{concError}</span>{/if}
-    </div>
-  {/if}
 </div>
 
 <style>
@@ -262,19 +202,11 @@
     font-size: 10px;
     font-family: ui-monospace, monospace;
     font-weight: 700;
-    cursor: pointer;
-    transition: background 0.15s, border-color 0.15s, color 0.15s;
     display: inline-flex; gap: 4px; align-items: center;
     line-height: 1.4;
   }
-  .vsp-chip:hover { background: rgba(255,255,255,0.08); color: var(--text); }
-  .vsp-chip.open {
-    background: var(--accent-dim, #0c3d4a);
-    border-color: var(--accent, #06b6d4);
-    color: var(--accent-bright, #22d3ee);
-  }
   .vsp-chip-ico { opacity: 0.7; font-size: 9px; }
-  .vsp-chip-live { color: var(--accent-bright, #22d3ee); font-weight: 600; }
+  .vsp-chip-live { color: var(--text-muted); font-weight: 500; }
 
   /* === Pause button === */
   .vsp-pause {
@@ -380,59 +312,5 @@
   .vsp-stat.eta strong { color: var(--accent-bright, #22d3ee); }
   .vsp-sep { opacity: 0.4; }
 
-  /* === Concurrency popover === */
-  .vsp-conc {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
-    margin-top: 9px;
-    padding-top: 9px;
-    border-top: 1px dashed var(--border-subtle);
-  }
-  .vsp-conc-lbl {
-    font-size: 9px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--text-muted);
-  }
-  .vsp-conc-val {
-    font-family: ui-monospace, monospace;
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--text);
-    min-width: 18px;
-    text-align: center;
-  }
-  .vsp-btn {
-    background: rgba(255,255,255,0.04);
-    border: 1px solid var(--border-subtle);
-    color: var(--text);
-    border-radius: 3px;
-    padding: 2px 8px;
-    font-size: 11px;
-    cursor: pointer;
-    line-height: 1.4;
-  }
-  .vsp-btn:hover:not(:disabled) { background: rgba(255,255,255,0.08); }
-  .vsp-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-  .vsp-btn.apply {
-    background: var(--accent, #06b6d4);
-    color: #001;
-    border-color: transparent;
-    font-weight: 700;
-  }
-  .vsp-input {
-    width: 44px;
-    background: rgba(255,255,255,0.04);
-    border: 1px solid var(--border-subtle);
-    color: var(--text);
-    border-radius: 3px;
-    padding: 2px 6px;
-    font-size: 11px;
-    font-family: ui-monospace, monospace;
-  }
-  .vsp-conc-err { font-size: 10px; color: #f87171; }
   .vsp-err { font-size: 11px; color: #f87171; margin-bottom: 6px; }
 </style>

@@ -56,6 +56,7 @@ export interface Task {
     urls?: string[];
     batchId?: string;
     batchLabel?: string;
+    /** @deprecated auto-tuned at runtime — kept for legacy task rows */
     concurrency?: number;
   };
 }

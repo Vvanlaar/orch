@@ -44,28 +44,6 @@ export function getVideoscanControlFile(taskId: number): string | undefined {
   return controlFiles.get(taskId);
 }
 
-export function setVideoscanControl(taskId: number, payload: { concurrency?: number; delay?: number }): boolean {
-  const path = controlFiles.get(taskId);
-  if (!path) return false;
-  const sanitized: Record<string, number> = {};
-  if (typeof payload.concurrency === 'number' && payload.concurrency >= 1 && payload.concurrency <= 64) {
-    sanitized.concurrency = Math.floor(payload.concurrency);
-  }
-  if (typeof payload.delay === 'number' && payload.delay >= 0 && payload.delay <= 60_000) {
-    sanitized.delay = Math.floor(payload.delay);
-  }
-  if (Object.keys(sanitized).length === 0) return false;
-  // Preserve any existing flags (notably `paused: true`) so a concurrency tweak between
-  // pause-write and scan.mjs's next poll doesn't silently unpause the scan.
-  let existing: Record<string, unknown> = {};
-  try {
-    const raw = readFileSync(path, 'utf-8');
-    if (raw.trim()) existing = JSON.parse(raw);
-  } catch { /* file may not exist yet — fine */ }
-  writeFileSync(path, JSON.stringify({ ...existing, ...sanitized }));
-  return true;
-}
-
 /** True while a scan.mjs subprocess for this task is still alive on this machine. */
 export function isVideoscanRunning(taskId: number): boolean {
   return runningProcesses.has(taskId);
@@ -124,7 +102,6 @@ function reportOptionsToArgs(options?: ReportOptions): string[] {
 export interface VideoscanOptions {
   scanUrl: string;
   maxPages?: number;
-  concurrency?: number;
   resumeFile?: string;
   delay?: number;
   urls?: string[];
@@ -154,7 +131,6 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
     args.push(options.scanUrl);
   }
   if (options.maxPages && !tempUrlFile) args.push('--max-pages', String(options.maxPages));
-  if (options.concurrency) args.push('--concurrency', String(options.concurrency));
   if (options.resumeFile) args.push('--resume', options.resumeFile);
   if (options.delay) args.push('--delay', String(options.delay));
   if (options.batchId) args.push('--batch-id', options.batchId);

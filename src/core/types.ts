@@ -64,6 +64,7 @@ export interface TaskContext {
   // Videoscan
   scanUrl?: string;
   maxPages?: number;
+  /** @deprecated concurrency is auto-tuned at runtime — kept on old task rows only */
   concurrency?: number;
   resumeFile?: string; // path to previous scan JSON for resume
   delay?: number; // inter-batch delay in ms for rate limit throttling

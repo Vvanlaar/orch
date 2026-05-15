@@ -12,7 +12,8 @@ export interface ScanProgress {
 const ANSI = /\x1b\[[0-9;]*m/g;
 
 const SUMMARY = /(\d+(?:\.\d+)?)\s*pages\/min\s*\|\s*queue=(\d+)\s*\|\s*~(\d+(?:\.\d+)?|\?)\s*min\s*left/i;
-const SUMMARY_CONC = /\bconcurrency=(\d+)/i;
+// Match both the new `auto-conc=N (base=M)` line and the legacy `concurrency=N` line.
+const SUMMARY_CONC = /\b(?:auto-conc|concurrency)=(\d+)(?:\s*\(base=(\d+)\))?/i;
 const CONTROL = /Live control:\s*concurrency=(\d+)(?:\s*\(base=(\d+)\))?/i;
 const PER_URL = /\[(\d+)\/(\d+)\](?:\s*\(queue:\s*(\d+)\))?/;
 const RESUME = /Previously scanned:\s*(\d+)\s*pages,\s*Queue:\s*(\d+)\s*URLs/i;
@@ -41,7 +42,10 @@ export function parseScanProgress(rawOutput: string, maxPagesHint: number): Scan
       result.queue = parseInt(m[2], 10);
       result.etaMin = m[3] === '?' ? null : parseFloat(m[3]);
       const c = lines[i].match(SUMMARY_CONC);
-      if (c) result.concurrency = parseInt(c[1], 10);
+      if (c) {
+        result.concurrency = parseInt(c[1], 10);
+        if (c[2]) result.baseConcurrency = parseInt(c[2], 10);
+      }
       result.hasData = true;
       summarySeen = true;
       break;
