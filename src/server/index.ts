@@ -44,6 +44,7 @@ import { createLogger, getRecentErrors } from '../core/logger.js';
 import { asyncHandler, expressErrorMiddleware, installProcessHandlers } from '../core/error-handler.js';
 import { adoRouter } from './webhooks/ado.js';
 import { githubRouter } from './webhooks/github.js';
+import { mountSupport } from './support.js';
 
 const log = createLogger('server');
 
@@ -231,6 +232,9 @@ app.get('/health', (_req, res) => {
 // Webhooks
 app.use('/webhooks/github', githubRouter);
 app.use('/webhooks/ado', adoRouter);
+
+// bb-support — Q&A flow ported from bb-support-web. Mounted at /api/support/*.
+mountSupport(app);
 
 // API for dashboard
 app.get('/api/tasks', asyncHandler(async (_req, res) => {
