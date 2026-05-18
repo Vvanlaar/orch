@@ -18,7 +18,8 @@
 //                              becomes the boundary. Bind must be loopback
 //                              or RFC1918 / link-local / fe80::.
 
-import type { Express, NextFunction, Request, Response } from 'express';
+import type { Express, NextFunction, Request, RequestHandler, Response } from 'express';
+import { asyncHandler } from '../core/error-handler.js';
 import { randomUUID } from 'node:crypto';
 import {
   appendFileSync,
@@ -126,7 +127,12 @@ type AuditEntry = {
 function appendAudit(entry: AuditEntry, path = AUDIT_FILE): void {
   if (!existsSync(path)) {
     mkdirSync(dirname(path), { recursive: true });
-    closeSync(openSync(path, 'wx', 0o600));
+    // 'wx' fails with EEXIST if a parallel writer raced us between the
+    // existsSync check and this open — in that case the file already has 0600
+    // (or whatever the racer set) and we can safely append. Ignore EEXIST;
+    // re-throw anything else.
+    try { closeSync(openSync(path, 'wx', 0o600)); }
+    catch (err) { if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err; }
   }
   appendFileSync(path, JSON.stringify(entry) + '\n');
 }
@@ -155,6 +161,7 @@ function rateLimiter(opts: { windowMs: number; limit: number; keyFn?: (req: Requ
 // Dynamic-import the bb-support library so orch's TypeScript build doesn't
 // statically depend on bb-skills. pathToFileURL keeps Windows / MSYS Git Bash
 // paths un-mangled.
+type RunStage = 'ok' | 'ask' | 'claude' | 'cancelled' | 'spawn';
 type RunSupportFn = (opts: {
   question: string;
   keyFile?: string;
@@ -162,7 +169,7 @@ type RunSupportFn = (opts: {
   format?: 'markdown' | 'html';
   onChunk: (text: string) => void;
   signal?: AbortSignal;
-}) => Promise<{ stage: string; exitCode: number | null; askStderr: string; claudeStderr: string }>;
+}) => Promise<{ stage: RunStage; exitCode: number | null; askStderr: string; claudeStderr: string }>;
 
 type ApplyMappingFn = (text: string, mappings: Record<string, string>) => string;
 
@@ -240,8 +247,9 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
   // Bearer auth — Object.hasOwn check is critical: `tokens[m[1]]` alone would
   // return Object.prototype members (constructor, __proto__, toString) as
   // truthy, bypassing auth. Same posture for anonymous mode below.
-  function bearerAuth(req: AuthedRequest, res: Response, next: NextFunction): void {
-    const header = req.headers.authorization || '';
+  const bearerAuth: RequestHandler = (req, res, next) => {
+    const r = req as AuthedRequest;
+    const header = r.headers.authorization || '';
     const m = header.match(/^Bearer\s+(.+)$/);
     if (!m) {
       res.status(401).json({ error: 'bearer token required' });
@@ -252,22 +260,23 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
       res.status(401).json({ error: 'invalid token' });
       return;
     }
-    req.bearerToken = m[1];
-    req.tokenName = entry.name || 'unnamed';
+    r.bearerToken = m[1];
+    r.tokenName = entry.name || 'unnamed';
     next();
-  }
+  };
 
-  function anonymousAuth(req: AuthedRequest, _res: Response, next: NextFunction): void {
-    const header = req.headers.authorization || '';
+  const anonymousAuth: RequestHandler = (req, _res, next) => {
+    const r = req as AuthedRequest;
+    const header = r.headers.authorization || '';
     const m = header.match(/^Bearer\s+(.+)$/);
-    const token = m ? m[1] : null;
-    const entry = token && Object.hasOwn(tokens, token) ? tokens[token] : null;
-    req.bearerToken = entry ? token : null;
-    req.tokenName = entry ? (entry.name || 'unnamed') : 'anonymous';
+    const tk = m ? m[1] : null;
+    const entry = tk && Object.hasOwn(tokens, tk) ? tokens[tk] : null;
+    r.bearerToken = entry ? tk : null;
+    r.tokenName = entry ? (entry.name || 'unnamed') : 'anonymous';
     next();
-  }
+  };
 
-  const auth = ALLOW_ANONYMOUS ? anonymousAuth : bearerAuth;
+  const auth: RequestHandler = ALLOW_ANONYMOUS ? anonymousAuth : bearerAuth;
 
   // Two budgets: /ask spawns claude (expensive); /reveal is a pure file read.
   // Sharing a bucket would punish the documented "ask → reveal N matches" flow.
@@ -291,8 +300,9 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
     res.json({ status: 'ok', authMode: ALLOW_ANONYMOUS ? 'anonymous' : 'token' });
   });
 
-  app.post('/api/support/ask', auth as never, askLimiter, async (req: AuthedRequest, res) => {
-    const body = (req.body || {}) as { question?: unknown; intent?: unknown };
+  app.post('/api/support/ask', auth, askLimiter, asyncHandler(async (req, res) => {
+    const r = req as AuthedRequest;
+    const body = (r.body || {}) as { question?: unknown; intent?: unknown };
     const question = body.question;
     const intent = body.intent ?? 'investigate';
     if (!question || typeof question !== 'string') {
@@ -322,7 +332,7 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
       controller,
       startedAt: Date.now(),
       keyFile,
-      ownerBearer: req.bearerToken ?? null,
+      ownerBearer: r.bearerToken ?? null,
       chunks: [],
       bufferedBytes: 0,
       bufferTruncated: false,
@@ -336,8 +346,8 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
 
     const auditBase = {
       ts: new Date().toISOString(),
-      ip: req.ip,
-      tokenName: req.tokenName ?? 'anonymous',
+      ip: r.ip,
+      tokenName: r.tokenName ?? 'anonymous',
       question,
     };
 
@@ -370,8 +380,10 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
         ? { stage }
         : { stage, error: (stage === 'claude' ? claudeStderr : askStderr).trim() || '(no detail)' };
       if (run.sseRes) {
-        run.sseRes.write(`event: done\ndata: ${JSON.stringify(run.terminal)}\n\n`);
-        run.sseRes.end();
+        try {
+          run.sseRes.write(`event: done\ndata: ${JSON.stringify(run.terminal)}\n\n`);
+          run.sseRes.end();
+        } catch { /* client disconnected mid-write; sse will be reaped */ }
       }
       try {
         appendAudit({ ...auditBase, status: stage, durationMs: Date.now() - run.startedAt });
@@ -383,8 +395,10 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
       run.done = true;
       run.terminal = { stage: 'spawn', error: err.message };
       if (run.sseRes) {
-        run.sseRes.write(`event: done\ndata: ${JSON.stringify(run.terminal)}\n\n`);
-        run.sseRes.end();
+        try {
+          run.sseRes.write(`event: done\ndata: ${JSON.stringify(run.terminal)}\n\n`);
+          run.sseRes.end();
+        } catch { /* client disconnected mid-write */ }
       }
       try {
         appendAudit({
@@ -396,7 +410,7 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
       }
       scheduleRunDelete(runId);
     });
-  });
+  }));
 
   // Drop a completed run from the Map after a short grace window so a late
   // EventSource attach (racing the resolve) can still pick up the buffered
@@ -436,21 +450,28 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
   });
 
   function attachSse(res: Response, req: Request, run: SupportRun): void {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-    });
-    res.write('\n');
+    try {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      });
+      res.write('\n');
 
-    run.sseRes = res;
-    for (const c of run.chunks) {
-      res.write(`event: chunk\ndata: ${JSON.stringify({ chunk: c })}\n\n`);
-    }
-    run.chunks = [];
-    if (run.done && run.terminal) {
-      res.write(`event: done\ndata: ${JSON.stringify(run.terminal)}\n\n`);
-      res.end();
+      run.sseRes = res;
+      for (const c of run.chunks) {
+        res.write(`event: chunk\ndata: ${JSON.stringify({ chunk: c })}\n\n`);
+      }
+      run.chunks = [];
+      if (run.done && run.terminal) {
+        res.write(`event: done\ndata: ${JSON.stringify(run.terminal)}\n\n`);
+        res.end();
+      }
+    } catch {
+      // Client tore down the TCP socket during the replay. Detach so the run's
+      // continuing chunks don't write to a dead response.
+      if (run.sseRes === res) run.sseRes = null;
+      return;
     }
 
     req.on('close', () => {
@@ -458,7 +479,28 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
     });
   }
 
-  app.post('/api/support/reveal', auth as never, revealLimiter, async (req: AuthedRequest, res) => {
+  // Cancel a run mid-stream. Authoritative: aborts the AbortController so the
+  // ask.mjs + claude subprocess tree is killed via the library's taskkill /T.
+  // Without this the only path to cancel was the 5-min reaper, even though the
+  // client's Cancel button suggested otherwise.
+  app.post('/api/support/cancel/:runId', auth, asyncHandler(async (req, res) => {
+    const r = req as AuthedRequest;
+    const runId = String(req.params.runId ?? '');
+    if (!UUID_RE.test(runId)) {
+      res.status(400).json({ error: 'runId must be UUID' });
+      return;
+    }
+    const run = supportRuns.get(runId);
+    if (!run) { res.status(404).json({ error: 'unknown runId' }); return; }
+    if (!ALLOW_ANONYMOUS && run.ownerBearer !== r.bearerToken) {
+      res.status(403).json({ error: 'not your run' });
+      return;
+    }
+    run.controller.abort();
+    res.status(202).json({ ok: true });
+  }));
+
+  app.post('/api/support/reveal', auth, revealLimiter, asyncHandler(async (req, res) => {
     const body = (req.body || {}) as { keyId?: unknown; text?: unknown };
     const { keyId, text } = body;
     if (!keyId || typeof keyId !== 'string' || !UUID_RE.test(keyId)) {
@@ -490,9 +532,12 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
       }
     }
     res.json({ mappings, decoded });
-  });
+  }));
 
   // Reapers: kill runaway runs at 5 min, unlink stale key files past 30 min.
+  // User-initiated cancel routes through POST /api/support/cancel/:runId
+  // (above) which aborts the controller; this reaper is the fallback for runs
+  // that nobody cancelled.
   const runReaper = setInterval(() => {
     const now = Date.now();
     for (const [runId, run] of supportRuns) {

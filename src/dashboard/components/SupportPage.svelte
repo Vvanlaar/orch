@@ -74,11 +74,13 @@
     try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history)); }
     catch (err) {
       // Quota: drop oldest half and retry once. If still failing, surface to user.
-      if (err && /quota/i.test((err as Error).name || (err as Error).message || '')) {
+      const isErr = err instanceof Error;
+      const sig = isErr ? (err.name || err.message || '') : String(err);
+      if (/quota/i.test(sig)) {
         history = history.slice(0, Math.floor(history.length / 2));
         try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history)); return; } catch { /* still failing */ }
       }
-      toast('Could not save to recents: ' + ((err as Error).message ?? 'unknown'));
+      toast('Could not save to recents: ' + (isErr ? err.message : 'unknown'));
     }
   }
 
@@ -252,6 +254,16 @@
   }
 
   function cancel(): void {
+    // Tell the server to abort the subprocess tree. Without this, closing the
+    // EventSource only detaches the client — claude keeps running until the
+    // 5-min server-side reaper.
+    if (currentRunId) {
+      const t = token.trim();
+      const headers: Record<string, string> = {};
+      if (t) headers['Authorization'] = `Bearer ${t}`;
+      fetch(`/api/support/cancel/${encodeURIComponent(currentRunId)}`, { method: 'POST', headers })
+        .catch(() => { /* best-effort; the reaper backstops it */ });
+    }
     if (activeStream) activeStream.close();
     connState = '';
     connLabel = 'cancelled';
