@@ -21,3 +21,8 @@ videoscan-*.json
 .superpowers/
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+.claude/skills/
+.agents/
+.playwright-cli/
+skills-lock.json
+*.stackdump
