@@ -18,12 +18,14 @@ export default defineConfig(({ mode }) => {
     server: {
       port: dashboardPort,
       proxy: {
+        // Use 127.0.0.1 explicitly — orch binds IPv4 only, and on Node 18+
+        // 'localhost' resolves to ::1 first which then fails to connect.
         '/api': {
-          target: `http://localhost:${backendPort}`,
+          target: `http://127.0.0.1:${backendPort}`,
           changeOrigin: true,
         },
         '/ws': {
-          target: `ws://localhost:${backendPort}`,
+          target: `ws://127.0.0.1:${backendPort}`,
           ws: true,
         },
       },

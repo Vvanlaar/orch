@@ -106,6 +106,7 @@
     if (route === '/') return '#f59e0b';
     if (route === '/tickets') return '#3b82f6';
     if (route === '/videoscan') return '#06b6d4';
+    if (route === '/support') return '#2dd4bf';
     return '#5e7389';
   }
 
@@ -135,6 +136,7 @@
       <a class="nav-tab" class:active={currentRoute === '/'} href="/" onclick={(e) => { e.preventDefault(); navigate('/'); }} style={currentRoute === '/' ? `border-bottom-color: ${tabAccent('/')}; color: ${tabAccent('/')}` : ''}>Dashboard</a>
       <a class="nav-tab" class:active={currentRoute === '/tickets'} href="/tickets" onclick={(e) => { e.preventDefault(); navigate('/tickets'); }} style={currentRoute === '/tickets' ? `border-bottom-color: ${tabAccent('/tickets')}; color: ${tabAccent('/tickets')}` : ''}>Tickets</a>
       <a class="nav-tab" class:active={currentRoute === '/videoscan'} href="/videoscan" onclick={(e) => { e.preventDefault(); navigate('/videoscan'); }} style={currentRoute === '/videoscan' ? `border-bottom-color: ${tabAccent('/videoscan')}; color: ${tabAccent('/videoscan')}` : ''}>Videoscan</a>
+      <a class="nav-tab" class:active={currentRoute === '/support'} href="/support" onclick={(e) => { e.preventDefault(); navigate('/support'); }} style={currentRoute === '/support' ? `border-bottom-color: ${tabAccent('/support')}; color: ${tabAccent('/support')}` : ''}>Support</a>
     </nav>
     <div class="usage-bars" title={updatedAt}>
       <span>5h</span>

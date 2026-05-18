@@ -18,6 +18,7 @@
   import OrchestratorChat from './components/OrchestratorChat.svelte';
   import ToastContainer from './components/ToastContainer.svelte';
   import VideoscanPage from './components/VideoscanPage.svelte';
+  import SupportPage from './components/SupportPage.svelte';
   import DashboardOverview from './components/DashboardOverview.svelte';
   import { getRoute } from './lib/router.svelte';
 
@@ -52,6 +53,8 @@
   <Header {refreshAll} {lastRefreshedAt} />
   {#if route === '/videoscan'}
     <VideoscanPage />
+  {:else if route === '/support'}
+    <SupportPage />
   {:else if route === '/tickets'}
     <WorkItems />
     <OrchestratorPanel />

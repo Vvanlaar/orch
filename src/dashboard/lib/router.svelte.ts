@@ -1,4 +1,4 @@
-const ROUTES = ['/', '/tickets', '/videoscan'] as const;
+const ROUTES = ['/', '/tickets', '/videoscan', '/support'] as const;
 export type Route = (typeof ROUTES)[number];
 
 function isRoute(path: string): path is Route {
