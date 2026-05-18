@@ -23,22 +23,22 @@
     "build:desktop": "pnpm build && cp -r dist/server dist/core dist/dashboard desktop/ && cd desktop && pnpm install && pnpm exec electron-builder --win"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.99.1",
+    "@supabase/supabase-js": "^2.106.0",
     "@types/cors": "^2.8.19",
     "chalk": "^5.3.0",
     "cors": "^2.8.6",
-    "dotenv": "^16.4.0",
-    "express": "^4.21.2",
-    "koffi": "^2.16.2",
-    "octokit": "^4.1.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "koffi": "^3.0.0",
+    "octokit": "^5.0.5",
     "playwright": "^1.49.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "^6.2.4",
+    "@sveltejs/vite-plugin-svelte": "^7.1.2",
     "@tailwindcss/vite": "^4.2.0",
-    "@types/express": "^5.0.0",
-    "@types/node": "^22.19.11",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.9.0",
     "@types/ws": "^8.5.13",
     "concurrently": "^9.2.1",
     "flowbite": "^4.0.1",
@@ -47,9 +47,9 @@
     "svelte": "^5.0.0",
     "svelte-check": "^4.4.8",
     "tailwindcss": "^4.2.0",
-    "tsx": "^4.19.0",
-    "typescript": "^5.7.0",
-    "vite": "^7.3.1",
+    "tsx": "^4.22.2",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.13",
     "vitest": "^4.0.18"
   }
 }

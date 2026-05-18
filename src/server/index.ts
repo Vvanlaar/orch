@@ -2146,7 +2146,7 @@ app.post('/api/notifications/incoming', asyncHandler(async (req, res) => {
 
 // SPA catch-all: serve index.html for non-API routes (client-side routing)
 if (hasDashboardBuild) {
-  app.get('*', (req, res, next) => {
+  app.get('/*splat', (req, res, next) => {
     if (req.path.startsWith('/api/') || req.path.startsWith('/ws')) return next();
     res.sendFile(dashboardIndexPath);
   });
