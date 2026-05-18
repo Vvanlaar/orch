@@ -16,20 +16,22 @@ Event-driven orchestrator that connects GitHub and Azure DevOps to Claude Code.
 
 ## Setup
 
+Requires pnpm 8+. Install via `npm i -g pnpm` or `corepack enable`.
+
 ```bash
-npm install
+pnpm install
 cp .env.example .env
 # Edit .env with your tokens and repo mapping
-npm run build      # Build server + dashboard
-npm start          # Production server
+pnpm build         # Build server + dashboard
+pnpm start         # Production server
 ```
 
 ### Development
 
 ```bash
-npm run dev           # Server + dashboard (hot reload)
-npm run dev:server    # Server only on :3011 (hot reload)
-npm run dev:dashboard # Vite dev server on :3010 (proxies API/WS to :3011)
+pnpm dev              # Server + dashboard (hot reload)
+pnpm dev:server       # Server only on :3011 (hot reload)
+pnpm dev:dashboard    # Vite dev server on :3010 (proxies API/WS to :3011)
 ```
 
 ## Tech Stack

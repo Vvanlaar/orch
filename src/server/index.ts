@@ -187,7 +187,7 @@ app.use(cors({ origin: [/^https?:\/\/localhost(:\d+)?$/, /^https?:\/\/127\.0\.0\
 app.use(express.json());
 
 // Dashboard - in dev, redirect to Vite (so a stale dist/dashboard/ from a
-// previous `npm run build` can't shadow live source). In prod, serve dist.
+// previous `pnpm build` can't shadow live source). In prod, serve dist.
 const distDashboard = process.env.DASHBOARD_DIR || join(__dirname, '../../dist/dashboard');
 const oldDashboard = join(__dirname, '../dashboard/index.old.html');
 
@@ -200,7 +200,7 @@ const hasDashboardBuild = existsSync(dashboardIndexPath);
 if (isDevServer) {
   const vitePort = process.env.DASHBOARD_PORT || '3010';
   if (hasDashboardBuild) {
-    log.warn(`dev mode: ignoring stale dist/dashboard/ — '/' redirects to Vite at :${vitePort}. Run 'npm run clean' to remove it.`);
+    log.warn(`dev mode: ignoring stale dist/dashboard/ — '/' redirects to Vite at :${vitePort}. Run 'pnpm clean' to remove it.`);
   } else {
     log.info(`dev mode: '/' redirects to Vite dev server at :${vitePort}`);
   }
@@ -219,7 +219,7 @@ if (isDevServer) {
 } else {
   // Built but no dashboard — explain.
   app.get('/', (_req, res) => {
-    res.send('Dashboard not built. Run npm run build:dashboard or use Vite dev server.');
+    res.send('Dashboard not built. Run pnpm build:dashboard or use Vite dev server.');
   });
 }
 

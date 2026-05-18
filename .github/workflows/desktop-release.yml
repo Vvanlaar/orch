@@ -14,12 +14,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 8.7.4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: 'pnpm'
 
       - name: Install and build server + dashboard
-        run: npm ci && npm run build
+        run: pnpm install --frozen-lockfile && pnpm build
 
       - name: Prepare desktop package
         shell: bash
@@ -30,11 +35,11 @@ jobs:
 
       - name: Install desktop deps
         working-directory: desktop
-        run: npm install
+        run: pnpm install
 
       - name: Build desktop app
         working-directory: desktop
-        run: npx electron-builder --win --publish never
+        run: pnpm exec electron-builder --win --publish never
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -60,12 +65,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 8.7.4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: 'pnpm'
 
       - name: Install and build server + dashboard
-        run: npm ci && npm run build
+        run: pnpm install --frozen-lockfile && pnpm build
 
       - name: Prepare desktop package
         shell: bash
@@ -76,11 +86,11 @@ jobs:
 
       - name: Install desktop deps
         working-directory: desktop
-        run: npm install
+        run: pnpm install
 
       - name: Build desktop app
         working-directory: desktop
-        run: npx electron-builder --${{ matrix.target }} --publish never
+        run: pnpm exec electron-builder --${{ matrix.target }} --publish never
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

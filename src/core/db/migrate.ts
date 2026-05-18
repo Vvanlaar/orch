@@ -1,7 +1,7 @@
 /**
  * One-time migration script: JSON files → Supabase
  *
- * Usage: npx tsx src/core/db/migrate.ts
+ * Usage: pnpm exec tsx src/core/db/migrate.ts
  */
 import 'dotenv/config';
 import { existsSync, readFileSync, readdirSync, statSync } from 'fs';

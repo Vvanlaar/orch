@@ -4,12 +4,13 @@
   "description": "Event-driven Claude Code orchestrator for GitHub and Azure DevOps",
   "type": "module",
   "main": "dist/server/index.js",
+  "packageManager": "pnpm@8.7.4",
   "scripts": {
     "dev:server": "tsx watch src/server/index.ts",
     "dev:dashboard": "vite src/dashboard",
     "clean": "rm -rf dist",
-    "build": "tsc && npm run build:dashboard",
-    "rebuild": "npm run clean && npm run build",
+    "build": "tsc && pnpm build:dashboard",
+    "rebuild": "pnpm clean && pnpm build",
     "build:dashboard": "vite build src/dashboard",
     "start": "node dist/server/index.js",
     "test": "vitest",
@@ -17,9 +18,9 @@
     "check": "svelte-check --tsconfig ./src/dashboard/tsconfig.json",
     "check:watch": "svelte-check --tsconfig ./src/dashboard/tsconfig.json --watch",
     "migrate": "tsx src/core/db/migrate.ts",
-    "dev": "concurrently --kill-others \"npm:dev:server\" \"npm:dev:dashboard\"",
-    "postinstall": "npx playwright install chromium",
-    "build:desktop": "npm run build && cp -r dist/server dist/core dist/dashboard desktop/ && cd desktop && npm install && npx electron-builder --win"
+    "dev": "concurrently --kill-others \"pnpm:dev:server\" \"pnpm:dev:dashboard\"",
+    "postinstall": "pnpm exec playwright install chromium",
+    "build:desktop": "pnpm build && cp -r dist/server dist/core dist/dashboard desktop/ && cd desktop && pnpm install && pnpm exec electron-builder --win"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.99.1",
