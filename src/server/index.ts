@@ -233,7 +233,7 @@ app.get('/health', (_req, res) => {
 app.use('/webhooks/github', githubRouter);
 app.use('/webhooks/ado', adoRouter);
 
-// bb-support — Q&A flow ported from bb-support-web. Mounted at /api/support/*.
+// bb-support Q&A flow (ported from bb-support-web).
 mountSupport(app);
 
 // API for dashboard

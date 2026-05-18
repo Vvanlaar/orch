@@ -39,7 +39,7 @@ import { createLogger } from '../core/logger.js';
 
 const log = createLogger('support');
 
-// Allow callers to override paths via env. Defaults match the standalone
+// Operators can override paths via env. Defaults match the standalone
 // bb-support-web deployment so existing tokens.json / audit.jsonl keep working.
 const DATA_DIR = process.env.BB_SUPPORT_DATA_DIR || join(homedir(), '.claude', 'bb-support-web');
 const KEYS_DIR = join(DATA_DIR, '.keys');
@@ -75,14 +75,29 @@ function isPrivateOrLoopback(bind: string): boolean {
 }
 
 type TokenEntry = { name?: string; createdAt?: string };
+// Record (not Map) because tokens.json deserializes as a plain object. The
+// `Object.hasOwn` guard at lookup sites is what protects against prototype-
+// pollution keys (constructor, __proto__, etc.) returning truthy.
 type TokenMap = Record<string, TokenEntry>;
 
 function loadTokens(path = TOKENS_FILE): TokenMap {
   try {
     const raw = readFileSync(path, 'utf8');
     const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as TokenMap;
-    return {};
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    // Drop any entry whose value isn't a plausibly-shaped TokenEntry so a
+    // malformed tokens.json doesn't crash bearerAuth on entry.name access.
+    const out: TokenMap = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        const entry = v as { name?: unknown; createdAt?: unknown };
+        out[k] = {
+          name: typeof entry.name === 'string' ? entry.name : undefined,
+          createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : undefined,
+        };
+      }
+    }
+    return out;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
     throw err;
@@ -113,16 +128,9 @@ export function assertBindAuthValid(bind: string, tokens: TokenMap, allowAnonymo
 
 // Append-only audit log. Mode 0600 on create (POSIX advisory on Windows; the
 // 'wx' flag still avoids overwriting an existing file in a TOCTOU race).
-type AuditEntry = {
-  ts: string;
-  ip: string | undefined;
-  tokenName: string;
-  question: string;
-  status: string;
-  durationMs: number;
-  error?: string;
-  stage?: string;
-};
+type AuditEntry =
+  | { ts: string; ip: string | undefined; tokenName: string; question: string; status: 'ok' | 'cancelled'; durationMs: number }
+  | { ts: string; ip: string | undefined; tokenName: string; question: string; status: 'ask' | 'claude' | 'spawn'; durationMs: number; error: string };
 
 function appendAudit(entry: AuditEntry, path = AUDIT_FILE): void {
   if (!existsSync(path)) {
@@ -137,9 +145,8 @@ function appendAudit(entry: AuditEntry, path = AUDIT_FILE): void {
   appendFileSync(path, JSON.stringify(entry) + '\n');
 }
 
-// Hand-rolled sliding-window rate limiter — orch doesn't depend on
-// express-rate-limit and adding it just for two buckets isn't worth the dep.
-// keyFn defaults to req.ip so each remote client gets its own bucket.
+// Hand-rolled sliding-window rate limiter. keyFn defaults to req.ip so each
+// remote client gets its own bucket.
 function rateLimiter(opts: { windowMs: number; limit: number; keyFn?: (req: Request) => string }) {
   const buckets = new Map<string, number[]>();
   const { windowMs, limit, keyFn = (req) => req.ip || 'unknown' } = opts;
@@ -161,12 +168,14 @@ function rateLimiter(opts: { windowMs: number; limit: number; keyFn?: (req: Requ
 // Dynamic-import the bb-support library so orch's TypeScript build doesn't
 // statically depend on bb-skills. pathToFileURL keeps Windows / MSYS Git Bash
 // paths un-mangled.
-type RunStage = 'ok' | 'ask' | 'claude' | 'cancelled' | 'spawn';
+export type RunStage = 'ok' | 'ask' | 'claude' | 'cancelled' | 'spawn';
+type Intent = 'investigate' | 'draft' | 'reply';
+type Format = 'markdown' | 'html';
 type RunSupportFn = (opts: {
   question: string;
   keyFile?: string;
-  intent?: 'investigate' | 'draft' | 'reply';
-  format?: 'markdown' | 'html';
+  intent?: Intent;
+  format?: Format;
   onChunk: (text: string) => void;
   signal?: AbortSignal;
 }) => Promise<{ stage: RunStage; exitCode: number | null; askStderr: string; claudeStderr: string }>;
@@ -198,12 +207,18 @@ async function loadApplyMapping(): Promise<ApplyMappingFn> {
   return applyMappingCache;
 }
 
-// Extend Request with the auth-attached fields. Keeping this local rather than
-// in a global declaration so the typing is self-contained to this module.
+// Local extension; not declared globally to avoid leaking these fields onto
+// every other Express handler in orch.
 interface AuthedRequest extends Request {
   bearerToken?: string | null;
   tokenName?: string;
 }
+
+// Discriminated terminal so error-stage runs are guaranteed to carry an
+// error string (non-error stages can't). `done` is implicit from `terminal`.
+type SupportTerminal =
+  | { stage: 'ok' | 'cancelled' }
+  | { stage: 'ask' | 'claude' | 'spawn'; error: string };
 
 type SupportRun = {
   controller: AbortController;
@@ -214,15 +229,11 @@ type SupportRun = {
   bufferedBytes: number;
   bufferTruncated: boolean;
   sseRes: Response | null;
-  done: boolean;
-  terminal: { stage: string; error?: string } | null;
+  terminal: SupportTerminal | null;
 };
 
 export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
-  // Token file is loaded once at boot. Re-issuing tokens requires a server
-  // restart — same posture as bb-support-web (the standalone server didn't
-  // hot-reload tokens either; both are LAN-scoped admin tools where editing
-  // tokens.json is already a deploy step).
+  // Token file is loaded once at boot; re-issuing tokens requires a server restart.
   const tokens = loadTokens();
   const bind = opts.bind || '127.0.0.1';
   try {
@@ -337,7 +348,6 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
       bufferedBytes: 0,
       bufferTruncated: false,
       sseRes: null,
-      done: false,
       terminal: null,
     };
     supportRuns.set(runId, run);
@@ -354,13 +364,19 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
     runSupportQuery({
       question,
       keyFile,
-      intent: intent as 'investigate' | 'draft' | 'reply',
+      intent,
       format: 'markdown',
       signal: controller.signal,
       onChunk: (chunk: string) => {
         if (run.sseRes) {
-          run.sseRes.write(`event: chunk\ndata: ${JSON.stringify({ chunk })}\n\n`);
-          return;
+          try {
+            run.sseRes.write(`event: chunk\ndata: ${JSON.stringify({ chunk })}\n\n`);
+            return;
+          } catch {
+            // TCP teardown between attach and this write — fall through to the
+            // buffer path so the run can still complete cleanly.
+            run.sseRes = null;
+          }
         }
         // Sticky truncation past 1 MB — a mid-stream gap renders an incoherent
         // partial answer worse than a clean cut-off, and an orphaned ask
@@ -375,24 +391,27 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
         run.chunks.push(chunk);
       },
     }).then(({ stage, askStderr, claudeStderr }) => {
-      run.done = true;
-      run.terminal = stage === 'ok' || stage === 'cancelled'
+      const terminal: SupportTerminal = stage === 'ok' || stage === 'cancelled'
         ? { stage }
         : { stage, error: (stage === 'claude' ? claudeStderr : askStderr).trim() || '(no detail)' };
+      run.terminal = terminal;
       if (run.sseRes) {
         try {
-          run.sseRes.write(`event: done\ndata: ${JSON.stringify(run.terminal)}\n\n`);
+          run.sseRes.write(`event: done\ndata: ${JSON.stringify(terminal)}\n\n`);
           run.sseRes.end();
         } catch { /* client disconnected mid-write; sse will be reaped */ }
       }
       try {
-        appendAudit({ ...auditBase, status: stage, durationMs: Date.now() - run.startedAt });
+        appendAudit(
+          'error' in terminal
+            ? { ...auditBase, status: terminal.stage, error: terminal.error, durationMs: Date.now() - run.startedAt }
+            : { ...auditBase, status: terminal.stage, durationMs: Date.now() - run.startedAt },
+        );
       } catch (err) {
         log.error('audit write failed', err);
       }
       scheduleRunDelete(runId);
     }).catch((err: Error) => {
-      run.done = true;
       run.terminal = { stage: 'spawn', error: err.message };
       if (run.sseRes) {
         try {
@@ -402,7 +421,7 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
       }
       try {
         appendAudit({
-          ...auditBase, status: 'spawn', stage: 'spawn',
+          ...auditBase, status: 'spawn',
           error: err.message, durationMs: Date.now() - run.startedAt,
         });
       } catch (auditErr) {
@@ -414,7 +433,7 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
 
   // Drop a completed run from the Map after a short grace window so a late
   // EventSource attach (racing the resolve) can still pick up the buffered
-  // chunks. The 5-min reaper only checks startedAt, not doneAt.
+  // chunks.
   function scheduleRunDelete(runId: string): void {
     const handle = setTimeout(() => supportRuns.delete(runId), RUN_COMPLETION_TTL_MS);
     handle.unref?.();
@@ -463,7 +482,7 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
         res.write(`event: chunk\ndata: ${JSON.stringify({ chunk: c })}\n\n`);
       }
       run.chunks = [];
-      if (run.done && run.terminal) {
+      if (run.terminal) {
         res.write(`event: done\ndata: ${JSON.stringify(run.terminal)}\n\n`);
         res.end();
       }
@@ -479,10 +498,8 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
     });
   }
 
-  // Cancel a run mid-stream. Authoritative: aborts the AbortController so the
-  // ask.mjs + claude subprocess tree is killed via the library's taskkill /T.
-  // Without this the only path to cancel was the 5-min reaper, even though the
-  // client's Cancel button suggested otherwise.
+  // Cancel a run mid-stream. Aborts the AbortController so the ask.mjs +
+  // claude subprocess tree is killed via the library's taskkill /T.
   app.post('/api/support/cancel/:runId', auth, asyncHandler(async (req, res) => {
     const r = req as AuthedRequest;
     const runId = String(req.params.runId ?? '');

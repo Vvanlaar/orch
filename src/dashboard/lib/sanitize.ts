@@ -6,10 +6,6 @@
 // a phishing form ("session expired, paste token to continue") inside the
 // answer panel. The CSP meta tag (form-action 'none', script-src 'self') is
 // the belt to this brace.
-//
-// Vendored ESM lives at src/dashboard/vendor/ (copied from bb-support-web's
-// node_modules). It's imported via a relative path so Vite bundles it as a
-// regular module — files inside /public/ would refuse to be import-analyzed.
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-expect-error — vendored ESM, no .d.ts shipped
 import DOMPurify from '../vendor/dompurify.esm.js';

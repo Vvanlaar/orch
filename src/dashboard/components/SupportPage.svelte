@@ -11,11 +11,24 @@
   // streaming chunks don't pin the main thread.
   import { onMount } from 'svelte';
   import { sanitizeMarkdown } from '../lib/sanitize';
+
+  // Minimal interface for the vendored marked bundle (no .d.ts ships). Two
+  // methods used; keeping the surface narrow catches drift if we ever swap the
+  // vendor for an npm dep.
+  interface MarkedApi {
+    parse(src: string): string;
+    setOptions(opts: { breaks?: boolean }): void;
+  }
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-expect-error — vendored ESM, no .d.ts shipped
-  import { marked } from '../vendor/marked.esm.js';
-
+  import { marked as markedRaw } from '../vendor/marked.esm.js';
+  const marked = markedRaw as MarkedApi;
   marked.setOptions({ breaks: true });
+
+  // Mirrors the union in src/server/support.ts (orch's server/dashboard live
+  // in separate tsconfigs so a shared import would mean a deeper restructure).
+  type Intent = 'investigate' | 'draft' | 'reply';
+  type RunStage = 'ok' | 'ask' | 'claude' | 'cancelled' | 'spawn';
 
   // --- state -----------------------------------------------------------------
   const TOKEN_KEY = 'bb-support-web/token';
@@ -27,14 +40,14 @@
     ts: number;
     question: string;
     answer: string;
-    intent: string;
+    intent: Intent;
     keyId: string | null;
   };
 
   let token = $state<string>(typeof localStorage !== 'undefined' ? (localStorage.getItem(TOKEN_KEY) || '') : '');
   let authMode = $state<'token' | 'anonymous'>('token');
   let question = $state<string>('');
-  let intent = $state<'investigate' | 'draft' | 'reply'>('investigate');
+  let intent = $state<Intent>('investigate');
   let rawAnswer = $state<string>('');
   let streaming = $state<boolean>(false);
   let connState = $state<'' | 'streaming' | 'ok' | 'error' | 'recent'>('');
@@ -66,8 +79,27 @@
   function loadHistory(): HistoryEntry[] {
     try {
       const raw = localStorage.getItem(HISTORY_KEY);
-      return raw ? JSON.parse(raw) : [];
-    } catch { return []; }
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        console.warn('orch-support-history: expected array, got', typeof parsed);
+        return [];
+      }
+      return parsed as HistoryEntry[];
+    } catch (err) {
+      // Corrupt JSON wipes recents — tell the user so they don't think the
+      // list just emptied itself. Without this, the next persistHistory()
+      // overwrites the salvageable blob with [].
+      console.warn('orch-support-history: failed to load —', err);
+      toastDeferred('Recents reset (saved data was unreadable).');
+      return [];
+    }
+  }
+
+  // toast() depends on Svelte state that may not be reactive-bound yet during
+  // onMount → loadHistory; defer to a microtask.
+  function toastDeferred(msg: string): void {
+    queueMicrotask(() => toast(msg));
   }
 
   function persistHistory(): void {
@@ -126,7 +158,7 @@
     rawAnswer = entry.answer;
     currentKeyId = entry.keyId;
     question = entry.question;
-    intent = (entry.intent as typeof intent) || 'investigate';
+    intent = entry.intent === 'draft' || entry.intent === 'reply' ? entry.intent : 'investigate';
     terminal = null;
     revealVisible = /\[customer:\d+\]/.test(rawAnswer);
     revealMappings = [];
@@ -234,7 +266,7 @@
     });
 
     activeStream.addEventListener('done', (e) => {
-      const term = JSON.parse((e as MessageEvent).data) as { stage: string; error?: string };
+      const term = JSON.parse((e as MessageEvent).data) as { stage: RunStage; error?: string };
       connState = term.stage === 'ok' ? 'ok' : (term.stage === 'cancelled' ? '' : 'error');
       connLabel = term.stage;
       showTerminal(term.error ? `${term.stage}: ${term.error}` : term.stage, term.stage !== 'ok' && term.stage !== 'cancelled');
@@ -247,8 +279,14 @@
     });
 
     activeStream.onerror = () => {
+      // EventSource also fires `error` on the benign close that follows `done`.
+      // The `streaming` guard suppresses that case so a successful run doesn't
+      // get retro-overwritten to "stream error".
+      if (!streaming) return;
+      const rs = activeStream?.readyState;
       connState = 'error';
       connLabel = 'stream error';
+      showTerminal(`stream error (readyState=${rs}) — the connection dropped or the server is unreachable`, true);
       finish();
     };
   }
@@ -320,9 +358,18 @@
   onMount(() => {
     history = loadHistory();
     fetch('/api/support/health')
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then(h => { authMode = h.authMode || 'token'; })
-      .catch(() => { /* health probe failed; assume token mode */ });
+      .catch((err) => {
+        // Surface server-unreachable in the conn pill so the user doesn't
+        // burn a turn typing a question against a down server.
+        console.warn('support health probe failed:', err);
+        connState = 'error';
+        connLabel = 'server unreachable';
+      });
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -347,9 +394,6 @@
 </script>
 
 <svelte:head>
-  <!-- CSP scoped to this page via meta tag so the rest of the orch dashboard
-       (which relies on Vite HMR + inline styles) isn't affected. Mirrors the
-       posture bb-support-web's index.html had. -->
   <!--
     CSP scoped to this page. Belt-to-the-brace alongside DOMPurify (sanitize.ts):
     form-action 'none' stops injected forms; script-src 'self' kills inline
