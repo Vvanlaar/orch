@@ -536,7 +536,7 @@
                 {#if currentOwner !== 'my' && wi.assignedTo}
                   <span class="badge" style="background:#8b949e20;color:#8b949e;">{wi.assignedTo}</span>
                 {/if}
-                {#if wi.resolvedBy && currentOwner !== 'resolved-by-me'}
+                {#if wi.resolvedBy && currentFilter !== 'resolved-by-me'}
                   <span class="badge" style="background:#a371f720;color:#a371f7;">Resolved: {wi.resolvedBy}</span>
                 {/if}
                 {#if wi.repositories?.length}
@@ -707,7 +707,7 @@
                 {#if currentOwner !== 'my' && wi.assignedTo}
                   <span class="badge" style="background:#8b949e20;color:#8b949e;">{wi.assignedTo}</span>
                 {/if}
-                {#if wi.resolvedBy && currentOwner !== 'resolved-by-me'}
+                {#if wi.resolvedBy && currentFilter !== 'resolved-by-me'}
                   <span class="badge" style="background:#a371f720;color:#a371f7;">Resolved: {wi.resolvedBy}</span>
                 {/if}
                 {#if hasPr}
@@ -1009,6 +1009,7 @@
     color: var(--text-heading);
     display: -webkit-box;
     -webkit-line-clamp: 2;
+    line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
   }

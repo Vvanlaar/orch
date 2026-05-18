@@ -1,9 +1,9 @@
 <script lang="ts">
   import { getOrchestratorState, getChatOpen, toggleChat, sendChatMessage } from '../stores/orchestrator.svelte';
 
-  let state = $derived(getOrchestratorState());
+  let orchState = $derived(getOrchestratorState());
   let isOpen = $derived(getChatOpen());
-  let chat = $derived(state.chat);
+  let chat = $derived(orchState.chat);
 
   let inputValue = $state('');
   let messagesEl = $state<HTMLDivElement>(undefined!);

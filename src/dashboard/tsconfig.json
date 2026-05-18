@@ -7,7 +7,8 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "verbatimModuleSyntax": true,
-    "noEmit": true
+    "noEmit": true,
+    "types": ["svelte", "vite/client"]
   },
   "include": ["**/*.ts", "**/*.svelte"]
 }

@@ -8,7 +8,7 @@
     setSearchQuery,
   } from '../stores/notifications.svelte';
 
-  let state = $derived(getNotificationState());
+  let notifState = $derived(getNotificationState());
   let filtered = $derived(getFilteredNotifications());
   let repos = $derived(getRepos());
 
@@ -40,7 +40,7 @@
   }
 </script>
 
-{#if state.sidebarOpen}
+{#if notifState.sidebarOpen}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="overlay" onclick={toggleSidebar} onkeydown={() => {}}></div>
   <aside class="sidebar">
@@ -53,12 +53,12 @@
         type="text"
         class="search-input"
         placeholder="Search..."
-        value={state.searchQuery}
+        value={notifState.searchQuery}
         oninput={(e) => setSearchQuery((e.currentTarget as HTMLInputElement).value)}
       />
       <select
         class="repo-select"
-        value={state.filterRepo}
+        value={notifState.filterRepo}
         onchange={(e) => setFilterRepo((e.currentTarget as HTMLSelectElement).value)}
       >
         <option value="">All repos</option>

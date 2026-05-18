@@ -2,7 +2,7 @@
   import { getOrchestratorState, triggerOrchestration, acceptAction, dismissAction } from '../stores/orchestrator.svelte';
   import { readPreference, writePreference } from '../lib/preferences';
 
-  let state = $derived(getOrchestratorState());
+  let orchState = $derived(getOrchestratorState());
   let expandedId = $state<string | null>(null);
   let dismissingId = $state<string | null>(null);
   let dismissReason = $state('');
@@ -49,9 +49,9 @@
     else if (e.key === 'Escape') cancelDismiss();
   }
 
-  let isRunning = $derived(state.status === 'gathering' || state.status === 'analyzing');
-  let activeActions = $derived(state.actions.filter(a => !a.dismissed));
-  let dismissedActions = $derived(state.actions.filter(a => a.dismissed));
+  let isRunning = $derived(orchState.status === 'gathering' || orchState.status === 'analyzing');
+  let activeActions = $derived(orchState.actions.filter(a => !a.dismissed));
+  let dismissedActions = $derived(orchState.actions.filter(a => a.dismissed));
 
   const CARD_ID = 'orchestrator';
   const COLLAPSED_KEY = 'orch.dashboard.cards.collapsed';
@@ -71,9 +71,9 @@
   <h2>
     <button type="button" class="card-toggle" onclick={toggleCard}>Auto-Orchestrator</button>
     <span class="orch-controls">
-      {#if state.status !== 'idle'}
-        <span class="status-badge" class:gathering={state.status === 'gathering'} class:analyzing={state.status === 'analyzing'} class:ready={state.status === 'ready'} class:error={state.status === 'error'}>
-          {state.status}
+      {#if orchState.status !== 'idle'}
+        <span class="status-badge" class:gathering={orchState.status === 'gathering'} class:analyzing={orchState.status === 'analyzing'} class:ready={orchState.status === 'ready'} class:error={orchState.status === 'error'}>
+          {orchState.status}
         </span>
       {/if}
       <button type="button" class="action-btn orch-run-btn" onclick={triggerOrchestration} disabled={isRunning}>
@@ -83,34 +83,34 @@
   </h2>
   {#if !cardCollapsed}
   <div class="card-body">
-  {#if state.dataSummary && (state.status === 'analyzing' || state.status === 'ready')}
+  {#if orchState.dataSummary && (orchState.status === 'analyzing' || orchState.status === 'ready')}
     <div class="data-summary">
-      {#if state.dataSummary.adoWorkItems}<span>{state.dataSummary.adoWorkItems} ADO items</span>{/if}
-      {#if state.dataSummary.githubPRs}<span>{state.dataSummary.githubPRs} PRs</span>{/if}
-      {#if state.dataSummary.prComments}<span>{state.dataSummary.prComments} with comments</span>{/if}
-      {#if state.dataSummary.testingItems}<span>{state.dataSummary.testingItems} for testing</span>{/if}
-      {#if state.dataSummary.notifications}<span>{state.dataSummary.notifications} notifications</span>{/if}
+      {#if orchState.dataSummary.adoWorkItems}<span>{orchState.dataSummary.adoWorkItems} ADO items</span>{/if}
+      {#if orchState.dataSummary.githubPRs}<span>{orchState.dataSummary.githubPRs} PRs</span>{/if}
+      {#if orchState.dataSummary.prComments}<span>{orchState.dataSummary.prComments} with comments</span>{/if}
+      {#if orchState.dataSummary.testingItems}<span>{orchState.dataSummary.testingItems} for testing</span>{/if}
+      {#if orchState.dataSummary.notifications}<span>{orchState.dataSummary.notifications} notifications</span>{/if}
     </div>
   {/if}
 
-  {#if state.status === 'idle'}
+  {#if orchState.status === 'idle'}
     <div class="empty">Click "Run" to scan all work sources and get prioritized recommendations</div>
-  {:else if state.status === 'gathering'}
+  {:else if orchState.status === 'gathering'}
     <div class="orch-loading">
       <span class="spinner"></span>
       Gathering work data...
     </div>
-  {:else if state.status === 'analyzing'}
+  {:else if orchState.status === 'analyzing'}
     <div class="orch-loading">
       <span class="spinner"></span>
       Analyzing with Claude...
     </div>
-  {:else if state.status === 'error'}
+  {:else if orchState.status === 'error'}
     <div class="orch-error">
-      <span>Error: {state.error}</span>
+      <span>Error: {orchState.error}</span>
       <button class="action-btn secondary" onclick={triggerOrchestration}>Retry</button>
     </div>
-  {:else if state.status === 'ready'}
+  {:else if orchState.status === 'ready'}
     {#if activeActions.length === 0}
       <div class="empty">No actions recommended — everything looks good!</div>
     {:else}
