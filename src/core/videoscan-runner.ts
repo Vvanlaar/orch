@@ -6,7 +6,7 @@ import { chromium } from 'playwright';
 import { claudeEmitter } from './claude-runner.js';
 import { createLogger } from './logger.js';
 import { isSupabaseConfigured } from './db/client.js';
-import { dbListScans, dbUpsertVideoscan, dbDeleteVideoscans } from './db/videoscans.js';
+import { dbListScans, dbUpsertVideoscan, dbDeleteVideoscans, dbArchiveVideoscans } from './db/videoscans.js';
 import { downloadFile, uploadScanFiles, deleteScanFiles } from './db/storage.js';
 
 const log = createLogger('videoscan-runner');
@@ -518,6 +518,143 @@ export function mergeScans(filenames: string[], label?: string): MergeResult {
 
   log.info(`Merged ${filenames.length} scans into ${mergedFilename} (${merged.pagesScanned} pages, ${merged.pagesWithVideo} with video)`);
   return { filename: mergedFilename, archivedFiles: archived };
+}
+
+/**
+ * Clears `_state.queue` on a scan so it's no longer treated as resumable.
+ * Used by the batch wrap-up flow to accept partial coverage as final.
+ * Returns true when the file was actually rewritten.
+ */
+export function finalizeScan(filename: string): boolean {
+  const path = join(VIDEOSCAN_DIR, filename);
+  if (!existsSync(path)) return false;
+  const data = JSON.parse(readFileSync(path, 'utf-8')) as ScanData;
+  if (!data._state || (data._state.queue?.length ?? 0) === 0) return false;
+  data._state.queue = [];
+  writeFileSync(path, JSON.stringify(data, null, 2));
+  return true;
+}
+
+function slug(label: string): string {
+  return label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'batch';
+}
+
+/**
+ * Builds a cross-domain summary scan from the supplied filenames without
+ * archiving the sources. The result's `domain` is set to `batchLabel` so the
+ * existing report template uses it as the heading; `batchId`/`batchLabel` are
+ * stamped on the JSON so the summary stays grouped under its source batch in
+ * the dashboard (rather than landing in "Ungrouped").
+ */
+export function summarizeBatch(filenames: string[], batchId: string, batchLabel: string): { filename: string } {
+  if (filenames.length === 0) throw new Error('Need at least 1 scan to summarize');
+
+  const scansData = filenames.map(f => {
+    const path = join(VIDEOSCAN_DIR, f);
+    if (!existsSync(path)) throw new Error(`File not found: ${f}`);
+    return JSON.parse(readFileSync(path, 'utf-8')) as ScanData;
+  });
+
+  const merged = mergeScansData(scansData) as ScanData & { batchId?: string; batchLabel?: string; isSummary?: boolean };
+  merged.domain = batchLabel;
+  merged.batchId = batchId;
+  merged.batchLabel = batchLabel;
+  merged.isSummary = true;
+
+  const ts = merged.scanDate.replace(/[:.]/g, '-').replace('Z', '');
+  const summaryFilename = `videoscan-${slug(batchLabel)}-${ts}-summary.json`;
+  writeFileSync(join(VIDEOSCAN_DIR, summaryFilename), JSON.stringify(merged, null, 2));
+
+  log.info(`Summarized ${filenames.length} scans into ${summaryFilename} (${merged.pagesScanned} pages, ${merged.pagesWithVideo} with video)`);
+  return { filename: summaryFilename };
+}
+
+export interface WrapUpResult {
+  batchId: string;
+  summary: string;
+  finalized: string[];
+  mergedDomains: string[];
+}
+
+/**
+ * One-click batch finalization:
+ *   1. Clear queues on every resumable scan in the batch.
+ *   2. Consolidate any same-domain duplicates via mergeScans (archives sources).
+ *   3. Produce a cross-domain summary JSON + HTML/PDF report.
+ *
+ * Caller is responsible for marking the batch closed in batch-state.
+ */
+async function ensureLocal(filenames: string[]): Promise<void> {
+  for (const f of filenames) {
+    if (existsSync(join(VIDEOSCAN_DIR, f))) continue;
+    const ok = await downloadFile(f, VIDEOSCAN_DIR);
+    if (!ok) throw new Error(`Could not fetch ${f} from storage`);
+  }
+}
+
+const wrapUpInFlight = new Set<string>();
+
+export async function wrapUpBatch(batchId: string): Promise<WrapUpResult> {
+  if (wrapUpInFlight.has(batchId)) throw new Error(`Wrap-up already in progress for batch ${batchId}`);
+  wrapUpInFlight.add(batchId);
+  try {
+    return await wrapUpBatchInner(batchId);
+  } finally {
+    wrapUpInFlight.delete(batchId);
+  }
+}
+
+async function wrapUpBatchInner(batchId: string): Promise<WrapUpResult> {
+  const all = await listScans();
+  const initial = all.filter(s => s.batchId === batchId);
+  if (initial.length === 0) throw new Error(`No scans found for batch ${batchId}`);
+
+  const batchLabel = initial.find(s => s.batchLabel)?.batchLabel || batchId;
+
+  // mergeScans / summarizeBatch read files synchronously — make sure every
+  // candidate is on disk before we hand it to them.
+  await ensureLocal(initial.map(s => s.filename));
+
+  const finalized: string[] = [];
+  for (const s of initial) {
+    if (s.canResume && finalizeScan(s.filename)) {
+      finalized.push(s.filename);
+      await syncScanToSupabase(s.filename);
+    }
+  }
+
+  // Same-domain consolidation: when retries / resumes left multiple JSONs
+  // per host, fold them into one canonical scan. Usually applies to the
+  // handful of domains with paused/resumed runs; most batches skip this.
+  const mergedDomains: string[] = [];
+  const byDomain = new Map<string, typeof initial>();
+  for (const s of initial) {
+    if (!s.domain || s.pagesScanned <= 0) continue;
+    if (!byDomain.has(s.domain)) byDomain.set(s.domain, []);
+    byDomain.get(s.domain)!.push(s);
+  }
+  for (const [domain, group] of byDomain) {
+    if (group.length < 2) continue;
+    const sources = group.map(g => g.filename);
+    const { filename: mergedFile } = mergeScans(sources);
+    await syncScanToSupabase(mergedFile);
+    if (isSupabaseConfigured()) await dbArchiveVideoscans(sources);
+    mergedDomains.push(domain);
+  }
+
+  const after = (await listScans()).filter(s => s.batchId === batchId);
+  if (after.length === 0) throw new Error(`No scans left in batch ${batchId} after merge step`);
+  await ensureLocal(after.map(s => s.filename));
+
+  const { filename: summaryFilename } = summarizeBatch(after.map(s => s.filename), batchId, batchLabel);
+
+  try {
+    await generateReport(summaryFilename);
+  } catch (err) {
+    log.warn(`Summary report generation failed for ${summaryFilename}: ${err}`);
+  }
+
+  return { batchId, summary: summaryFilename, finalized, mergedDomains };
 }
 
 export type SyncResult = { ok: true } | { ok: false; error: string };

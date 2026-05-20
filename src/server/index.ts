@@ -31,7 +31,8 @@ import { initSettings } from '../core/settings.js';
 import { isSupabaseConfigured, MACHINE_ID } from '../core/db/client.js';
 import { dbGetNotifications, dbInsertNotification } from '../core/db/notifications.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
-import { getVideoscanDir, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, pauseVideoscan, findLatestScanFileForDomain, isVideoscanRunning, deleteScans } from '../core/videoscan-runner.js';
+import { getVideoscanDir, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, pauseVideoscan, findLatestScanFileForDomain, isVideoscanRunning, deleteScans, wrapUpBatch } from '../core/videoscan-runner.js';
+import { getClosedBatches, markBatchClosed, markBatchOpen } from '../core/batch-state.js';
 import { isPidAlive, killProcessTree } from '../core/process-kill.js';
 import { createSignedUrl, downloadFile } from '../core/db/storage.js';
 import { dbArchiveVideoscans } from '../core/db/videoscans.js';
@@ -1813,6 +1814,31 @@ app.post('/api/videoscans/merge', asyncHandler(async (req, res) => {
   if (isSupabaseConfigured()) await dbArchiveVideoscans(filenames);
   res.json(result);
 }));
+
+app.get('/api/videoscans/batches/closed', (_req, res) => {
+  res.json({ closed: getClosedBatches() });
+});
+
+app.post('/api/videoscans/batch/wrap-up', asyncHandler(async (req, res) => {
+  const { batchId } = req.body;
+  if (typeof batchId !== 'string' || !batchId) {
+    res.status(400).json({ error: 'batchId required' });
+    return;
+  }
+  const result = await wrapUpBatch(batchId);
+  markBatchClosed(batchId);
+  res.json(result);
+}));
+
+app.post('/api/videoscans/batches/:batchId/open', (req, res) => {
+  const { batchId } = req.params;
+  if (!batchId) {
+    res.status(400).json({ error: 'batchId required' });
+    return;
+  }
+  markBatchOpen(batchId);
+  res.json({ ok: true });
+});
 
 app.get('/api/videoscans/files/:filename', asyncHandler(async (req, res) => {
   const filename = validateScanFilename(req.params.filename);

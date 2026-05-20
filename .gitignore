@@ -12,6 +12,7 @@ desktop/package-lock.json
 .workspaces/
 .playwright-mcp/
 .orch-feedback.json
+.orch-batches.json
 orch-server.log
 orch-server.*.log
 orch-dev.log

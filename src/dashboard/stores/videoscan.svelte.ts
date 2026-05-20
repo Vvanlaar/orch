@@ -125,6 +125,32 @@ export async function mergeDomainScans(filenames: string[]) {
   return result;
 }
 
+let closedBatches = $state<string[]>([]);
+
+export function getClosedBatches() { return closedBatches; }
+
+export async function fetchClosedBatches() {
+  try {
+    const res = await fetch('/api/videoscans/batches/closed');
+    const data = await res.json();
+    closedBatches = Array.isArray(data.closed) ? data.closed : [];
+  } catch (err) {
+    console.error('Failed to fetch closed batches:', err);
+  }
+}
+
+export async function wrapUpBatch(batchId: string) {
+  const result = await apiJson('/api/videoscans/batch/wrap-up', { batchId });
+  await Promise.all([fetchScans(), fetchClosedBatches()]);
+  return result;
+}
+
+export async function reopenBatch(batchId: string) {
+  const result = await apiJson(`/api/videoscans/batches/${encodeURIComponent(batchId)}/open`, {});
+  await fetchClosedBatches();
+  return result;
+}
+
 export async function syncScan(filename: string) {
   const result = await apiJson('/api/videoscans/sync', { filename });
   await fetchScans();

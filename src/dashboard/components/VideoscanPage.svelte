@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
-  import { getScans, fetchScans, startScan, startGroupScan, resumeScan, addUrlsToScan, mergeDomainScans, deleteScans, syncScan, regenerateReport, regeneratePreview, isLoading, importDigiToegankelijk, classifyGroupUrls, type ScanSummary, type DigiImportResult, type ReportOptions } from '../stores/videoscan.svelte';
+  import { getScans, fetchScans, startScan, startGroupScan, resumeScan, addUrlsToScan, mergeDomainScans, deleteScans, syncScan, regenerateReport, regeneratePreview, isLoading, importDigiToegankelijk, classifyGroupUrls, wrapUpBatch, reopenBatch, getClosedBatches, fetchClosedBatches, type ScanSummary, type DigiImportResult, type ReportOptions } from '../stores/videoscan.svelte';
   import { getTasks, getTaskOutput, isExpanded, toggleExpanded, pauseVideoscanTask } from '../stores/tasks.svelte';
   import VideoscanLiveProgress from './VideoscanLiveProgress.svelte';
   import VideoscanLiveBatch from './VideoscanLiveBatch.svelte';
@@ -132,7 +132,9 @@
     for (const b of groupedByBatch) {
       if (hydratedBatchPrefs.has(b.batchId)) continue;
       hydratedBatchPrefs.add(b.batchId);
-      if (readPreference<boolean>(`videoscan.results.batch.collapsed.${b.batchId}`, false)) {
+      const userPref = readPreference<boolean>(`videoscan.results.batch.collapsed.${b.batchId}`, false);
+      // Closed batches collapse by default; explicit user preference still wins.
+      if (userPref || closedBatchSet.has(b.batchId)) {
         newlyCollapsed.push(b.batchId);
       }
     }
@@ -166,7 +168,29 @@
     collapsedDomains = next;
   }
 
-  onMount(() => { fetchScans(); });
+  onMount(() => { fetchScans(); fetchClosedBatches(); });
+
+  async function handleWrapUp(batchId: string, label: string) {
+    if (wrappingUp) return;
+    if (!confirm(`Wrap up "${label}"? This will finalize any partial scans, merge same-domain duplicates, generate a summary report, and mark the batch closed.`)) return;
+    wrappingUp = batchId;
+    error = '';
+    try {
+      await wrapUpBatch(batchId);
+    } catch (err: any) {
+      error = err.message;
+    } finally {
+      wrappingUp = null;
+    }
+  }
+
+  async function handleReopen(batchId: string) {
+    try {
+      await reopenBatch(batchId);
+    } catch (err: any) {
+      error = err.message;
+    }
+  }
 
   async function handleDigiImport(orgId: number) {
     importing = true;
@@ -331,6 +355,8 @@
   let generating = $state<string | null>(null);
   let generatingPreview = $state<string | null>(null);
   let merging = $state(false);
+  let wrappingUp = $state<string | null>(null);
+  let closedBatchSet = $derived(new Set(getClosedBatches()));
   let showReportOptions = $state<string | null>(null);
   let reportOpts = $state<ReportOptions>({});
 
@@ -696,12 +722,22 @@
       {:else}
         {#each groupedByBatch as batch (batch.batchId)}
           {@const batchCollapsed = collapsedBatches.has(batch.batchId)}
-          <div class="bat" class:collapsed={batchCollapsed} class:bat-ungrouped={batch.batchId === UNGROUPED_BATCH}>
-            <button class="bat-head" aria-expanded={!batchCollapsed} onclick={() => toggleBatch(batch.batchId)}>
-              <span class="bat-chev">&#9662;</span>
-              <span class="bat-label">{batch.label}</span>
-              <span class="bat-meta">{batch.domains.length} {batch.domains.length === 1 ? 'site' : 'sites'} · {batch.scanCount} {batch.scanCount === 1 ? 'scan' : 'scans'}</span>
-            </button>
+          {@const batchClosed = closedBatchSet.has(batch.batchId)}
+          <div class="bat" class:collapsed={batchCollapsed} class:bat-ungrouped={batch.batchId === UNGROUPED_BATCH} class:bat-closed={batchClosed}>
+            <div class="bat-head-row">
+              <button class="bat-head" aria-expanded={!batchCollapsed} onclick={() => toggleBatch(batch.batchId)}>
+                <span class="bat-chev">&#9662;</span>
+                <span class="bat-label">{batch.label}</span>
+                <span class="bat-meta">{batch.domains.length} {batch.domains.length === 1 ? 'site' : 'sites'} · {batch.scanCount} {batch.scanCount === 1 ? 'scan' : 'scans'}{batchClosed ? ' · closed' : ''}</span>
+              </button>
+              {#if batch.batchId !== UNGROUPED_BATCH && !batchClosed}
+                <button class="wrap-btn" onclick={() => handleWrapUp(batch.batchId, batch.label)} disabled={wrappingUp !== null} title="Finalize partial scans, merge duplicates, generate summary report, mark batch closed">
+                  {wrappingUp === batch.batchId ? 'Wrapping up…' : 'Wrap up'}
+                </button>
+              {:else if batchClosed}
+                <button class="wrap-btn" onclick={() => handleReopen(batch.batchId)} title="Reopen this batch — restores merge buttons and per-domain actions">Reopen</button>
+              {/if}
+            </div>
             {#if !batchCollapsed}
               <div class="bat-body">
         {#each batch.domains as { domain, scans: domainScans } (domain)}
@@ -719,7 +755,7 @@
                   <span class="dom-live" title="A scan is currently running for this site"><span class="dom-live-dot"></span>live</span>
                 {/if}
               </button>
-              {#if complete.length >= 2}
+              {#if complete.length >= 2 && !batchClosed}
                 <button class="merge-btn" onclick={() => handleMerge(complete)} disabled={merging}>
                   {merging ? 'Merging...' : `Merge ${complete.length}`}
                 </button>
@@ -1370,6 +1406,44 @@
 
   .bat-ungrouped .bat-label {
     color: var(--text-muted);
+  }
+
+  .bat-head-row {
+    display: flex;
+    align-items: stretch;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .bat-head-row > .bat-head {
+    border-bottom: none;
+  }
+
+  .bat-closed .bat-label {
+    color: var(--text-muted);
+  }
+
+  .wrap-btn {
+    margin-right: 12px;
+    align-self: center;
+    font-size: 10px;
+    font-weight: 600;
+    background: var(--surface-raised);
+    color: var(--text-dim);
+    border: 1px solid #253547;
+    border-radius: 6px;
+    padding: 4px 10px;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+  }
+
+  .wrap-btn:hover:not(:disabled) {
+    border-color: var(--accent-dim);
+    color: var(--accent-bright);
+  }
+
+  .wrap-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
   .bat-meta {
