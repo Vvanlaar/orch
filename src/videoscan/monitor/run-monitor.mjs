@@ -187,7 +187,16 @@ async function main() {
 
   for (let i = 0; i < limit; i++) {
     const row = rows[i];
-    const orgSlug = slugify(row.organisatie);
+    const baseSlug = slugify(row.organisatie) || `org-${i + 1}`;
+    // Bump suffix until <slug>.meta.json is free. Prevents two orgs that
+    // slugify identically (truncated/normalised) from overwriting each other.
+    let orgSlug = baseSlug;
+    let suffix = 1;
+    while (existsSync(join(outDir, `${orgSlug}.meta.json`))) {
+      suffix++;
+      orgSlug = `${baseSlug}-${suffix}`;
+    }
+
     const urls = [row.url_homepage, row.url_support, row.url_product]
       .map((u) => (u || "").trim())
       .filter(Boolean);
@@ -203,7 +212,10 @@ async function main() {
 
     // Per-org subdir isolates scan output filenames — prevents
     // videoscan-<domain>-<ts>.json collisions when two orgs share a hostname.
+    // Clean any stale dir from a crashed prior run with the same slug so
+    // findScanOutputs() doesn't pick up leftover JSON from that run.
     const orgDir = join(outDir, orgSlug);
+    if (existsSync(orgDir)) rmSync(orgDir, { recursive: true, force: true });
     mkdirSync(orgDir, { recursive: true });
 
     const urlsFile = join(orgDir, "_urls.json");

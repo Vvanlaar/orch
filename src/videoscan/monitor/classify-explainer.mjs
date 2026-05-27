@@ -128,14 +128,38 @@ function callClaude(prompt) {
     proc.on("error", reject);
     proc.on("exit", (code) => {
       if (code !== 0) {
-        reject(new Error(`claude exited ${code}: ${stderr.slice(0, 300)}`));
+        const err = new Error(
+          `claude exited ${code}: ${stderr.slice(0, 300)}`
+        );
+        err.fullStderr = stderr;
+        reject(err);
       } else {
         resolveFn(stdout);
       }
     });
-    proc.stdin.write(prompt);
-    proc.stdin.end();
+    if (proc.stdin) {
+      // Swallow EPIPE if claude exits before we finish writing the prompt;
+      // the exit handler reports the real cause.
+      proc.stdin.on("error", () => {});
+      proc.stdin.write(prompt);
+      proc.stdin.end();
+    }
   });
+}
+
+async function callClaudeWithRetry(prompt, errorLog) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      return await callClaude(prompt);
+    } catch (err) {
+      if (errorLog) {
+        errorLog.push(
+          `--- attempt ${attempt} @ ${new Date().toISOString()} ---\n${err.fullStderr || err.message}\n`
+        );
+      }
+      if (attempt === 2) throw err;
+    }
+  }
 }
 
 function extractJsonArray(text) {
@@ -217,6 +241,7 @@ async function main() {
   }
 
   const results = [];
+  const errorLog = [];
   for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
     const batch = candidates.slice(i, i + BATCH_SIZE);
     const batchNum = Math.floor(i / BATCH_SIZE) + 1;
@@ -225,7 +250,10 @@ async function main() {
       `  Batch ${batchNum}/${totalBatches} — ${batch.length} items...`
     );
     try {
-      const response = await callClaude(buildPrompt(definitionText, batch));
+      const response = await callClaudeWithRetry(
+        buildPrompt(definitionText, batch),
+        errorLog
+      );
       const parsed = extractJsonArray(response);
       for (const r of parsed) {
         const c = batch[r.index - 1];
@@ -254,6 +282,11 @@ async function main() {
 
   const outFile = join(dir, "classify-output.json");
   writeFileSync(outFile, JSON.stringify(results, null, 2));
+  if (errorLog.length > 0) {
+    const errFile = join(dir, "classify-errors.log");
+    writeFileSync(errFile, errorLog.join("\n"));
+    console.warn(`  ${errorLog.length} attempt failure(s) logged to ${errFile}`);
+  }
   console.log(`\nWrote ${results.length} classifications to ${outFile}`);
   console.log(`Next: node monitor/aggregate-monitor.mjs --segment ${opts.segment}`);
 }

@@ -293,14 +293,17 @@ async function main() {
   const resultsFile = join(dir, `monitor-results-${segmentSlug}.csv`);
   const reviewFile = join(dir, `monitor-manual-review-${segmentSlug}.csv`);
 
-  writeFileSync(
-    resultsFile,
-    [csvRow(resultsHeader), ...resultsRows.map(csvRow)].join("\n") + "\n"
-  );
-  writeFileSync(
-    reviewFile,
-    [csvRow(reviewHeader), ...reviewRows.map(csvRow)].join("\n") + "\n"
-  );
+  // UTF-8 BOM + CRLF: Excel-on-Windows decodes UTF-8 correctly when the BOM
+  // is present and treats CRLF as the row separator.
+  const BOM = "﻿";
+  const writeCsv = (file, header, rows) =>
+    writeFileSync(
+      file,
+      BOM + [csvRow(header), ...rows.map(csvRow)].join("\r\n") + "\r\n"
+    );
+
+  writeCsv(resultsFile, resultsHeader, resultsRows);
+  writeCsv(reviewFile, reviewHeader, reviewRows);
 
   console.log(`Wrote ${resultsRows.length} orgs to ${resultsFile}`);
   console.log(`Wrote ${reviewRows.length} pages to ${reviewFile}`);

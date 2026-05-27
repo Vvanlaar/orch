@@ -972,7 +972,10 @@ async function scanOnePage(context, url, timeout) {
   );
 
   const accessibility = detected.length > 0
-    ? await capturePageA11y(page).catch(() => null)
+    ? await capturePageA11y(page).catch((e) => {
+        console.warn(chalk.yellow(`  a11y capture failed: ${(e?.message || String(e)).slice(0, 120)}`));
+        return null;
+      })
     : null;
 
   await page.close();
@@ -1044,7 +1047,10 @@ async function scanFirstPage(context, url, timeout) {
   );
 
   const accessibility = detected.length > 0
-    ? await capturePageA11y(page).catch(() => null)
+    ? await capturePageA11y(page).catch((e) => {
+        console.warn(chalk.yellow(`  a11y capture failed: ${(e?.message || String(e)).slice(0, 120)}`));
+        return null;
+      })
     : null;
 
   await page.close();
