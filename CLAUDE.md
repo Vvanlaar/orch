@@ -60,6 +60,21 @@ Task execution: pending → runClaudeStreaming() → output chunks via WS → co
 - **async/await** preferred over raw promises
 - Dashboard store files use `.svelte.ts` extension for rune support
 
+## Supabase schema changes
+
+Any new table in `public` MUST include explicit grants — Supabase stops auto-granting Data API access on new tables (default for new projects 2026-05-30, all projects 2026-10-30). Without a grant, `service_role` (the orch server) gets PostgREST `42501 permission denied` on every query.
+
+```sql
+create table public.your_table (...);
+grant select, insert, update, delete on public.your_table to service_role;
+-- add anon/authenticated grants only if the dashboard/clients need them
+alter table public.your_table enable row level security;
+```
+
+Sequences too: `grant usage, select on sequence public.your_table_id_seq to service_role;`
+
+Ref: https://github.com/orgs/supabase/discussions/45329
+
 ## Key Env Vars
 
 `GITHUB_TOKEN`, `ADO_PAT`, `ADO_ORG`, `REPOS_BASE_DIR` (default `../`), `POLLING_ENABLED` (default `true`), `MAX_CONCURRENT_TASKS` (default `2`), `CLAUDE_TIMEOUT` (default `300000`ms)
