@@ -703,6 +703,77 @@ async function detectWithConsent(page, html, networkRequests) {
   );
 }
 
+// Per-page accessibility capture for Nationale Monitor Digitale Toegankelijkheid.
+// Runs once per page where video was detected — RQ3 Techniek + Elementen inputs.
+// See src/videoscan/monitor/README.md for downstream scoring.
+async function capturePageA11y(page) {
+  return page.evaluate(() => {
+    const TRANSCRIPT_RE = /transcript|tekstversie|leesversie|leesbare versie|tekstuele versie/i;
+    const CC_SELECTOR = [
+      'button[aria-label*="subtitle" i]',
+      'button[aria-label*="caption" i]',
+      'button[aria-label*="ondertitel" i]',
+      'button[title*="ondertitel" i]',
+      '.vjs-subs-caps-button',
+      '.jw-icon-cc',
+      '.plyr__control[data-plyr="captions"]',
+      '[class*="cc-button" i]',
+      '[class*="captions-button" i]',
+    ].join(",");
+
+    const headingEl =
+      document.querySelector("h1") ||
+      document.querySelector("h2") ||
+      document.querySelector("[role='heading']");
+    const nearestHeading = (headingEl?.textContent || "").trim().slice(0, 200);
+
+    const videos = Array.from(document.querySelectorAll("video")).map((v) => ({
+      autoplay: v.hasAttribute("autoplay") || v.autoplay === true,
+      muted: v.hasAttribute("muted") || v.muted === true,
+      controls: v.hasAttribute("controls") || v.controls === true,
+      hasPoster: !!v.poster,
+      ariaLabel: v.getAttribute("aria-label") || null,
+      tracks: Array.from(v.querySelectorAll("track")).map((t) => ({
+        kind: t.kind || null,
+        srclang: t.srclang || null,
+        label: t.label || null,
+        src: t.src || null,
+      })),
+    }));
+
+    const videoIframes = Array.from(document.querySelectorAll("iframe"))
+      .filter((f) => {
+        const src = f.src || "";
+        return /youtube|vimeo|wistia|brightcove|jwplayer|dailymotion|bbvms|kaltura|hihaho|vixy|ping/i.test(
+          src
+        );
+      })
+      .slice(0, 20)
+      .map((f) => ({
+        src: f.src,
+        title: f.getAttribute("title") || null,
+        ariaLabel: f.getAttribute("aria-label") || null,
+        allow: f.getAttribute("allow") || null,
+        tabindex: f.getAttribute("tabindex"),
+      }));
+
+    const ccButtonPresent = !!document.querySelector(CC_SELECTOR);
+
+    const transcriptLinkNearby = Array.from(
+      document.querySelectorAll("a, button")
+    ).some((el) => TRANSCRIPT_RE.test((el.textContent || "").trim()));
+
+    return {
+      pageTitle: (document.title || "").slice(0, 200),
+      nearestHeading,
+      videos,
+      videoIframes,
+      ccButtonPresent,
+      transcriptLinkNearby,
+    };
+  });
+}
+
 async function scrollPage(page) {
   await page.evaluate(async () => {
     const delay = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -900,8 +971,12 @@ async function scanOnePage(context, url, timeout) {
     Array.from(document.querySelectorAll("a[href]"), (a) => a.href)
   );
 
+  const accessibility = detected.length > 0
+    ? await capturePageA11y(page).catch(() => null)
+    : null;
+
   await page.close();
-  return { detected, links };
+  return { detected, links, accessibility };
 }
 
 // First page: accept cookies before scanning (re-navigates if cookies accepted)
@@ -968,8 +1043,12 @@ async function scanFirstPage(context, url, timeout) {
     Array.from(document.querySelectorAll("a[href]"), (a) => a.href)
   );
 
+  const accessibility = detected.length > 0
+    ? await capturePageA11y(page).catch(() => null)
+    : null;
+
   await page.close();
-  return { detected, links };
+  return { detected, links, accessibility };
 }
 
 // Initial guess before AutoTuner takes over (it'll converge within ~2 batches).
@@ -1200,6 +1279,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     results = (prev.details || []).map((d) => ({
       url: d.url,
       players: d.players.map((p) => ({ player: p.name, evidence: p.evidence })),
+      accessibility: d.accessibility || null,
     }));
     for (const v of visited) {
       if (!results.find((r) => r.url === v)) {
@@ -1227,7 +1307,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       chalk.gray(`[${visited.size}/${maxPages}] `) + chalk.white(truncate(firstUrl, 80)) + " "
     );
     try {
-      const { detected, links, skippedReason } = await scanFirstPage(context, firstUrl, timeout);
+      const { detected, links, accessibility, skippedReason } = await scanFirstPage(context, firstUrl, timeout);
       if (skippedReason) {
         console.log(chalk.yellow(`  ⤳ skipped (${skippedReason})`));
       } else if (detected.length > 0) {
@@ -1235,7 +1315,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       } else {
         console.log(chalk.gray("  -"));
       }
-      results.push({ url: firstUrl, players: detected });
+      results.push({ url: firstUrl, players: detected, accessibility });
 
       const newLinks = [];
       for (const link of links) {
@@ -1329,13 +1409,13 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       const result = batchResults[i];
 
       if (result.status === "fulfilled") {
-        const { detected, links, skippedReason } = result.value;
+        const { detected, links, accessibility, skippedReason } = result.value;
         if (skippedReason) {
           console.log(chalk.yellow(`  ⤳ ${truncate(url, 65)}  skipped (${skippedReason})`));
         } else if (detected.length > 0) {
           console.log(chalk.green(`  ✓ ${truncate(url, 65)}  [${detected.map((d) => d.player).join(", ")}]`));
         }
-        results.push({ url, players: detected });
+        results.push({ url, players: detected, accessibility });
 
         // Add discovered links to queue
         for (const link of links) {
@@ -1466,7 +1546,7 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
   const firstUrl = urls[0];
   process.stdout.write(chalk.gray(`[1/${urls.length}] `) + chalk.white(truncate(firstUrl, 80)) + " ");
   try {
-    const { detected, skippedReason } = await scanFirstPage(context, firstUrl, timeout);
+    const { detected, accessibility, skippedReason } = await scanFirstPage(context, firstUrl, timeout);
     if (skippedReason) {
       console.log(chalk.yellow(`  ⤳ skipped (${skippedReason})`));
     } else if (detected.length > 0) {
@@ -1474,7 +1554,7 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
     } else {
       console.log(chalk.gray("  -"));
     }
-    results.push({ url: firstUrl, players: detected });
+    results.push({ url: firstUrl, players: detected, accessibility });
   } catch (err) {
     if (err._rateLimit) {
       onRateLimit(throttle, firstUrl, err._rateLimit);
@@ -1512,13 +1592,13 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
       const result = batchResults[i];
 
       if (result.status === "fulfilled") {
-        const { detected, skippedReason } = result.value;
+        const { detected, accessibility, skippedReason } = result.value;
         if (skippedReason) {
           console.log(chalk.yellow(`  ⤳ ${truncate(url, 65)}  skipped (${skippedReason})`));
         } else if (detected.length > 0) {
           console.log(chalk.green(`  ✓ ${truncate(url, 65)}  [${detected.map((d) => d.player).join(", ")}]`));
         }
-        results.push({ url, players: detected });
+        results.push({ url, players: detected, accessibility });
       } else {
         const err = result.reason;
         if (err?._rateLimit) {
@@ -1561,9 +1641,9 @@ function generateReport({ domain, results, pagesScanned, _state, rateLimits, bat
   const pagesWithPlayers = [];
   const pagesWithoutPlayers = [];
 
-  for (const { url, players } of results) {
+  for (const { url, players, accessibility } of results) {
     if (players.length > 0) {
-      pagesWithPlayers.push({ url, players });
+      pagesWithPlayers.push({ url, players, accessibility });
       for (const { player } of players) {
         if (!playerSummary[player]) playerSummary[player] = [];
         playerSummary[player].push(url);
@@ -1650,9 +1730,10 @@ function generateReport({ domain, results, pagesScanned, _state, rateLimits, bat
     playerSummary: Object.fromEntries(
       Object.entries(playerSummary).map(([p, urls]) => [p, { count: urls.length, pages: urls }])
     ),
-    details: pagesWithPlayers.map(({ url, players }) => ({
+    details: pagesWithPlayers.map(({ url, players, accessibility }) => ({
       url,
       players: players.map((p) => ({ name: p.player, evidence: p.evidence })),
+      ...(accessibility ? { accessibility } : {}),
     })),
     rateLimits,
     _state,

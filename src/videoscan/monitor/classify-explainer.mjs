@@ -1,0 +1,264 @@
+#!/usr/bin/env node
+// Nationale Monitor — RQ2 'uitlegvideo' classifier.
+// Reads scan outputs + meta sidecars from a segment dir, batches video
+// candidates, asks Claude to classify each as uitlegvideo (yes/no/uncertain),
+// writes classify-output.json next to the meta files.
+//
+// Definition + examples come from monitor/explainer-definition.md (researcher
+// input — placeholder until filled).
+
+import { spawn } from "node:child_process";
+import {
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  readdirSync,
+} from "node:fs";
+import { join, resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const DEFINITION_PATH = join(__dirname, "explainer-definition.md");
+const BATCH_SIZE = 15;
+
+function parseArgs(argv) {
+  const out = {};
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--segment") out.segment = argv[++i];
+    else if (a === "--dir") out.dir = argv[++i];
+    else if (a === "--dry-run") out.dryRun = true;
+    else if (a === "--help" || a === "-h") out.help = true;
+  }
+  return out;
+}
+
+function printUsage() {
+  console.log(`
+RQ2 classifier — uitlegvideo yes/no/uncertain
+
+Usage:
+  node classify-explainer.mjs --segment <name> [--dir <path>] [--dry-run]
+
+Reads from:  videoscans/monitor/<segment>/  (override with --dir)
+Writes:      <dir>/classify-output.json
+`);
+}
+
+function slugify(s) {
+  return s
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+}
+
+// Build candidate list: one entry per (org, scan-page) where video was detected.
+// We classify per-page, not per-player — a single page usually contains one
+// logical video; if it carries multiple players (e.g. fallback HTML5 + JW), the
+// classification still applies to the same content.
+function collectCandidates(dir) {
+  const candidates = [];
+  const metas = readdirSync(dir).filter((f) => f.endsWith(".meta.json"));
+  for (const metaFile of metas) {
+    const meta = JSON.parse(readFileSync(join(dir, metaFile), "utf-8"));
+    const orgDir = meta.orgDir ? join(dir, meta.orgDir) : dir;
+    for (const scanFile of meta.scanFiles || []) {
+      const full = join(orgDir, scanFile);
+      if (!existsSync(full)) continue;
+      const scan = JSON.parse(readFileSync(full, "utf-8"));
+      for (const d of scan.details || []) {
+        candidates.push({
+          orgSlug: metaFile.replace(/\.meta\.json$/, ""),
+          organisatie: meta.organisatie,
+          pageUrl: d.url,
+          playerTypes: (d.players || []).map((p) => p.name),
+          pageTitle: d.accessibility?.pageTitle || "",
+          nearestHeading: d.accessibility?.nearestHeading || "",
+        });
+      }
+    }
+  }
+  return candidates;
+}
+
+function buildPrompt(definitionText, batch) {
+  const items = batch
+    .map((c, i) => {
+      return [
+        `[${i + 1}] org="${c.organisatie}"`,
+        `    page_url=${c.pageUrl}`,
+        `    page_title="${c.pageTitle}"`,
+        `    nearest_heading="${c.nearestHeading}"`,
+        `    player_types=[${c.playerTypes.join(", ")}]`,
+      ].join("\n");
+    })
+    .join("\n\n");
+
+  return `Je bent een onderzoeksassistent voor de Nationale Monitor Digitale Toegankelijkheid.
+
+Hieronder de definitie van 'uitlegvideo' (vraag RQ2 in het onderzoek):
+
+${definitionText}
+
+Klassificeer onderstaande gevonden video's. Geef per item een JSON-object:
+{ "index": <nr>, "isExplainer": "yes" | "no" | "uncertain", "reasoning": "<max 1 zin>" }
+
+Antwoord ALLEEN met een JSON array, geen tekst eromheen.
+
+ITEMS:
+
+${items}
+`;
+}
+
+function callClaude(prompt) {
+  return new Promise((resolveFn, reject) => {
+    const proc = spawn(
+      "claude",
+      ["--print", "--dangerously-skip-permissions", "-"],
+      { shell: true }
+    );
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.on("data", (d) => (stdout += d.toString()));
+    proc.stderr.on("data", (d) => (stderr += d.toString()));
+    proc.on("error", reject);
+    proc.on("exit", (code) => {
+      if (code !== 0) {
+        reject(new Error(`claude exited ${code}: ${stderr.slice(0, 300)}`));
+      } else {
+        resolveFn(stdout);
+      }
+    });
+    proc.stdin.write(prompt);
+    proc.stdin.end();
+  });
+}
+
+function extractJsonArray(text) {
+  const trimmed = text.trim();
+
+  // Happy path: response is pure JSON.
+  if (trimmed.startsWith("[")) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {}
+  }
+
+  // Fenced code block: ```json [...] ``` or ``` [...] ```
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced) {
+    try {
+      return JSON.parse(fenced[1].trim());
+    } catch {}
+  }
+
+  // Last-resort: bracket-match scan that ignores brackets inside strings.
+  let depth = 0;
+  let start = -1;
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i];
+    if (esc) { esc = false; continue; }
+    if (ch === "\\" && inStr) { esc = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === "[") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "]") {
+      depth--;
+      if (depth === 0 && start !== -1) {
+        return JSON.parse(trimmed.slice(start, i + 1));
+      }
+    }
+  }
+  throw new Error("No JSON array in Claude response");
+}
+
+async function main() {
+  const opts = parseArgs(process.argv.slice(2));
+  if (opts.help || !opts.segment) {
+    printUsage();
+    process.exit(opts.help ? 0 : 1);
+  }
+
+  const dir = resolve(
+    opts.dir || join("videoscans", "monitor", slugify(opts.segment))
+  );
+  if (!existsSync(dir)) {
+    console.error(`Segment dir not found: ${dir}`);
+    process.exit(1);
+  }
+
+  if (!existsSync(DEFINITION_PATH)) {
+    console.error(
+      `Definition file missing: ${DEFINITION_PATH}\nResearcher must provide this before classification can run.`
+    );
+    process.exit(1);
+  }
+  const definitionText = readFileSync(DEFINITION_PATH, "utf-8");
+
+  const candidates = collectCandidates(dir);
+  console.log(
+    `RQ2 classifier — ${candidates.length} candidate pages in ${dir}`
+  );
+
+  if (opts.dryRun) {
+    console.log("Dry run — would classify in batches of " + BATCH_SIZE);
+    candidates.slice(0, 5).forEach((c, i) =>
+      console.log(`  ${i + 1}. ${c.organisatie} — ${c.pageUrl}`)
+    );
+    return;
+  }
+
+  const results = [];
+  for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
+    const batch = candidates.slice(i, i + BATCH_SIZE);
+    const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+    const totalBatches = Math.ceil(candidates.length / BATCH_SIZE);
+    console.log(
+      `  Batch ${batchNum}/${totalBatches} — ${batch.length} items...`
+    );
+    try {
+      const response = await callClaude(buildPrompt(definitionText, batch));
+      const parsed = extractJsonArray(response);
+      for (const r of parsed) {
+        const c = batch[r.index - 1];
+        if (!c) continue;
+        results.push({
+          orgSlug: c.orgSlug,
+          organisatie: c.organisatie,
+          pageUrl: c.pageUrl,
+          isExplainer: r.isExplainer,
+          reasoning: r.reasoning,
+        });
+      }
+    } catch (err) {
+      console.error(`    batch ${batchNum} failed: ${err.message}`);
+      for (const c of batch) {
+        results.push({
+          orgSlug: c.orgSlug,
+          organisatie: c.organisatie,
+          pageUrl: c.pageUrl,
+          isExplainer: "error",
+          reasoning: err.message.slice(0, 200),
+        });
+      }
+    }
+  }
+
+  const outFile = join(dir, "classify-output.json");
+  writeFileSync(outFile, JSON.stringify(results, null, 2));
+  console.log(`\nWrote ${results.length} classifications to ${outFile}`);
+  console.log(`Next: node monitor/aggregate-monitor.mjs --segment ${opts.segment}`);
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
