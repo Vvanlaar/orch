@@ -25,27 +25,54 @@
   let route = $derived(getRoute());
   let lastRefreshedAt = $state<string>('');
 
+  // Ticket-y data is only useful on /tickets; skip elsewhere so a /videoscan
+  // session doesn't re-pull PRs / work items every refresh.
   function refreshAll(refresh = false) {
-    fetchPRs(refresh);
-    fetchWorkItems();
-    fetchResolvedByMe();
-    fetchResolvedWithComments(refresh);
+    const r = getRoute();
     fetchTasks();
     fetchClaudeUsage();
-    fetchReviewedItems();
-    fetchTeamMembers();
     fetchCurrentUser();
     fetchNotifications();
-    fetchOrchestratorState();
+    if (r === '/tickets') {
+      fetchPRs(refresh);
+      fetchWorkItems();
+      fetchResolvedByMe();
+      fetchResolvedWithComments(refresh);
+      fetchReviewedItems();
+      fetchTeamMembers();
+      fetchOrchestratorState();
+    }
     lastRefreshedAt = new Date().toISOString();
   }
+
+  // Re-fetch when the user navigates to a route whose data hasn't been loaded
+  // this session (skip the first run — onMount already covers it).
+  let routeRefreshArmed = false;
+  $effect(() => {
+    const _ = route;
+    if (!routeRefreshArmed) { routeRefreshArmed = true; return; }
+    refreshAll();
+  });
 
   onMount(() => {
     connect();
     refreshAll();
-    // Refresh every 10 minutes (reduced from 2min to lower Supabase egress)
-    const interval = setInterval(() => refreshAll(), 600000);
-    return () => clearInterval(interval);
+
+    // Refresh when the tab regains focus after being hidden for >5min.
+    // No periodic interval — WS pushes task/output updates, and ticket data
+    // is only re-fetched on demand or on visibility-return.
+    const VISIBILITY_THRESHOLD_MS = 5 * 60 * 1000;
+    let hiddenAt = 0;
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        hiddenAt = Date.now();
+      } else if (hiddenAt && Date.now() - hiddenAt > VISIBILITY_THRESHOLD_MS) {
+        hiddenAt = 0;
+        refreshAll();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
   });
 </script>
 

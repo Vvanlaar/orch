@@ -114,7 +114,15 @@ function jsonDeleteTask(id: number): boolean {
 // ── In-memory streaming output (shared, not in DB) ──
 
 const streamingOutputs = new Map<number, string>();
-const MAX_STREAMING_OUTPUT = 100 * 1024; // 100KB cap
+const MAX_STREAMING_OUTPUT = 100 * 1024; // 100KB in-memory cap
+// Only the tail goes to Postgres — full log lives in WS stream / in-memory cache.
+const PERSISTED_OUTPUT_TAIL = 4 * 1024;
+
+function tailOutput(output: string | undefined): string | undefined {
+  if (!output) return output;
+  if (output.length <= PERSISTED_OUTPUT_TAIL) return output;
+  return '...[truncated]...\n' + output.slice(-PERSISTED_OUTPUT_TAIL);
+}
 
 export function appendStreamingOutput(id: number, chunk: string): void {
   let current = streamingOutputs.get(id) || '';
@@ -259,14 +267,14 @@ export async function claimTask(id: number): Promise<boolean> {
 }
 
 export async function completeTask(id: number, result: string): Promise<void> {
-  const output = streamingOutputs.get(id);
+  const output = tailOutput(streamingOutputs.get(id));
   streamingOutputs.delete(id);
   if (useDb) return dbCompleteTask(id, result, output);
   jsonUpdateTask(id, { status: 'completed', result, output, pid: undefined, completedAt: new Date().toISOString() });
 }
 
 export async function failTask(id: number, error: string): Promise<void> {
-  const output = streamingOutputs.get(id);
+  const output = tailOutput(streamingOutputs.get(id));
   streamingOutputs.delete(id);
   if (useDb) return dbFailTask(id, error, output);
   jsonUpdateTask(id, { status: 'failed', error, output, pid: undefined, completedAt: new Date().toISOString() });
@@ -279,7 +287,7 @@ export async function failTask(id: number, error: string): Promise<void> {
  * is durably 'paused' even if the server crashes mid-call.
  */
 export async function pauseTask(id: number): Promise<void> {
-  const output = streamingOutputs.get(id);
+  const output = tailOutput(streamingOutputs.get(id));
   streamingOutputs.delete(id);
   if (useDb) return dbUpdateTask(id, { status: 'paused', output: output ?? null, pid: null });
   jsonUpdateTask(id, { status: 'paused', output, pid: undefined });

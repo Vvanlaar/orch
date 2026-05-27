@@ -6,15 +6,22 @@ import { createLogger } from '../logger.js';
 const log = createLogger('storage');
 
 const BUCKET = 'videoscans';
-let bucketEnsured = false;
+let ensurePromise: Promise<void> | null = null;
 
 async function ensureBucket(): Promise<void> {
-  if (bucketEnsured) return;
-  const { error } = await getSupabase().storage.createBucket(BUCKET, { public: false });
-  if (error && !error.message.includes('already exists')) {
-    log.error(`Failed to create bucket: ${error.message}`);
-  }
-  bucketEnsured = true;
+  if (ensurePromise) return ensurePromise;
+  ensurePromise = (async () => {
+    const { data, error: getErr } = await getSupabase().storage.getBucket(BUCKET);
+    if (data && !getErr) return;
+    const { error: createErr } = await getSupabase().storage.createBucket(BUCKET, { public: false });
+    if (createErr && !createErr.message.includes('already exists')) {
+      log.error(`Failed to create bucket: ${createErr.message}`);
+    }
+  })().catch(err => {
+    log.error(`ensureBucket failed: ${err}`);
+    ensurePromise = null;
+  });
+  return ensurePromise;
 }
 
 export async function uploadFile(filename: string, localDir: string): Promise<boolean> {
