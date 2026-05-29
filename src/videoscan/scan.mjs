@@ -1246,7 +1246,7 @@ function setupInterruptHandler() {
   process.on('SIGTERM', handler);
 }
 
-async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile = null, concurrency = DEFAULT_CONCURRENCY, delay = 200, sitemap = true, maxSitemapUrls = 5000, controlFile = null } = {}) {
+async function crawlSite(startUrl, { maxPages = 50, maxVideos = Infinity, seedUrls = [], timeout = 15000, resumeFile = null, concurrency = DEFAULT_CONCURRENCY, delay = 200, sitemap = true, maxSitemapUrls = 5000, controlFile = null } = {}) {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     userAgent:
@@ -1258,7 +1258,17 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   const domain = baseUrl.hostname.replace(/^www\./, "");
   let visited = new Set();
   let queue = [normalizeUrl(startUrl, startUrl)];
+  // Seed extra org URLs (e.g. homepage/product) after the start URL so the
+  // start URL (typically the support page) is scanned first, then the seeds,
+  // then any crawled links. On resume the queue is restored from state below.
+  for (const s of seedUrls) {
+    const norm = normalizeUrl(s, startUrl);
+    if (norm && !queue.includes(norm) && isSameDomain(norm, domain)) queue.push(norm);
+  }
   let results = [];
+  // Running count of pages where ≥1 player was detected. Drives the --max-videos
+  // early-stop so we stop crawling a domain once we have a big enough sample.
+  let videoPageCount = 0;
 
   const throttle = createThrottleState(delay, concurrency);
   const autoTuner = createAutoTuner(controlFile);
@@ -1292,6 +1302,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
         results.push({ url: v, players: [] });
       }
     }
+    videoPageCount = results.filter((r) => (r.players?.length || 0) > 0).length;
 
     // maxPages is additive when resuming: scan N more pages beyond what's already visited
     maxPages = visited.size + maxPages;
@@ -1322,6 +1333,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
         console.log(chalk.gray("  -"));
       }
       results.push({ url: firstUrl, players: detected, accessibility });
+      if (detected.length > 0) videoPageCount++;
 
       const newLinks = [];
       for (const link of links) {
@@ -1374,7 +1386,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   // we'd divide *all* visited pages (including pre-resume ones) by *this run's* elapsed time.
   const resumeBaseline = visited.size;
 
-  while (queue.length > 0 && visited.size < maxPages && !interrupted) {
+  while (queue.length > 0 && visited.size < maxPages && videoPageCount < maxVideos && !interrupted) {
     // Inter-batch delay (skip first batch)
     if (batchNum > 0 && throttle.delay > 0) {
       await sleep(throttle.delay);
@@ -1422,6 +1434,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
           console.log(chalk.green(`  ✓ ${truncate(url, 65)}  [${detected.map((d) => d.player).join(", ")}]`));
         }
         results.push({ url, players: detected, accessibility });
+        if (detected.length > 0) videoPageCount++;
 
         // Add discovered links to queue
         for (const link of links) {
@@ -1474,6 +1487,10 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
 
     // Re-prioritize remaining queue after each batch (new video-likely URLs bubble up)
     queue.splice(0, queue.length, ...prioritizeUrls(queue));
+  }
+
+  if (videoPageCount >= maxVideos) {
+    console.log(chalk.cyan(`  ✓ Video budget reached (${videoPageCount}/${maxVideos} pages with video) — crawl stopped early`));
   }
 
   await browser.close();
@@ -1765,6 +1782,8 @@ ${chalk.bold("Gebruik:")}
 
 ${chalk.bold("Opties:")}
   --max-pages <n>       Max pagina's te scannen (standaard: 50)
+  --max-videos <n>      Stop de crawl zodra n pagina's met video gevonden zijn
+  --seed <urls|file>    Extra start-URLs (komma-lijst of .json) na de hoofd-URL
   --timeout <ms>        Timeout per pagina in ms (standaard: 15000)
   --delay <ms>          Vertraging tussen batches in ms (standaard: 200)
   --resume <json-file>  Hervat scan vanuit eerder resultaat
@@ -1866,9 +1885,19 @@ async function main() {
   const maxPages = parseInt(args[args.indexOf("--max-pages") + 1]) || 50;
   const sitemap = !args.includes("--no-sitemap");
   const maxSitemapUrls = parseInt(args[args.indexOf("--max-sitemap-urls") + 1]) || 5000;
+  const maxVideos = parseInt(args[args.indexOf("--max-videos") + 1]) || Infinity;
+  // --seed: extra URLs (comma list or .json file) queued after the start URL.
+  const seedArg = flagValue("--seed");
+  let seedUrls = [];
+  if (seedArg) {
+    seedUrls =
+      seedArg.endsWith(".json") && existsSync(seedArg)
+        ? JSON.parse(readFileSync(seedArg, "utf-8"))
+        : seedArg.split(",").map((u) => u.trim()).filter(Boolean);
+  }
 
   try {
-    const scanResult = await crawlSite(url, { maxPages, timeout, resumeFile, concurrency, delay, sitemap, maxSitemapUrls, controlFile });
+    const scanResult = await crawlSite(url, { maxPages, maxVideos, seedUrls, timeout, resumeFile, concurrency, delay, sitemap, maxSitemapUrls, controlFile });
     generateReport({ ...scanResult, batchId, batchLabel, resumeFile });
   } catch (err) {
     console.error(chalk.red(`Scan mislukt: ${err.message}`));

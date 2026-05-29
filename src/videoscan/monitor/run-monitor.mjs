@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // Nationale Monitor Digitale Toegankelijkheid — orchestrator.
-// Reads a CSV with (segment, organisatie, url_homepage, url_support, url_product),
-// spawns scan.mjs per organisation in --urls mode (no crawl, just the listed
-// pages), and writes a .meta.json sidecar per org so the aggregator can stitch
-// scan-output ↔ organisation later.
+// Reads a CSV with (segment, organisatie, url_homepage, url_support, url_product)
+// and, per organisation, crawls the domain starting at url_support (so support/
+// FAQ content is scanned first) until --max-videos pages with video are found or
+// --max-pages is reached. Writes a .meta.json sidecar per org so the aggregator
+// can stitch scan-output ↔ organisation later.
 //
 // Sequential by design — see plan §verification (traceability over throughput).
 
@@ -18,18 +19,20 @@ import {
 } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { slugify, parseCsv, rowsToObjects } from "./_lib.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCAN_SCRIPT = resolve(__dirname, "..", "scan.mjs");
 
 function parseArgs(argv) {
-  const out = { maxPages: 3, delay: 3000 };
+  const out = { maxPages: 40, maxVideos: 10, delay: 3000 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--input") out.input = argv[++i];
     else if (a === "--segment") out.segment = argv[++i];
     else if (a === "--out") out.out = argv[++i];
     else if (a === "--max-pages") out.maxPages = Number(argv[++i]);
+    else if (a === "--max-videos") out.maxVideos = Number(argv[++i]);
     else if (a === "--limit") out.limit = Number(argv[++i]);
     else if (a === "--delay") out.delay = Number(argv[++i]);
     else if (a === "--help" || a === "-h") out.help = true;
@@ -47,11 +50,17 @@ Usage:
 CSV columns (header row required, case-insensitive):
   segment, organisatie, url_homepage, url_support, url_product
 
+Per org: crawls the domain starting at url_support (so support/FAQ content is
+scanned first), then homepage + product, stopping once --max-videos pages with
+video are found, or --max-pages is reached. Falls back to homepage as start
+when url_support is empty.
+
 Options:
   --segment <name>      Filter rows to this segment (required)
   --input <csv>         Path to input CSV (required)
   --out <dir>           Output dir (default: videoscans/monitor/<segment>)
-  --max-pages <n>       Max pages per org scan (default: 3)
+  --max-videos <n>      Stop crawl after n pages with video (default: 10)
+  --max-pages <n>       Safety cap on pages crawled per org (default: 40)
   --delay <ms>          Inter-page delay in scan.mjs (default: 3000)
   --limit <n>           Only process first N orgs (smoke test)
 
@@ -60,78 +69,13 @@ Example:
 `);
 }
 
-// Minimal RFC-4180-ish CSV parser. Handles quoted fields, doubled-quote escape,
-// CRLF and LF line endings. No streaming — the input is ~700 rows.
-function parseCsv(text) {
-  const rows = [];
-  let field = "";
-  let row = [];
-  let inQuotes = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inQuotes) {
-      if (ch === '"') {
-        if (text[i + 1] === '"') {
-          field += '"';
-          i++;
-        } else {
-          inQuotes = false;
-        }
-      } else {
-        field += ch;
-      }
-    } else {
-      if (ch === '"') inQuotes = true;
-      else if (ch === ",") {
-        row.push(field);
-        field = "";
-      } else if (ch === "\n") {
-        row.push(field);
-        rows.push(row);
-        row = [];
-        field = "";
-      } else if (ch === "\r") {
-        // swallow — \n handles row break
-      } else {
-        field += ch;
-      }
-    }
-  }
-  if (field.length || row.length) {
-    row.push(field);
-    rows.push(row);
-  }
-  return rows;
-}
-
-function rowsToObjects(rows) {
-  if (rows.length === 0) return [];
-  const header = rows[0].map((h) => h.trim().toLowerCase());
-  return rows.slice(1).map((r) => {
-    const obj = {};
-    for (let i = 0; i < header.length; i++) {
-      obj[header[i]] = (r[i] || "").trim();
-    }
-    return obj;
-  });
-}
-
-function slugify(s) {
-  return s
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 60);
-}
-
-function runScan(urlsFile, segment, maxPages, delay, cwd) {
+function runScan({ startUrl, seedFile, segment, maxPages, maxVideos, delay, cwd }) {
   return new Promise((resolveFn, reject) => {
     const args = [
       SCAN_SCRIPT,
-      "--urls",
-      urlsFile,
+      startUrl,
+      "--max-videos",
+      String(maxVideos),
       "--max-pages",
       String(maxPages),
       "--delay",
@@ -140,6 +84,7 @@ function runScan(urlsFile, segment, maxPages, delay, cwd) {
       "--batch-label",
       segment,
     ];
+    if (seedFile) args.push("--seed", seedFile);
     const child = spawn(process.execPath, args, {
       cwd,
       stdio: "inherit",
@@ -197,17 +142,22 @@ async function main() {
       orgSlug = `${baseSlug}-${suffix}`;
     }
 
-    const urls = [row.url_homepage, row.url_support, row.url_product]
-      .map((u) => (u || "").trim())
-      .filter(Boolean);
-
-    if (urls.length === 0) {
+    const homepage = (row.url_homepage || "").trim();
+    const support = (row.url_support || "").trim();
+    const product = (row.url_product || "").trim();
+    // Crawl starts at the support page (RQ2 lives there); fall back to homepage.
+    // Remaining URLs are seeded so they're scanned even if not linked from start.
+    const startUrl = support || homepage;
+    if (!startUrl) {
       console.log(`[${i + 1}/${limit}] ${row.organisatie} — no URLs, skip`);
       continue;
     }
+    const seeds = [homepage, support, product].filter(
+      (u) => u && u !== startUrl
+    );
 
     console.log(
-      `\n[${i + 1}/${limit}] ${row.organisatie} (${urls.length} URL${urls.length === 1 ? "" : "s"})`
+      `\n[${i + 1}/${limit}] ${row.organisatie} — start=${startUrl}${seeds.length ? ` (+${seeds.length} seed)` : ""}`
     );
 
     // Per-org subdir isolates scan output filenames — prevents
@@ -218,25 +168,38 @@ async function main() {
     if (existsSync(orgDir)) rmSync(orgDir, { recursive: true, force: true });
     mkdirSync(orgDir, { recursive: true });
 
-    const urlsFile = join(orgDir, "_urls.json");
-    writeFileSync(urlsFile, JSON.stringify(urls, null, 2));
+    let seedFile = null;
+    if (seeds.length) {
+      seedFile = join(orgDir, "_seed.json");
+      writeFileSync(seedFile, JSON.stringify(seeds, null, 2));
+    }
 
     const startedAt = Date.now();
     try {
-      await runScan(urlsFile, opts.segment, opts.maxPages, opts.delay, orgDir);
+      await runScan({
+        startUrl,
+        seedFile,
+        segment: opts.segment,
+        maxPages: opts.maxPages,
+        maxVideos: opts.maxVideos,
+        delay: opts.delay,
+        cwd: orgDir,
+      });
     } catch (err) {
       console.error(`  scan failed: ${err.message}`);
     } finally {
-      try { rmSync(urlsFile); } catch {}
+      if (seedFile) { try { rmSync(seedFile); } catch {} }
     }
 
     const meta = {
       organisatie: row.organisatie,
       segment: opts.segment,
-      url_homepage: row.url_homepage || null,
-      url_support: row.url_support || null,
-      url_product: row.url_product || null,
-      urls,
+      url_homepage: homepage || null,
+      url_support: support || null,
+      url_product: product || null,
+      startUrl,
+      seeds,
+      maxVideos: opts.maxVideos,
       orgDir: orgSlug,
       scanFiles: findScanOutputs(orgDir),
       scannedAt: new Date(startedAt).toISOString(),

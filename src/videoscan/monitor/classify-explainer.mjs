@@ -7,7 +7,6 @@
 // Definition + examples come from monitor/explainer-definition.md (researcher
 // input — placeholder until filled).
 
-import { spawn } from "node:child_process";
 import {
   readFileSync,
   writeFileSync,
@@ -16,6 +15,7 @@ import {
 } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { slugify, callClaudeWithRetry, extractJsonArray } from "./_lib.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFINITION_PATH = join(__dirname, "explainer-definition.md");
@@ -43,16 +43,6 @@ Usage:
 Reads from:  videoscans/monitor/<segment>/  (override with --dir)
 Writes:      <dir>/classify-output.json
 `);
-}
-
-function slugify(s) {
-  return s
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 60);
 }
 
 // Build candidate list: one entry per (org, scan-page) where video was detected.
@@ -112,96 +102,6 @@ ITEMS:
 
 ${items}
 `;
-}
-
-function callClaude(prompt) {
-  return new Promise((resolveFn, reject) => {
-    const proc = spawn(
-      "claude",
-      ["--print", "--dangerously-skip-permissions", "-"],
-      { shell: true }
-    );
-    let stdout = "";
-    let stderr = "";
-    proc.stdout.on("data", (d) => (stdout += d.toString()));
-    proc.stderr.on("data", (d) => (stderr += d.toString()));
-    proc.on("error", reject);
-    proc.on("exit", (code) => {
-      if (code !== 0) {
-        const err = new Error(
-          `claude exited ${code}: ${stderr.slice(0, 300)}`
-        );
-        err.fullStderr = stderr;
-        reject(err);
-      } else {
-        resolveFn(stdout);
-      }
-    });
-    if (proc.stdin) {
-      // Swallow EPIPE if claude exits before we finish writing the prompt;
-      // the exit handler reports the real cause.
-      proc.stdin.on("error", () => {});
-      proc.stdin.write(prompt);
-      proc.stdin.end();
-    }
-  });
-}
-
-async function callClaudeWithRetry(prompt, errorLog) {
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      return await callClaude(prompt);
-    } catch (err) {
-      if (errorLog) {
-        errorLog.push(
-          `--- attempt ${attempt} @ ${new Date().toISOString()} ---\n${err.fullStderr || err.message}\n`
-        );
-      }
-      if (attempt === 2) throw err;
-    }
-  }
-}
-
-function extractJsonArray(text) {
-  const trimmed = text.trim();
-
-  // Happy path: response is pure JSON.
-  if (trimmed.startsWith("[")) {
-    try {
-      return JSON.parse(trimmed);
-    } catch {}
-  }
-
-  // Fenced code block: ```json [...] ``` or ``` [...] ```
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced) {
-    try {
-      return JSON.parse(fenced[1].trim());
-    } catch {}
-  }
-
-  // Last-resort: bracket-match scan that ignores brackets inside strings.
-  let depth = 0;
-  let start = -1;
-  let inStr = false;
-  let esc = false;
-  for (let i = 0; i < trimmed.length; i++) {
-    const ch = trimmed[i];
-    if (esc) { esc = false; continue; }
-    if (ch === "\\" && inStr) { esc = true; continue; }
-    if (ch === '"') { inStr = !inStr; continue; }
-    if (inStr) continue;
-    if (ch === "[") {
-      if (depth === 0) start = i;
-      depth++;
-    } else if (ch === "]") {
-      depth--;
-      if (depth === 0 && start !== -1) {
-        return JSON.parse(trimmed.slice(start, i + 1));
-      }
-    }
-  }
-  throw new Error("No JSON array in Claude response");
 }
 
 async function main() {

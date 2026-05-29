@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { slugify, writeCsvString } from "./_lib.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -50,27 +51,6 @@ Reads:  videoscans/monitor/<segment>/  (or --dir)
 Writes: <dir>/monitor-results-<segment>.csv
         <dir>/monitor-manual-review-<segment>.csv
 `);
-}
-
-function slugify(s) {
-  return s
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 60);
-}
-
-function csvCell(v) {
-  if (v == null) return "";
-  const s = String(v);
-  if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
-}
-
-function csvRow(cells) {
-  return cells.map(csvCell).join(",");
 }
 
 function ratioToScore(passes, total) {
@@ -293,17 +273,8 @@ async function main() {
   const resultsFile = join(dir, `monitor-results-${segmentSlug}.csv`);
   const reviewFile = join(dir, `monitor-manual-review-${segmentSlug}.csv`);
 
-  // UTF-8 BOM + CRLF: Excel-on-Windows decodes UTF-8 correctly when the BOM
-  // is present and treats CRLF as the row separator.
-  const BOM = "﻿";
-  const writeCsv = (file, header, rows) =>
-    writeFileSync(
-      file,
-      BOM + [csvRow(header), ...rows.map(csvRow)].join("\r\n") + "\r\n"
-    );
-
-  writeCsv(resultsFile, resultsHeader, resultsRows);
-  writeCsv(reviewFile, reviewHeader, reviewRows);
+  writeFileSync(resultsFile, writeCsvString(resultsHeader, resultsRows));
+  writeFileSync(reviewFile, writeCsvString(reviewHeader, reviewRows));
 
   console.log(`Wrote ${resultsRows.length} orgs to ${resultsFile}`);
   console.log(`Wrote ${reviewRows.length} pages to ${reviewFile}`);
