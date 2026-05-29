@@ -7,14 +7,17 @@
 //
 // Run BEFORE run-monitor.mjs:
 //   node find-support-urls.mjs --input in.csv --output in-enriched.csv
+//
+// Resumable: the output CSV is rewritten (atomically) after every row, and a
+// re-run skips rows already resolved in that output. Use --fresh to start over.
 
 import { chromium } from "playwright";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   parseCsv,
   rowsToObjects,
-  csvRow,
+  writeCsvString,
   callClaudeWithRetry,
   extractJsonArray,
 } from "./_lib.mjs";
@@ -31,9 +34,22 @@ function parseArgs(argv) {
     else if (a === "--limit") out.limit = Number(argv[++i]);
     else if (a === "--delay") out.delay = Number(argv[++i]);
     else if (a === "--no-llm") out.noLlm = true;
+    else if (a === "--fresh") out.fresh = true;
     else if (a === "--help" || a === "-h") out.help = true;
   }
   return out;
+}
+
+// Stable key to match a row across input and a prior output CSV.
+const rowKey = (r) => `${r.organisatie || ""}|${r.url_homepage || ""}`;
+
+// Atomic write: temp file + rename, so a crash/reboot mid-write can't corrupt
+// the output. Called after every row to make the run resumable.
+function writeOutput(outFile, baseCols, rowObjs) {
+  const rows = rowObjs.map((r) => baseCols.map((c) => r[c] ?? ""));
+  const tmp = outFile + ".tmp";
+  writeFileSync(tmp, writeCsvString(baseCols, rows));
+  renameSync(tmp, outFile);
 }
 
 function printUsage() {
@@ -45,7 +61,9 @@ Usage:
 
 Adds/fills the url_support column by inspecting each homepage. Existing
 non-empty url_support values are kept. Adds two transparency columns:
-url_support_method (existing|heuristic|llm|none) and url_support_score.
+url_support_method (existing|heuristic|llm|none|error) and url_support_score.
+The output CSV is written after every row; re-running resumes from it (rows
+already resolved are skipped; 'error' rows are retried).
 
 Options:
   --input <csv>     Input CSV (segment, organisatie, url_homepage, ...)
@@ -54,6 +72,7 @@ Options:
   --delay <ms>      Delay between sites (default: 1500)
   --no-llm          Heuristic only — no Claude tie-break
   --limit <n>       Only process first N rows (smoke test)
+  --fresh           Ignore any existing output and re-process all rows
 `);
 }
 
@@ -70,18 +89,36 @@ const SCORE_RULES = [
 ];
 
 function scoreCandidate(href, text) {
-  let pathPart = "";
+  let segments = [];
   try {
-    pathPart = decodeURIComponent(new URL(href).pathname);
+    segments = decodeURIComponent(new URL(href).pathname).split("/").filter(Boolean);
   } catch {
     return 0;
   }
-  const haystackText = text || "";
+  // Only short, non-sluggy path segments count as section markers. This stops
+  // "support"/"hulp"/etc. matching when buried inside long news/article/agenda
+  // slugs (e.g. /news/...-para-sports-support-center-... → false positive).
+  const pathHay = segments
+    .filter((s) => s.length <= 25 && (s.match(/-/g)?.length || 0) <= 2)
+    .join(" ")
+    .replace(/-/g, " ");
+  const textHay = text || "";
   let best = 0;
   for (const { weight, re } of SCORE_RULES) {
-    if (re.test(pathPart) || re.test(haystackText)) best = Math.max(best, weight);
+    if (re.test(textHay) || re.test(pathHay)) best = Math.max(best, weight);
   }
   return best;
+}
+
+// News/article/agenda detail pages — a keyword match here is usually a headline
+// coincidence, not a real support section.
+const DETAIL_PATH = /\/(news|nieuws|article|artikel|blog|agenda|kalender|events?|evenement|wedstrijd|persbericht|press)\//i;
+function isDetailPage(href) {
+  try {
+    return DETAIL_PATH.test(new URL(href).pathname);
+  } catch {
+    return false;
+  }
 }
 
 // Is `href` on the same registrable domain as `baseHost` (allowing subdomains
@@ -121,11 +158,19 @@ async function findForHomepage(page, homepage, { timeout, minScore, noLlm, error
 
   try {
     await page.goto(homepage, { waitUntil: "domcontentloaded", timeout });
+    // Give JS-rendered navigation a chance to populate (SPA menus/footers).
+    await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {});
   } catch (e) {
     return { url: "", method: "none", score: 0, note: `load failed: ${(e?.message || "").slice(0, 60)}` };
   }
 
-  const links = (await extractNavLinks(page)).filter((l) => sameSite(l.href, baseHost));
+  let links;
+  try {
+    links = (await extractNavLinks(page)).filter((l) => sameSite(l.href, baseHost));
+  } catch (e) {
+    // Execution context destroyed by a client-side redirect mid-evaluate, etc.
+    return { url: "", method: "none", score: 0, note: `link extract failed: ${(e?.message || "").slice(0, 60)}` };
+  }
 
   // Heuristic: highest-scoring same-site link.
   let best = null;
@@ -133,7 +178,10 @@ async function findForHomepage(page, homepage, { timeout, minScore, noLlm, error
     const score = scoreCandidate(l.href, l.text);
     if (score > 0 && (!best || score > best.score)) best = { ...l, score };
   }
-  if (best && best.score >= minScore) {
+  // A high score on a news/article/agenda detail page is usually a false
+  // positive (keyword sits in a headline/slug, not a section label). Don't
+  // auto-accept those — let the LLM tie-break decide instead.
+  if (best && best.score >= minScore && !isDetailPage(best.href)) {
     return { url: best.href, method: "heuristic", score: best.score };
   }
 
@@ -194,6 +242,25 @@ async function main() {
     if (!baseCols.includes(c)) baseCols.push(c);
   }
 
+  // Resume: pre-fill rows already resolved in a prior (interrupted) output.
+  // 'error' rows are left empty so they get retried this run.
+  let resumed = 0;
+  if (!opts.fresh && existsSync(outFile)) {
+    const priorByKey = new Map(
+      rowsToObjects(parseCsv(readFileSync(outFile, "utf-8"))).map((p) => [rowKey(p), p])
+    );
+    for (const row of rowObjs) {
+      const p = priorByKey.get(rowKey(row));
+      if (p && p.url_support_method && p.url_support_method !== "error") {
+        row.url_support = p.url_support || "";
+        row.url_support_method = p.url_support_method;
+        row.url_support_score = p.url_support_score || "0";
+        resumed++;
+      }
+    }
+    if (resumed) console.log(`Resuming: ${resumed} rows already done, skipping them.`);
+  }
+
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     userAgent:
@@ -212,23 +279,28 @@ async function main() {
     if (opts.segment && (row.segment || "").toLowerCase() !== opts.segment.toLowerCase()) {
       continue;
     }
+    // Resume-skip: already resolved in a prior run. Doesn't consume --limit.
+    if (row.url_support_method && row.url_support_method !== "error") continue;
     if (considered >= limit) break;
     considered++;
 
     if ((row.url_support || "").trim()) {
-      row.url_support_method = row.url_support_method || "existing";
+      row.url_support_method = "existing";
+      writeOutput(outFile, baseCols, rowObjs);
       continue;
     }
     const homepage = (row.url_homepage || "").trim();
     if (!homepage) {
       row.url_support_method = "none";
       row.url_support_score = "0";
+      writeOutput(outFile, baseCols, rowObjs);
       continue;
     }
 
     processed++;
-    const page = await context.newPage();
+    // Contain any unexpected per-site error so one bad site can't abort the run.
     let res;
+    const page = await context.newPage();
     try {
       res = await findForHomepage(page, homepage, {
         timeout: opts.timeout,
@@ -236,6 +308,8 @@ async function main() {
         noLlm: opts.noLlm,
         errorLog,
       });
+    } catch (e) {
+      res = { url: "", method: "error", score: 0, note: (e?.message || String(e)).slice(0, 80) };
     } finally {
       await page.close().catch(() => {});
     }
@@ -245,6 +319,12 @@ async function main() {
     row.url_support_score = String(res.score || 0);
     if (res.url) filled++;
 
+    // Persist after every site so a crash/reboot resumes from here.
+    writeOutput(outFile, baseCols, rowObjs);
+    if (errorLog.length) {
+      writeFileSync(outFile.replace(/\.csv$/i, "") + "-llm-errors.log", errorLog.join("\n"));
+    }
+
     console.log(
       `[${considered}/${limit}] ${row.organisatie || homepage} → ${res.url || "(none)"} [${res.method}${res.score ? ` ${res.score}` : ""}]${res.note ? ` — ${res.note}` : ""}`
     );
@@ -253,15 +333,7 @@ async function main() {
   }
 
   await browser.close();
-
-  const outRows = rowObjs.map((r) => baseCols.map((c) => r[c] ?? ""));
-  writeFileSync(
-    outFile,
-    "﻿" + [csvRow(baseCols), ...outRows.map(csvRow)].join("\r\n") + "\r\n"
-  );
-  if (errorLog.length) {
-    writeFileSync(outFile.replace(/\.csv$/i, "") + "-llm-errors.log", errorLog.join("\n"));
-  }
+  writeOutput(outFile, baseCols, rowObjs); // final flush (covers zero-processed case)
 
   console.log(`\nProcessed ${processed} sites, filled ${filled} url_support values.`);
   console.log(`Wrote ${outFile}`);

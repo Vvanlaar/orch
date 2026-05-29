@@ -18,6 +18,7 @@ orch-server.*.log
 orch-dev.log
 videoscans/
 videoscan-*.json
+monitor-input/
 *.png
 .superpowers/
 .claude/settings.local.json
