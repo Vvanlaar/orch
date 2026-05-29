@@ -161,7 +161,8 @@ async function findForHomepage(page, homepage, { timeout, minScore, noLlm, error
     // Give JS-rendered navigation a chance to populate (SPA menus/footers).
     await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {});
   } catch (e) {
-    return { url: "", method: "none", score: 0, note: `load failed: ${(e?.message || "").slice(0, 60)}` };
+    // Transient (timeout / protocol error) — method "error" so resume retries it.
+    return { url: "", method: "error", score: 0, note: `load failed: ${(e?.message || "").slice(0, 60)}` };
   }
 
   let links;
@@ -169,7 +170,7 @@ async function findForHomepage(page, homepage, { timeout, minScore, noLlm, error
     links = (await extractNavLinks(page)).filter((l) => sameSite(l.href, baseHost));
   } catch (e) {
     // Execution context destroyed by a client-side redirect mid-evaluate, etc.
-    return { url: "", method: "none", score: 0, note: `link extract failed: ${(e?.message || "").slice(0, 60)}` };
+    return { url: "", method: "error", score: 0, note: `link extract failed: ${(e?.message || "").slice(0, 60)}` };
   }
 
   // Heuristic: highest-scoring same-site link.
@@ -219,7 +220,8 @@ ${candidates.map((c, i) => `[${i + 1}] ${c.href}  — "${c.text}"`).join("\n")}
     }
     return { url: "", method: "none", score: 0, note: "llm: no pick" };
   } catch (e) {
-    return { url: "", method: "none", score: 0, note: `llm failed: ${(e?.message || "").slice(0, 60)}` };
+    // LLM infra failure — retryable on resume.
+    return { url: "", method: "error", score: 0, note: `llm failed: ${(e?.message || "").slice(0, 60)}` };
   }
 }
 
