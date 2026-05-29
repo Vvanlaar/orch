@@ -1,0 +1,43 @@
+﻿segment,sub_sector,organisatie,url_homepage,url_support,url_product,url_support_method,url_support_score,url_support_note
+Sportwereld,Sportbonden,KNGU (Koninklijke Nederlandse Gymnastiek Unie),https://dutchgymnastics.nl/,https://dutchgymnastics.nl/clubbestuurders/clubondersteuning,,heuristic,9,
+Sportwereld,Sportbonden,KNHB (Koninklijke Nederlandse Hockey Bond),https://www.knhb.nl/,https://www.knhb.nl/,,heuristic,9,
+Sportwereld,Sportevenementen,WK Roeien Amsterdam,https://2026wramsterdam.nl/,https://2026wramsterdam.nl/faq/,,heuristic,7,
+Sportwereld,Sportevenementen,TT Assen (Motorsport),https://www.ttcircuit.com/,,,none,0,llm: no pick
+Sportwereld,Sportploegen,Feyenoord (Voetbal),https://www.feyenoord.com/nl/,https://www.feyenoord.com/nl/feyenoord-one/veelgestelde-vragen,,heuristic,7,
+Sportwereld,Sportploegen,Team Visma Lease a bike (Wielrennen),https://www.teamvismaleaseabike.nl/,https://www.teamvismaleaseabike.nl/veelgestelde-vragen/,,heuristic,7,
+Sportwereld,Sportbonden,KNWU (Koninklijke Nederlandse WielrenUnie),https://www.knwu.nl/,https://www.knwu.nl/kenniscentrum,,llm,0,"Een kenniscentrum is dé plek voor uitleg- en instructievideo's, specifieker dan de algemene contactpagina."
+Sportwereld,Sportevenementen,Paralympische Spelen,https://www.paralympic.org/,https://www.paralympic.org/classification/faq,,llm,0,"Specifieke FAQ-pagina, waarschijnlijker locatie voor uitlegvideo's dan de algemene contactpagina."
+Sportwereld,Sportbonden,NGF (Koninklijke Nederlandse Golf Federatie),https://www.ngf.nl/,https://www.ngf.nl/uitleg-caddie,,heuristic,7,
+Sportwereld,Sportevenementen,FBK Games (Atlethiek),https://www.fbkgames.nl/,https://www.fbkgames.nl/Organisatie/contact,,llm,0,Geen aparte support/FAQ-pagina aanwezig; de contactpagina is de enige hulp-/klantenservice-gerelateerde sectie.
+Sportwereld,Sportbonden,KNSB (Koninklijke Nederlandse Schaats Bond),https://knsb.nl/,https://knsb.nl/contact/,,llm,0,Enige klantenservice-/hulpgerichte link; geen aparte support- of FAQ-pagina aanwezig in de navigatie.
+Sportwereld,Sportploegen,Ons oranje (Voetbal),https://www.onsoranje.nl/,https://www.onsoranje.nl/supporters/tickets,,llm,0,"Een 'Hoe koop ik kaarten'-pagina is de meest FAQ/help-achtige sectie waar uitlegvideo's te verwachten zijn, specifieker dan de algemene contactpagina."
+Sportwereld,Sportevenementen,NOC*NSF,https://nocnsf.nl/,https://www.nocnsf.nl/clubondersteuning,,heuristic,9,
+Sportwereld,Sportevenementen,NK Daikin (Schaatsen),https://www.schaatsen.nl/,,,none,0,llm: no pick
+Sportwereld,Sportevenementen,NN Marathon Rotterdam (Hardlopen),https://nnmarathonrotterdam.nl/,https://nnmarathonrotterdam.nl/contact/,,llm,0,Geen aparte FAQ/support-pagina aanwezig; de contactpagina is de enige klantenservice-/hulpsectie.
+Sportwereld,Sportbonden,KNVB (Koninklijke Nederlandse Voetbal Bond),https://www.knvb.nl/,https://www.knvb.nl/over-ons/contact/vraag-en-antwoord/stel-hier-je-vraag,,heuristic,7,
+Sportwereld,Sportbonden,KNKV (Koninklijke Nederlands Korfbalverbond),https://www.knkv.nl/,https://knkv.nl/faq/,,heuristic,7,
+Sportwereld,Sportbonden,NHV (Nederlandse Handbal verbond),https://handbal.nl/,https://handbal.nl/voor_verenigingen/verenigingsondersteuning/,,heuristic,9,
+Sportwereld,Sportevenementen,CHIO Rotterdam (Paardensport),https://chio.nl/,https://chio.nl/contact,,llm,0,Geen aparte support/FAQ-pagina aanwezig; contactpagina is de enige hulp-/servicegerichte optie.
+Sportwereld,Sportevenementen,Nijmeegse Vierdaagse (Wandelen),https://www.4daagse.nl/,https://www.4daagse.nl/contact,,llm,0,Geen aparte support/FAQ-pagina aanwezig; de contactpagina is de enige hulp-/klantenservicesectie.
+Sportwereld,Sportbonden,NeVoBo (Nederlandse Volleybal Bond),https://www.nevobo.nl/,https://www.nevobo.nl/kenniscentrum/,,llm,0,"Het Kenniscentrum is de kennis-/uitlegsectie waar instructie- en uitlegvideo's het meest waarschijnlijk staan, meer dan de algemene contactpagina's."
+Sportwereld,Sportploegen,Team Essent (Schaatsen),https://teamessent.nl/,https://teamessent.nl/veelgestelde-vragen/,,heuristic,7,
+Sportwereld,Sportevenementen,Tour de France,https://www.letour.fr/en,,,none,0,llm: no pick
+Sportwereld,Sportbonden,Sportvisunie (Sportvisserij Nederland),https://www.sportvisunie.nl/nl,https://www.sportvisunie.nl/nl/service-contact/voor-verenigingen-hsv-service,,heuristic,9,
+Sportwereld,Sportbonden,Nederlandse Basketball Bond,https://basketball.nl/,https://basketball.nl/kennishub/platform-basketballnl/,,llm,0,"Kennishub-pagina specifiek over het platform Basketball.nl, de meest waarschijnlijke plek voor uitleg-/instructievideo's."
+Sportwereld,Sportevenementen,TataSteel Chess Open (Wijk aan Zee schaken),https://tatasteelchess.com,https://tatasteelchess.com/en/contact,,llm,0,Geen aparte support/FAQ-pagina aanwezig; Contact is de enige hulp-gerelateerde sectie.
+Sportwereld,Sportevenementen,Dutch Grand Prix,https://www.dutchgp.com/,https://www.dutchgp.com/faq/,,heuristic,7,
+Sportwereld,Sportploegen,Reggeborgh (Schaatsen),https://schaatsteamreggeborgh.nl/,https://schaatsteamreggeborgh.nl/contact/,,llm,0,Geen support/FAQ-sectie aanwezig; contactpagina is de enige hulp-gerelateerde optie.
+Sportwereld,Sportbonden,KNRB (Koninklijke Nederlandse Roei Bond),https://knrb.nl/,https://knrb.nl/artikel/mijn-roeien/,,llm,0,"Specifieke FAQ-pagina ('Veelgestelde vragen: Mijn Roeien') waar instructie-/uitlegvideo's het meest waarschijnlijk staan, beter dan de algemene contactpagina."
+Sportwereld,Sportevenementen,KLM Open (Golf),https://klmopen.nl/,https://klmopen.nl/faq/,,heuristic,7,
+Sportwereld,Sportbonden,KNZB (Koninklijke Nederlandse Zwem Bond),https://www.knzb.nl/,https://www.knzb.nl/vereniging-support,,heuristic,9,
+Sportwereld,Sportbonden,KNHS (Koninklijke Nederlandse Hippische Sportfederatie),https://www.knhs.nl/,https://www.knhs.nl/helpdesk,,heuristic,10,
+Sportwereld,Sportploegen,Ajax (Voetbal),https://www.ajax.nl/,https://www.ajax.nl/fans/contact/,,llm,0,Enige link die naar klantenservice/contact verwijst; geen specifieke FAQ/supportpagina aanwezig in de lijst.
+Sportwereld,Sportbonden,KNLTB (Koninklijke Nederlandse Lawn Tennis Bond),https://www.knltb.nl/,https://serviceportal.knltb.nl/,,llm,0,"Een serviceportaal is de meest waarschijnlijke plek voor klantenservice, hulp en uitleg-/instructievideo's."
+Sportwereld,Sportbonden,Atletiekunie,https://www.atletiekunie.nl/,https://www.atletiekunie.nl/kenniscentrum/ondersteuning-bestuur/,,heuristic,9,
+Sportwereld,Sportbonden,NDB (Nederlandse Dart Bond),https://www.ndbdarts.nl/,https://ndbdarts.nl/kennisbank/ndb-veilige-dartsport,,llm,0,"Kennisbank (knowledge base) is de meest waarschijnlijke plek voor instructie-/uitlegvideo's, specifieker dan de algemene contactpagina."
+Sportwereld,Sportploegen,TeamNL,https://www.teamnl.org/,https://www.teamnl.org/contact,,llm,0,Enige support-/hulpgerichte link; geen specifieke FAQ- of klantenservicepagina aanwezig.
+Sportwereld,Sportevenementen,Amstel Gold Race,https://www.amstel.nl/amstelgoldrace,,,none,0,no internal links
+Sportwereld,Sportevenementen,FIH Hockey World Cup,https://hockeyworldcup2026.nl/,https://hockeyworldcup2026.nl/veel-gestelde-vragen,,heuristic,7,
+Sportwereld,Sportploegen,PSV (Voetbal),https://www.psv.nl/,https://fandesk.psv.nl/support/solutions/80000053403,,heuristic,9,
+Sportwereld,Sportevenementen,ABN AMRO Open (Tennis),https://www.abnamro-open.nl/,https://www.abnamro-open.nl/abn-amro-open/veel-gestelde-vragen,,heuristic,7,
+Sportwereld,Sportevenementen,Olympische Spelen,https://www.olympics.com/en/milano-cortina-2026,,,error,0,load failed: page.goto: net::ERR_HTTP2_PROTOCOL_ERROR at https://www.olym
