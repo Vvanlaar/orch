@@ -60,8 +60,9 @@ Usage:
   node find-support-urls.mjs --input <csv> [--output <csv>] [opts]
 
 Adds/fills the url_support column by inspecting each homepage. Existing
-non-empty url_support values are kept. Adds two transparency columns:
-url_support_method (existing|heuristic|llm|none|error) and url_support_score.
+non-empty url_support values are kept. Adds transparency columns:
+url_support_method (existing|heuristic|llm|none|error), url_support_score and
+url_support_note (matched link text, LLM reasoning, or failure reason).
 The output CSV is written after every row; re-running resumes from it (rows
 already resolved are skipped; 'error' rows are retried).
 
@@ -183,7 +184,7 @@ async function findForHomepage(page, homepage, { timeout, minScore, noLlm, error
   // positive (keyword sits in a headline/slug, not a section label). Don't
   // auto-accept those — let the LLM tie-break decide instead.
   if (best && best.score >= minScore && !isDetailPage(best.href)) {
-    return { url: best.href, method: "heuristic", score: best.score };
+    return { url: best.href, method: "heuristic", score: best.score, note: `linktekst: "${best.text}"` };
   }
 
   if (noLlm) {
@@ -240,7 +241,7 @@ async function main() {
   const rowObjs = rowsToObjects(parseCsv(readFileSync(opts.input, "utf-8")));
   // Preserve original column order; ensure the extra columns exist.
   const baseCols = Object.keys(rowObjs[0] || {});
-  for (const c of ["url_support", "url_support_method", "url_support_score"]) {
+  for (const c of ["url_support", "url_support_method", "url_support_score", "url_support_note"]) {
     if (!baseCols.includes(c)) baseCols.push(c);
   }
 
@@ -257,6 +258,7 @@ async function main() {
         row.url_support = p.url_support || "";
         row.url_support_method = p.url_support_method;
         row.url_support_score = p.url_support_score || "0";
+        row.url_support_note = p.url_support_note || "";
         resumed++;
       }
     }
@@ -288,6 +290,7 @@ async function main() {
 
     if ((row.url_support || "").trim()) {
       row.url_support_method = "existing";
+      row.url_support_note = "from input";
       writeOutput(outFile, baseCols, rowObjs);
       continue;
     }
@@ -295,6 +298,7 @@ async function main() {
     if (!homepage) {
       row.url_support_method = "none";
       row.url_support_score = "0";
+      row.url_support_note = "no homepage URL";
       writeOutput(outFile, baseCols, rowObjs);
       continue;
     }
@@ -319,6 +323,7 @@ async function main() {
     row.url_support = res.url;
     row.url_support_method = res.method;
     row.url_support_score = String(res.score || 0);
+    row.url_support_note = res.note || "";
     if (res.url) filled++;
 
     // Persist after every site so a crash/reboot resumes from here.
