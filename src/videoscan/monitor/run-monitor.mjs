@@ -35,6 +35,7 @@ function parseArgs(argv) {
     else if (a === "--max-videos") out.maxVideos = Number(argv[++i]);
     else if (a === "--limit") out.limit = Number(argv[++i]);
     else if (a === "--delay") out.delay = Number(argv[++i]);
+    else if (a === "--fresh") out.fresh = true;
     else if (a === "--help" || a === "-h") out.help = true;
   }
   return out;
@@ -62,6 +63,7 @@ Options:
   --max-videos <n>      Stop crawl after n pages with video (default: 10)
   --max-pages <n>       Safety cap on pages crawled per org (default: 40)
   --delay <ms>          Inter-page delay in scan.mjs (default: 3000)
+  --fresh               Re-scan every org (default: skip orgs already scanned)
   --limit <n>           Only process first N orgs (smoke test)
 
 Example:
@@ -130,17 +132,20 @@ async function main() {
     `Monitor: segment="${opts.segment}" — ${rows.length} orgs in CSV, processing ${limit}, out=${outDir}`
   );
 
+  // Deterministic slug per row (stable across runs so --resume can match):
+  // first claimant of a base slug keeps it, later identical slugs get -2, -3…
+  const slugCounts = new Map();
+  const claimSlug = (org, i) => {
+    const base = slugify(org) || `org-${i + 1}`;
+    const n = (slugCounts.get(base) || 0) + 1;
+    slugCounts.set(base, n);
+    return n === 1 ? base : `${base}-${n}`;
+  };
+
   for (let i = 0; i < limit; i++) {
     const row = rows[i];
-    const baseSlug = slugify(row.organisatie) || `org-${i + 1}`;
-    // Bump suffix until <slug>.meta.json is free. Prevents two orgs that
-    // slugify identically (truncated/normalised) from overwriting each other.
-    let orgSlug = baseSlug;
-    let suffix = 1;
-    while (existsSync(join(outDir, `${orgSlug}.meta.json`))) {
-      suffix++;
-      orgSlug = `${baseSlug}-${suffix}`;
-    }
+    const orgSlug = claimSlug(row.organisatie, i);
+    const metaPath = join(outDir, `${orgSlug}.meta.json`);
 
     const homepage = (row.url_homepage || "").trim();
     const support = (row.url_support || "").trim();
@@ -152,6 +157,19 @@ async function main() {
       console.log(`[${i + 1}/${limit}] ${row.organisatie} — no URLs, skip`);
       continue;
     }
+
+    // Resume: skip orgs already scanned (meta with at least one scan file),
+    // unless --fresh. Makes a long run survivable across a crash/reboot.
+    if (!opts.fresh && existsSync(metaPath)) {
+      try {
+        const prev = JSON.parse(readFileSync(metaPath, "utf-8"));
+        if ((prev.scanFiles || []).length > 0) {
+          console.log(`[${i + 1}/${limit}] ${row.organisatie} — already scanned, skip`);
+          continue;
+        }
+      } catch { /* unreadable meta → re-scan */ }
+    }
+
     const seeds = [homepage, support, product].filter(
       (u) => u && u !== startUrl
     );
