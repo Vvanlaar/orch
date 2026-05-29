@@ -18,11 +18,13 @@ Eenmalige onderzoeksflow voor BB's deelname aan de Nationale Monitor (~700 NL-or
 
 ```bash
 # 0. (optioneel) url_support automatisch vinden uit de homepage-nav
-#    Heuristiek + Claude-tiebreak. Vult url_support, voegt _method/_score kolommen toe.
+#    Heuristiek + Claude-tiebreak. Vult url_support + _method/_score/_note kolommen.
+#    Resumable (schrijft per rij); --fresh negeert bestaande output.
+#    --verify-weak laat zwakke heuristic-hits (score 7) door de LLM bevestigen.
 node src/videoscan/monitor/find-support-urls.mjs \
   --input ./monitor-input/zorg.csv \
   --output ./monitor-input/zorg-enriched.csv
-#    → spot-check rijen met method=llm / heuristic-weak / none vóór de scan.
+#    → spot-check rijen met method=llm / heuristic-weak / none / error (zie _note) vóór de scan.
 
 # 1. Scan — crawlt per org tot 10 pagina's met video, support eerst
 node src/videoscan/monitor/run-monitor.mjs \

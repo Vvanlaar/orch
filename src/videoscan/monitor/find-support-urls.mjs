@@ -34,6 +34,7 @@ function parseArgs(argv) {
     else if (a === "--limit") out.limit = Number(argv[++i]);
     else if (a === "--delay") out.delay = Number(argv[++i]);
     else if (a === "--no-llm") out.noLlm = true;
+    else if (a === "--verify-weak") out.verifyWeak = true;
     else if (a === "--fresh") out.fresh = true;
     else if (a === "--help" || a === "-h") out.help = true;
   }
@@ -72,6 +73,8 @@ Options:
   --segment <name>  Only process rows for this segment
   --delay <ms>      Delay between sites (default: 1500)
   --no-llm          Heuristic only — no Claude tie-break
+  --verify-weak     Send weak heuristic hits (score ${WEAK_MAX_SCORE}) to the LLM to confirm,
+                    instead of auto-accepting them (better quality, more calls)
   --limit <n>       Only process first N rows (smoke test)
   --fresh           Ignore any existing output and re-process all rows
 `);
@@ -88,6 +91,11 @@ const SCORE_RULES = [
   { weight: 5, re: /\bservice(loket)?\b/i },
   { weight: 3, re: /\bcontact\b/i },
 ];
+
+// With --verify-weak, heuristic hits at or below this score (e.g. a bare FAQ /
+// vraag-antwoord match) are sent to the LLM to confirm rather than auto-accepted.
+// Strong hits (hulp/support/helpdesk/klantenservice, score >= 8) stay automatic.
+const WEAK_MAX_SCORE = 7;
 
 function scoreCandidate(href, text) {
   let segments = [];
@@ -149,7 +157,7 @@ async function extractNavLinks(page) {
   });
 }
 
-async function findForHomepage(page, homepage, { timeout, minScore, noLlm, errorLog }) {
+async function findForHomepage(page, homepage, { timeout, minScore, noLlm, verifyWeak, errorLog }) {
   let baseHost;
   try {
     baseHost = new URL(homepage).hostname;
@@ -182,8 +190,11 @@ async function findForHomepage(page, homepage, { timeout, minScore, noLlm, error
   }
   // A high score on a news/article/agenda detail page is usually a false
   // positive (keyword sits in a headline/slug, not a section label). Don't
-  // auto-accept those — let the LLM tie-break decide instead.
-  if (best && best.score >= minScore && !isDetailPage(best.href)) {
+  // auto-accept those — let the LLM tie-break decide instead. With --verify-weak,
+  // also defer weak (score <= WEAK_MAX_SCORE) hits to the LLM.
+  const strongEnough = best && best.score >= minScore && !isDetailPage(best.href);
+  const tooWeakToTrust = verifyWeak && best && best.score <= WEAK_MAX_SCORE;
+  if (strongEnough && !tooWeakToTrust) {
     return { url: best.href, method: "heuristic", score: best.score, note: `linktekst: "${best.text}"` };
   }
 
@@ -312,6 +323,7 @@ async function main() {
         timeout: opts.timeout,
         minScore: opts.minScore,
         noLlm: opts.noLlm,
+        verifyWeak: opts.verifyWeak,
         errorLog,
       });
     } catch (e) {
