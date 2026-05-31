@@ -93,3 +93,22 @@ test("Tier filter: when IProX (MediaElement.js, T5) co-occurs with YouTube (T2),
   const result = detectFromCorpus(html);
   assert.deepEqual(names(result), ["YouTube"]);
 });
+
+test("Negative: TikTok ads/analytics pixel is NOT a video player", () => {
+  // analytics.tiktok.com/i18n/pixel/sdk.js is the marketing pixel, present on
+  // tons of sites with no TikTok video. Must not count as a video embed.
+  const result = detectPlayers("<html><body></body></html>", [
+    "https://analytics.tiktok.com/i18n/pixel/sdk.js?sdkid=ABC123",
+  ]);
+  assert.ok(
+    !names(result).includes("TikTok"),
+    `pixel must not register as TikTok, got ${JSON.stringify(names(result))}`
+  );
+});
+
+test("TikTok embed markup IS detected", () => {
+  const html = `<blockquote class="tiktok-embed" cite="https://www.tiktok.com/@x/video/123"></blockquote>`;
+  assert.ok(detectFromCorpus(html).map((r) => r.player).includes("TikTok"));
+  const viaNet = detectPlayers("<html></html>", ["https://www.tiktok.com/embed.js"]);
+  assert.ok(viaNet.map((r) => r.player).includes("TikTok"));
+});

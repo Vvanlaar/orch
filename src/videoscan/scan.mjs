@@ -427,6 +427,13 @@ const SOCIAL_VIDEO_CONFIRMERS = {
   LinkedIn: (html, net) =>
     net.some((r) => /dms\.licdn\.com\/playlist/i.test(r) || /dms\.licdn\.com\/.+\.mp4/i.test(r)) ||
     /<video[^>]+(?:src|data-src)="[^"]*dms\.licdn\.com/i.test(html),
+  // The bare tiktok.com network matcher also catches analytics.tiktok.com's
+  // marketing pixel (present on countless non-video sites). Require real embed
+  // evidence — embed/player markup or an embed network request.
+  TikTok: (html, net) =>
+    /tiktok-embed/i.test(html) ||
+    /tiktok\.com\/(embed|player)/i.test(html) ||
+    net.some((r) => /tiktok\.com\/(embed|player)/i.test(r) || /\bembed\.tiktok\.com/i.test(r)),
 };
 
 function filterNonVideoSocials(detected, html, networkRequests) {
