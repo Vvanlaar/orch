@@ -909,6 +909,17 @@ function createRateLimitError(reason) {
   return err;
 }
 
+// Navigate and settle. Uses domcontentloaded (not networkidle): the DOM and its
+// links are ready immediately, and we don't discard a fully-rendered page just
+// because a social embed / live ticker / analytics beacon keeps the network busy
+// past the timeout (the #1 cause of "0 pages crawled" on real sites). Then wait
+// briefly for networkidle so lazy content can settle, but never fail on it.
+async function gotoSettled(page, url, timeout) {
+  const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout });
+  await page.waitForLoadState("networkidle", { timeout: 3000 }).catch(() => {});
+  return response;
+}
+
 async function scanOnePage(context, url, timeout) {
   const page = await context.newPage();
   const networkRequests = [];
@@ -919,7 +930,7 @@ async function scanOnePage(context, url, timeout) {
 
   let response;
   try {
-    response = await page.goto(url, { waitUntil: "networkidle", timeout });
+    response = await gotoSettled(page, url, timeout);
   } catch (err) {
     const rlReason = detectConnectionRateLimit(err);
     await page.close();
@@ -990,7 +1001,7 @@ async function scanFirstPage(context, url, timeout) {
 
   let response;
   try {
-    response = await page.goto(url, { waitUntil: "networkidle", timeout });
+    response = await gotoSettled(page, url, timeout);
   } catch (err) {
     const rlReason = detectConnectionRateLimit(err);
     await page.close();
@@ -1015,7 +1026,7 @@ async function scanFirstPage(context, url, timeout) {
   } catch {}
 
   if (await acceptCookies(page)) {
-    await page.goto(url, { waitUntil: "networkidle", timeout });
+    await gotoSettled(page, url, timeout);
     // Re-check redirect after post-consent navigation
     try {
       if (didRedirectOffDomain(page, url)) {
