@@ -112,3 +112,16 @@ test("TikTok embed markup IS detected", () => {
   const viaNet = detectPlayers("<html></html>", ["https://www.tiktok.com/embed.js"]);
   assert.ok(viaNet.map((r) => r.player).includes("TikTok"));
 });
+
+test("Non-video social pixel must not evict a genuine HTML5 <video> (false-zero regression)", () => {
+  // psv.nl / ttcircuit.com: a real autoplay <video> hero co-occurs with a
+  // TikTok ads pixel. The pixel (tier 2) must not win the tier filter and then
+  // get dropped as non-video — that would erase the real tier-5 <video> and
+  // score the page a false-negative zero. Non-video socials are filtered out
+  // BEFORE collapsing to the highest tier.
+  const html = `<video autoplay muted><source src="/hero.mp4" type="video/mp4"></video>`;
+  const result = detectPlayers(html, [
+    "https://analytics.tiktok.com/i18n/pixel/sdk.js?sdkid=ABC123",
+  ]);
+  assert.deepEqual(names(result), ["HTML5 native"]);
+});

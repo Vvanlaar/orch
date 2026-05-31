@@ -1558,7 +1558,14 @@ export function detectPlayers(html, networkRequests) {
     }
   }
 
-  return filterNonVideoSocials(filterToHighestTier(found), searchable, networkRequests);
+  // Drop non-video social references (e.g. a TikTok ads pixel or an X share
+  // link) BEFORE collapsing to the highest tier. Doing it the other way round
+  // let a tier-2 social pixel evict a genuine tier-5 <video>, then get removed
+  // itself — leaving the page a false-negative zero (psv.nl/ttcircuit.com hero
+  // videos; also the source of HTML5-native run-to-run flakiness).
+  return filterToHighestTier(
+    filterNonVideoSocials(found, searchable, networkRequests)
+  );
 }
 
 // ── Explicit URL scanning (no crawl) ────────────────────────────────
