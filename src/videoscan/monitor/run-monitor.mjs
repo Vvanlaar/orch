@@ -150,9 +150,12 @@ async function main() {
     const homepage = (row.url_homepage || "").trim();
     const support = (row.url_support || "").trim();
     const product = (row.url_product || "").trim();
-    // Crawl starts at the support page (RQ2 lives there); fall back to homepage.
-    // Remaining URLs are seeded so they're scanned even if not linked from start.
-    const startUrl = support || homepage;
+    // Crawl starts at the homepage: it's the richest link hub and fixes the
+    // crawl domain to the main site (a deep support/FAQ page is a poor seed and
+    // a support subdomain traps the crawl). support + product are seeded so
+    // they're still scanned in the first batch (RQ2). Fall back to support if
+    // there's no homepage.
+    const startUrl = homepage || support;
     if (!startUrl) {
       console.log(`[${i + 1}/${limit}] ${row.organisatie} — no URLs, skip`);
       continue;

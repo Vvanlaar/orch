@@ -1258,12 +1258,14 @@ async function crawlSite(startUrl, { maxPages = 50, maxVideos = Infinity, seedUr
   const domain = baseUrl.hostname.replace(/^www\./, "");
   let visited = new Set();
   let queue = [normalizeUrl(startUrl, startUrl)];
-  // Seed extra org URLs (e.g. homepage/product) after the start URL so the
-  // start URL (typically the support page) is scanned first, then the seeds,
-  // then any crawled links. On resume the queue is restored from state below.
+  // Seed extra org URLs (e.g. support/product) after the start URL so they are
+  // scanned in the first batch. Seeds bypass the same-domain filter so an
+  // explicit support page on another subdomain (e.g. serviceportal.knltb.nl) is
+  // still scanned once; the crawl itself stays on the start URL's domain. On
+  // resume the queue is restored from state below.
   for (const s of seedUrls) {
     const norm = normalizeUrl(s, startUrl);
-    if (norm && !queue.includes(norm) && isSameDomain(norm, domain)) queue.push(norm);
+    if (norm && !queue.includes(norm)) queue.push(norm);
   }
   let results = [];
   // Running count of pages where ≥1 player was detected. Drives the --max-videos
