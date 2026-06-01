@@ -5,7 +5,8 @@
 //   monitor-results-<segment>.csv      — one row per organisation
 //   monitor-manual-review-<segment>.csv — orgs with video, for manual RQ3 Content
 //
-// RQ3 scoring uses placeholder thresholds — researcher to confirm (plan §12).
+// RQ3 thresholds confirmed by the researchers (meeting 2026-06-01):
+// voldoet = all criteria, gedeeltelijk = ≥1/3 (plan §12).
 
 import {
   readFileSync,
@@ -19,7 +20,7 @@ import { slugify, writeCsvString } from "./_lib.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Placeholder thresholds — Open Punten §12. Researcher to confirm.
+// Thresholds confirmed by the researchers (meeting 2026-06-01) — Open Punten §12.
 const RQ3_TECHNIEK_CRITERIA = 3;
 const RQ3_ELEMENTEN_CRITERIA = 4;
 const SCORE_THRESHOLDS = {

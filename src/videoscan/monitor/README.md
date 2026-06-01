@@ -67,14 +67,14 @@ De per-org subdir voorkomt collisions als twee orgs hetzelfde host gebruiken. St
 
 Open `monitor-manual-review-<segment>.csv`, bekijk per pagina de video, vul `rq3_content_score` en `rq3_content_notes` in (Voldoet / Voldoet gedeeltelijk / Voldoet niet). Daarna een korte aggregatie per org (Excel VLOOKUP of `awk`) en de scores terugzetten in `monitor-results-<segment>.csv`.
 
-## Drempelwaarden (placeholder)
+## Drempelwaarden (bevestigd)
 
 `aggregate-monitor.mjs` gebruikt nu deze afleiding voor RQ3 (zie `SCORE_THRESHOLDS` bovenin het script):
 
 - **Techniek** (3 criteria): geen autoplay-zonder-controls, aria-label/title aanwezig, `<video>`-controls of iframe-embed.
 - **Elementen** (4 criteria): `<track>`-children, CC-knop, transcript-link, audiodescription-track.
 
-`Voldoet` = alle criteria, `Voldoet gedeeltelijk` = ≥ ~1/3, anders `Voldoet niet`. `N.v.t.` als geen video. **Onderzoeker bevestigt of bijslijpt deze drempels** voor de definitieve run.
+`Voldoet` = alle criteria, `Voldoet gedeeltelijk` = ≥ ~1/3, anders `Voldoet niet`. `N.v.t.` als geen video. **Bevestigd door de onderzoekers (meeting 2026-06-01).** Kanttekening: de kwaliteit van de automatische techniek/elementen-scoring is nog onzeker — de onderzoekers doen een handmatige steekproef (~10%) ter validatie.
 
 ## Wat dit script NIET doet
 
