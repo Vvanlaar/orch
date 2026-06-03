@@ -50,28 +50,49 @@ Writes:      <dir>/classify-output.json
 // logical video; if it carries multiple players (e.g. fallback HTML5 + JW), the
 // classification still applies to the same content.
 function collectCandidates(dir) {
-  const candidates = [];
+  // Keyed by org+url so the same page scanned twice (resume / re-crawl) collapses
+  // to one candidate instead of duplicate classifications.
+  const byKey = new Map();
   const metas = readdirSync(dir).filter((f) => f.endsWith(".meta.json"));
   for (const metaFile of metas) {
     const meta = JSON.parse(readFileSync(join(dir, metaFile), "utf-8"));
     const orgDir = meta.orgDir ? join(dir, meta.orgDir) : dir;
+    const orgSlug = metaFile.replace(/\.meta\.json$/, "");
     for (const scanFile of meta.scanFiles || []) {
       const full = join(orgDir, scanFile);
       if (!existsSync(full)) continue;
       const scan = JSON.parse(readFileSync(full, "utf-8"));
       for (const d of scan.details || []) {
-        candidates.push({
-          orgSlug: metaFile.replace(/\.meta\.json$/, ""),
-          organisatie: meta.organisatie,
-          pageUrl: d.url,
-          playerTypes: (d.players || []).map((p) => p.name),
-          pageTitle: d.accessibility?.pageTitle || "",
-          nearestHeading: d.accessibility?.nearestHeading || "",
-        });
+        const a = d.accessibility || {};
+        const players = (d.players || []).map((p) => p.name);
+        // The embed/video title is the single strongest RQ2 signal (e.g.
+        // "Instructievideo voor hinderniscontroleurs"). The scanner already
+        // captures it in capturePageA11y; feed it to the classifier so explainers
+        // on news/discipline pages aren't undercounted as uncertain/no.
+        const videoTitles = [
+          ...(a.videoIframes || []).map((f) => f.title || f.ariaLabel),
+          ...(a.videos || []).map((v) => v.ariaLabel),
+        ].map((t) => (t || "").replace(/"/g, "'").trim()).filter(Boolean);
+        const key = `${orgSlug}\n${d.url}`;
+        const prev = byKey.get(key);
+        if (prev) {
+          prev.playerTypes = [...new Set([...prev.playerTypes, ...players])];
+          prev.videoTitles = [...new Set([...prev.videoTitles, ...videoTitles])];
+        } else {
+          byKey.set(key, {
+            orgSlug,
+            organisatie: meta.organisatie,
+            pageUrl: d.url,
+            playerTypes: players,
+            pageTitle: a.pageTitle || "",
+            nearestHeading: a.nearestHeading || "",
+            videoTitles: [...new Set(videoTitles)],
+          });
+        }
       }
     }
   }
-  return candidates;
+  return [...byKey.values()];
 }
 
 function buildPrompt(definitionText, batch) {
@@ -82,6 +103,7 @@ function buildPrompt(definitionText, batch) {
         `    page_url=${c.pageUrl}`,
         `    page_title="${c.pageTitle}"`,
         `    nearest_heading="${c.nearestHeading}"`,
+        `    video_titles=[${(c.videoTitles || []).map((t) => `"${t}"`).join(", ")}]`,
         `    player_types=[${c.playerTypes.join(", ")}]`,
       ].join("\n");
     })
@@ -92,6 +114,8 @@ function buildPrompt(definitionText, batch) {
 Hieronder de definitie van 'uitlegvideo' (vraag RQ2 in het onderzoek):
 
 ${definitionText}
+
+Weeg \`video_titles\` zwaar mee — dat is vaak het doorslaggevende signaal: een titel als "Instructievideo ...", "Hoe ...", "Uitleg ...", "Webinar ..." of "zo doe/gebruik je ..." duidt sterk op uitleg; een titel als "Highlights", "Aftermovie", "Best of", "... interview", een documentaire of een sfeer-/promotitel juist niet. Ontbreekt de titel, val dan terug op de pagina-context.
 
 Klassificeer onderstaande gevonden video's. Geef per item een JSON-object:
 { "index": <nr>, "isExplainer": "yes" | "no" | "uncertain", "reasoning": "<max 1 zin>" }
