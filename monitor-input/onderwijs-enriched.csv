@@ -1,0 +1,54 @@
+﻿segment,sub_sector,organisatie,url_homepage,url_support,url_product,url_support_method,url_support_score,url_support_note
+Onderwijs,Opleiding vergelijken,Springest,https://www.springest.nl/,https://springest.nl/klantenservice,,heuristic,10,"linktekst: ""Klantenservice"""
+Onderwijs,Opleiding vergelijken,Leeroverzicht,https://www.leeroverzicht.nl/,,,none,0,llm: no pick
+Onderwijs,Opleiding vergelijken,Studiekeuze123,https://www.studiekeuze123.nl/,,,error,0,"load failed: page.goto: Timeout 20000ms exceeded.
+Call log:
+[2m  - navig"
+Onderwijs,Opleiding vergelijken,KiesMBO,https://www.kiesmbo.nl/,https://www.kiesmbo.nl/contact,,llm,0,Geen aparte support/FAQ-sectie aanwezig; Contact is de enige hulp-/ondersteuningspagina.
+Onderwijs,Opleiding vergelijken,Keuzegids,https://www.keuzegids.nl/,https://keuzegids.nl/contact/,,llm,0,Geen aparte support/FAQ-pagina aanwezig; contactpagina is de enige hulp-/ondersteuningsoptie.
+Onderwijs,Opleiding vergelijken,Opleiding.nl,https://www.opleiding.nl/,https://www.opleiding.nl/cum-laude/veelgestelde-vragen.html,,heuristic,7,"linktekst: ""Lees verder"""
+Onderwijs,Opleiding vergelijken,Qompas,https://www.qompas.nl/,https://www.qompas.nl/contact/,,llm,0,Geen aparte support/FAQ-pagina aanwezig; contact is het dichtst bij klantenservice/hulp.
+Onderwijs,Universitair,Universiteit van Amsterdam,https://www.uva.nl/,https://www.uva.nl/over-de-uva/contact-en-locaties/contact.html,,llm,0,"Enige support/contactsectie in de lijst; overige links zijn navigatie naar onderwijs/onderzoek, geen specifieke FAQ-pagina aanwezig."
+Onderwijs,Universitair,Vrije Universiteit Amsterdam,https://vu.nl/nl,https://vu.nl/nl/over-de-vu/praktische-informatie,,llm,0,Geen expliciete support/FAQ-link aanwezig; 'Praktische informatie' is de meest waarschijnlijke plek voor hulp- en instructie-inhoud.
+Onderwijs,Universitair,Universiteit Utrecht,https://www.uu.nl/,https://www.uu.nl/organisatie/praktische-zaken,,llm,0,"Praktische zaken is de meest support/hulp-achtige sectie waar instructie- en uitlegvideo's te verwachten zijn, specifieker dan de algemene contactpagina."
+Onderwijs,Universitair,Universiteit Leiden,https://www.universiteitleiden.nl/,https://www.universiteitleiden.nl/over-ons/contact,,llm,0,Geen aparte support/FAQ-link aanwezig; de algemene contactpagina is de dichtstbijzijnde hulp-/servicesectie.
+Onderwijs,Universitair,Rijksuniversiteit Groningen,https://www.rug.nl/,https://www.rug.nl/research/research-support-portal/,,heuristic,9,"linktekst: ""Research Support Portal"""
+Onderwijs,Universitair,Erasmus Universiteit Rotterdam,https://www.eur.nl/,https://www.eur.nl/contact/ondersteuning-bij-crises-en-rampen,,heuristic,9,"linktekst: ""Ondersteuning bij crises en rampen"""
+Onderwijs,Universitair,Radboud Universiteit,https://www.ru.nl/,https://www.ru.nl/over-ons/contact,,llm,0,Geen aparte support/FAQ-pagina aanwezig; algemene contactgegevens-pagina is het dichtst bij klantenservice.
+Onderwijs,Universitair,Maastricht University,https://www.maastrichtuniversity.nl/,https://www.maastrichtuniversity.nl/studeren/support/ondersteuning-voor-internationale-studenten/international-student-helpdesk-ish,,heuristic,10,"linktekst: ""International Student Helpdesk (ISH)"""
+Onderwijs,Universitair,Tilburg University,https://www.tilburguniversity.edu/,https://www.tilburguniversity.edu/contact,,llm,0,Geen specifieke support/FAQ-pagina aanwezig; de algemene contactpagina is de dichtstbijzijnde hulp-/klantenservice-sectie.
+Onderwijs,Universitair,Wageningen University & Research,https://www.wur.nl/,https://www.wur.nl/nl/contact-met-wur,,llm,0,Enige support/contact-gerelateerde link; geen specifieke FAQ/helpsectie aanwezig in de lijst.
+Onderwijs,Universitair,Technische Universiteit Delft,https://www.tudelft.nl/,https://www.tudelft.nl/universiteitsfonds/help-mee,,heuristic,8,"linktekst: ""Doneer"""
+Onderwijs,Universitair,Technische Universiteit Eindhoven,https://www.tue.nl/,https://www.tue.nl/en/our-university/about-the-university/support-services/library-and-information-services/privacy,,heuristic,9,"linktekst: ""Privacy"""
+Onderwijs,Universitair,Universiteit Twente,https://www.utwente.nl/,https://www.utwente.nl/business/startupondersteuning/,,heuristic,9,"linktekst: ""Ondersteuning door Novel-T"""
+Onderwijs,Universitair,Open Universiteit,https://www.ou.nl/,https://www.ou.nl/onderzoeksondersteuning,,heuristic,9,"linktekst: ""Onderzoeksondersteuning"""
+Onderwijs,HBO,Hogeschool van Amsterdam,https://www.hva.nl/,https://www.hva.nl/studeren/studiekeuze/hulp-bij-studiekeuze,,heuristic,8,"linktekst: ""Hulp bij studiekeuze"""
+Onderwijs,HBO,Fontys Hogeschool,https://www.fontys.nl/,https://www.fontys.nl/Studeren/Hulp-bij-het-kiezen-van-je-opleiding.htm,,heuristic,8,"linktekst: ""Hulp bij studiekeuze"""
+Onderwijs,HBO,Hogeschool Utrecht,https://www.hu.nl/,https://www.hu.nl/studiekeuzehulp,,heuristic,8,"linktekst: ""Hulp bij studiekeuze"""
+Onderwijs,HBO,Hogeschool Rotterdam,https://www.hogeschoolrotterdam.nl/,https://www.hogeschoolrotterdam.nl/voorlichting/hulp-bij-studiekeuze/,,heuristic,8,"linktekst: ""Jouw studiekeuze"""
+Onderwijs,HBO,Hogeschool van Arnhem en Nijmegen,https://www.han.nl/,https://www.han.nl/samenwerken/hulp-bij-een-vraagstuk/,,heuristic,8,"linktekst: ""Hulp bij een vraagstuk"""
+Onderwijs,HBO,Avans Hogeschool,https://www.avans.nl/,https://www.avans.nl/studeren/praktische-zaken/student-support,,heuristic,9,"linktekst: ""Student Support"""
+Onderwijs,HBO,Hanzehogeschool Groningen,https://www.hanze.nl/,https://www.hanze.nl/nl/studeren/studentondersteuning/topsporters/verhalen-van-studenten/discipline-helpt-me-om-studie-en-sport-te-combineren,,heuristic,9,"linktekst: ""Student aan het woord     ‘Discipline helpt me om studie en sport te combineren’"""
+Onderwijs,HBO,Christelijke Hogeschool Windesheim,https://www.windesheim.nl/,https://www.windesheim.nl/over-windesheim/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Onderwijs,HBO,Saxion Hogeschool,https://www.saxion.nl/,https://www.saxion.nl/studeren-bij/opleiding-kiezen/hulp-bij-studiekeuze/mogelijkheden-na-je-bachelor,,heuristic,8,"linktekst: ""Na je bachelor"""
+Onderwijs,HBO,De Haagse Hogeschool,https://www.dehaagsehogeschool.nl/,https://www.dehaagsehogeschool.nl/onderzoek/onderzoeksondersteuning,,heuristic,9,"linktekst: ""Onderzoeksondersteuning"""
+Onderwijs,HBO,Hogeschool Inholland,https://www.inholland.nl/,https://www.inholland.nl/studie-kiezen/,,heuristic,8,"linktekst: ""Hulp bij studiekeuze"""
+Onderwijs,HBO,NHL Stenden Hogeschool,https://www.nhlstenden.com/,https://www.nhlstenden.com/studeren-bij-nhl-stenden/decanaat,,heuristic,9,"linktekst: ""Ondersteuning tijdens je studie"""
+Onderwijs,HBO,Zuyd Hogeschool,https://www.zuyd.nl/,https://www.zuyd.nl/studiekeuze/studieondersteuning,,heuristic,9,"linktekst: ""Studieondersteuning"""
+Onderwijs,HBO,Hogeschool Leiden,https://www.hsleiden.nl/,https://www.hsleiden.nl/studeren/jouw-hogeschool/student-support,,heuristic,9,"linktekst: ""Student Support"""
+Onderwijs,HBO,Breda University of Applied Sciences,https://www.buas.nl/,https://www.buas.nl/over-ons/contact,,llm,0,Geen aparte support/FAQ-pagina aanwezig; de contactpagina is de enige hulp-/servicegerichte bestemming.
+Onderwijs,MBO,ROC van Amsterdam,https://www.rocva.nl/,https://www.rocva.nl/jongeren/passend-onderwijs-en-ondersteuning,,heuristic,9,"linktekst: ""Passend onderwijs en ondersteuning"""
+Onderwijs,MBO,Firda,https://www.firda.nl/,https://www.firda.nl/contact,,llm,0,Geen aparte support/FAQ-sectie aanwezig; algemene contactpagina is de meest waarschijnlijke hulp-ingang.
+Onderwijs,MBO,Albeda,https://www.albeda.nl/,https://www.albeda.nl/supportplatform,,llm,0,Het supportplatform is de specifieke hulp-/supportsectie waar instructie- en uitlegvideo's het meest waarschijnlijk staan.
+Onderwijs,MBO,ROC Mondriaan,https://www.rocmondriaan.nl/,https://www.rocmondriaan.nl/hulp-bij-het-kiezen,,heuristic,8,"linktekst: ""Hulp nodig met studiekeuze?"""
+Onderwijs,MBO,Zadkine,https://www.zadkine.nl/,https://www.zadkine.nl/extra-ondersteuning,,heuristic,9,"linktekst: ""Extra ondersteuning"""
+Onderwijs,MBO,ROC Midden Nederland,https://www.rocmn.nl/,https://www.rocmn.nl/vavo/veelgestelde-vragen-vavo,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Onderwijs,MBO,Koning Willem I College,https://www.kw1c.nl/,,,none,0,llm: no pick
+Onderwijs,MBO,ROC van Twente,https://www.rocvantwente.nl/,https://www.rocvantwente.nl/praktische-informatie,,llm,0,Praktische informatie is de meest waarschijnlijke plek voor hulp/uitleg en instructievideo's; specifieker dan de algemene contactpagina.
+Onderwijs,MBO,Summa College,https://www.summacollege.nl/,,,none,0,no internal links
+Onderwijs,MBO,Deltion College,https://www.deltion.nl/,https://www.deltion.nl/voor-jongeren/onderwijsaanbod?filters[]=sector-3&filters[]=course-41,,heuristic,9,"linktekst: ""Office Support"""
+Onderwijs,MBO,Talland College,https://www.talland.nl/,https://www.talland.nl/decanen/ondersteuning-bij-instroom-aanmelding,,heuristic,9,"linktekst: ""Ondersteuning bij instroom & aanmelding"""
+Onderwijs,MBO,mboRijnland,https://mborijnland.nl/,https://mborijnland.nl/#tab_hulp-bij-je-studiekeuze,,heuristic,8,"linktekst: ""Hulp bij je studiekeuze"""
+Onderwijs,MBO,Curio,https://www.curio.nl/,https://www.curio.nl/mbo/begeleiding-en-ondersteuning,,heuristic,9,"linktekst: ""Begeleiding en ondersteuning"""
+Onderwijs,MBO,Noorderpoort,https://www.noorderpoort.nl/,https://noorderpoort.nl/voor-studenten/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Onderwijs,MBO,ROC Nova College,https://www.novacollege.nl/,https://www.novacollege.nl/opleidingen/hulp-bij-studiekeuze/,,heuristic,8,"linktekst: ""- Hulp bij studiekeuze"""
