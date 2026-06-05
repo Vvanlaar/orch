@@ -1,0 +1,76 @@
+﻿segment,sub_sector,organisatie,url_homepage,url_support,url_product,url_support_method,url_support_score,url_support_note
+Financiele sector,Crypto,Bitvavo,https://bitvavo.com/nl,https://support.bitvavo.com/hc/nl,,heuristic,9,"linktekst: ""Support"""
+Financiele sector,Crypto,Coinmerce,https://coinmerce.io/nl/,https://support.coinmerce.io/nl/,,llm,0,Het Helpcentrum is de dedicated support-/hulpsectie waar instructie- en uitlegvideo's te verwachten zijn.
+Financiele sector,Crypto,Blox,https://weareblox.com/nl-nl,https://support.weareblox.com/hc/nl,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Financiele sector,Crypto,Finst,https://finst.com/nl,https://help.finst.com/nl/,,heuristic,8,"linktekst: ""Help"""
+Financiele sector,Lease bedrijven,Ayvens,https://www.ayvens.com/nl-nl/,https://www.ayvens.com/nl-nl/service-en-contact/,,heuristic,8,"linktekst: ""Zelf regelen & hulp"""
+Financiele sector,Lease bedrijven,Volkswagen Pon Financial Services,https://www.poncenter.nl/private-lease,https://www.poncenter.nl/elektrisch-rijden/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Financiele sector,Lease bedrijven,International Car Lease Holding,https://www.vanmossel.nl/privelease/,https://www.vanmossel.nl/privelease/contact/veelgestelde-vragen/,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Financiele sector,Lease bedrijven,Athlon,https://www.athlon.com/nl/,https://www.athlon.com/nl/contact/,,heuristic,10,"linktekst: ""Klantenservice"""
+Financiele sector,Lease bedrijven,BMW Financial Services/Alphabet,https://www.alphabet.com/nl-nl.html,https://ontdek.alphabet.com/aanvraag/contact-klant,,llm,0,"Dit is het klantcontact-/supportkanaal voor bestaande klanten; geen dedicated FAQ/instructievideo-sectie aanwezig, dus dit is de meest support-gerichte optie."
+Financiele sector,Lease bedrijven,Hiltermann Lease,https://www.hiltermannlease.nl/autolease/private-lease,https://www.hiltermannlease.nl/service-contact?category=operational+lease,,heuristic,7,"linktekst: ""Bekijk alle veelgestelde vragen"""
+Financiele sector,Lease bedrijven,Arval | Justlease,https://justlease.nl/aanbod,https://justlease.nl/klantenservice/privacy-en-cookieverklaring/,,heuristic,10,"linktekst: ""privacy- en cookieverklaring"""
+Financiele sector,Lease bedrijven,Mercedes-Benz Financial Services,https://www.mercedes-benz.nl/,https://www.mercedes-benz.nl/passengercars/services/support-contact.html,,heuristic,9,"linktekst: ""Support en contact"""
+Financiele sector,Lease bedrijven,Toyota Louwman Financial Services,https://www.louwman.nl/leasen/private-lease,https://www.louwman.nl/veelgestelde-vragen,,heuristic,8,"linktekst: ""Hulp"""
+Financiele sector,Lease bedrijven,Stellantis Financial Services,https://www.stellantis-financialservices.nl/,https://www.stellantis-financialservices.nl/contact,,llm,0,Enige service/support-gerichte pagina ('Service en Contact'); geen aparte FAQ/help-sectie aanwezig.
+Financiele sector,Consumenten banken,Revolut,https://www.revolut.com/nl-NL/,https://help.revolut.com/en-NL/help/wealth/stocks/trading-stocks/trading-fees/what-fees-will-i-be-charged-for-my-trading/,,heuristic,8,"linktekst: ""Veelgestelde Vragen over Kosten"""
+Financiele sector,Consumenten banken,ASN Bank,https://www.asnbank.nl/home.html,https://www.asnbank.nl/service/service-en-contact.html,,llm,0,De 'Service en contact'-pagina is de centrale klantenservice-/hulpsectie waar instructievideo's en veelgestelde vragen het meest waarschijnlijk staan.
+Financiele sector,Consumenten banken,Knab,https://www.knab.nl/particulier,https://www.knab.nl/contact/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Financiele sector,Consumenten banken,Triodos,https://www.triodos.nl/,https://www.triodos.nl/artikelen/2026/de-kracht-van-jouw-tuin,,heuristic,8,"linktekst: ""Zo help je de natuur met jouw tuin (of balkon) Of je nou een balkon of enorme tu"""
+Financiele sector,Consumenten banken,bunq,https://www.bunq.com/nl-nl/,https://www.bunq.com/nl-nl/contact,,llm,0,Geen aparte support/FAQ-pagina aanwezig; de contactpagina is het dichtstbijzijnde klantenservice-startpunt.
+Financiele sector,Consumenten banken,Rabobank,https://www.rabobank.nl/particulieren,https://www.rabobank.nl/particulieren/service,,llm,0,"De 'service'-sectie is Rabobanks centrale hulp-/klantenservice-hub met alle hulponderwerpen, waar instructievideo's te verwachten zijn."
+Financiele sector,Consumenten banken,ABN AMRO,https://www.abnamro.nl/nl/prive/index.html,https://www.abnamro.nl/nl/prive/themas/hulp-bij-geldzaken/index.html?pos=nav_prive_uwsituatie_studerenwerken_zorgenovergeld,,heuristic,8,"linktekst: ""Zorgen over geld?"""
+Financiele sector,Consumenten banken,ING,https://www.ing.nl/particulier,,,error,0,load failed: page.goto: net::ERR_HTTP2_PROTOCOL_ERROR at https://www.ing.
+Financiele sector,Consumenten banken,nibc,https://nibc.nl/particulieren,https://nibc.nl/particulieren/veelgestelde/questions/sparen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Financiele sector,Consumenten banken,YapiKredi,https://www.yapikredi.nl/,https://www.yapikredi.nl/support,,heuristic,9,"linktekst: """""
+Financiele sector,Consumenten banken,van Lanschot,https://www.vanlanschotkempen.com/nl-nl/private-banking,https://www.vanlanschotkempen.com/nl-nl/private-banking/contact,,llm,0,Geen aparte support/FAQ-pagina aanwezig; contact is de enige klantenservice-gerichte sectie.
+Financiele sector,Consumenten banken,NN,https://www.nn.nl/Particulier/Sparen.htm,https://www.nn.nl/Particulier/Klantenservice.htm,,heuristic,10,"linktekst: ""Service en Contact"""
+Financiele sector,Consumenten banken,Evi van Lanschot,https://www.evivanlanschot.nl/,https://www.evivanlanschot.nl/service-contact,,llm,0,"Service & Contact is de meest waarschijnlijke support/hulp-sectie waar instructievideo's te verwachten zijn, specifieker dan de algemene contactpagina."
+Financiele sector,Consumenten banken,Argenta,https://www.argenta.nl/,https://www.argenta.nl/veelgestelde-vragen/veel-gevraagd,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Financiele sector,Consumenten banken,Anadolu,https://www.anadolubank.nl/,https://www.anadolubank.nl/klantenservice,,heuristic,10,"linktekst: ""Klantenservice"""
+Financiele sector,Consumenten banken,Ayvens,https://www.ayvensbank.nl/,https://www.ayvensbank.nl/hulp-en-contact,,heuristic,8,"linktekst: ""Service"""
+Financiele sector,Consumenten banken,Lloyds,https://www.lloydsbank.nl/sparen,https://www.lloydsbank.nl/hypotheken/hypotheken-faq,,heuristic,7,"linktekst: ""Over hypotheken"""
+Financiele sector,Consumenten banken,Openbank,https://www.openbank.nl/,https://www.openbank.nl/contact,,llm,0,Enige echte klantenservice-ingang; geen specifieke FAQ/help-pagina met uitlegvideo's aanwezig in de lijst.
+Financiele sector,Consumenten banken,Brand New Day,https://new.brandnewday.nl/spaarrekening/,https://new.brandnewday.nl/hulp-bij-activatie/,,heuristic,8,"linktekst: ""Hulp bij activatie"""
+Financiele sector,Consumenten banken,MeDirect,https://www.medirect.nl/,https://www.medirect.nl/?page_id=39401,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Financiele sector,Consumenten banken,Nexent,https://www.nexentbank.nl/,https://www.nexentbank.nl/service-contact/meestgestelde-vragen/,,llm,0,"Specifieke FAQ-pagina met veelgestelde vragen, waar uitleg-/instructievideo's het meest waarschijnlijk staan."
+Financiele sector,Verzekeraars,DAS,https://www.das.nl/,https://www.das.nl/service-en-contact,,llm,0,Dit is de centrale service- en supportsectie waar hulp en uitlegmateriaal het meest waarschijnlijk staan.
+Financiele sector,Verzekeraars,ASR,https://www.asr.nl/,https://www.asr.nl/contact,,heuristic,10,"linktekst: ""Klantenservice"""
+Financiele sector,Verzekeraars,Menzis,https://www.menzis.nl/,https://www.menzis.nl/klantenservice/buitenland/reisverzekering-bij-unigarant,,heuristic,10,"linktekst: ""Reisverzekering"""
+Financiele sector,Verzekeraars,CZ,https://www.cz.nl/,https://www.cz.nl/service-en-contact,,heuristic,10,"linktekst: ""Klantenservice"""
+Financiele sector,Verzekeraars,Centraal Beheer,https://www.centraalbeheer.nl/,https://www.centraalbeheer.nl/klantenservice,,heuristic,10,"linktekst: ""Klantenservice"""
+Financiele sector,Verzekeraars,Monuta,https://www.monuta.nl/,https://www.monuta.nl/service-en-contact/,,heuristic,10,"linktekst: ""Klantenservice"""
+Financiele sector,Verzekeraars,NN,https://www.nn.nl/Particulier/Verzekeren.htm,https://www.nn.nl/Particulier/Klantenservice.htm,,heuristic,10,"linktekst: ""Service en Contact"""
+Financiele sector,Verzekeraars,Zilveren Kruis,https://www.zilverenkruis.nl/consumenten,https://www.zilverenkruis.nl/consumenten/contact,,heuristic,10,"linktekst: ""Klantenservice"""
+Financiele sector,Verzekeraars,De Goudse,https://www.goudse.nl/,https://www.goudse.nl/ondernemer/mijnbedrijf/bedrijfscontinuiteit/eerste-hulp-aan-familiebedrijven,,heuristic,8,"linktekst: ""Eerste Hulp Aan Familiebedrijven"""
+Financiele sector,Verzekeraars,REAAL,https://www.reaal.nl/,https://www.reaal.nl/link/d3a31faa2a344100839c1b7f5f7cccfd.aspx,,heuristic,7,"linktekst: ""veelgestelde vragen"""
+Financiele sector,Verzekeraars,Allianz,https://www.allianzdirect.nl/,https://www.allianzdirect.nl/klantenservice/,,heuristic,10,"linktekst: ""Veelgestelde vragen"""
+Financiele sector,Verzekeraars,Unive,https://www.unive.nl/,https://www.unive.nl/klantenservice?icmp=IL-147,,heuristic,10,"linktekst: ""Klantenservice"""
+Financiele sector,Verzekeraars,Zekur,https://www.zekur.nl/,https://www.zekur.nl/klantenservice/zorgkosten-declareren,,heuristic,10,"linktekst: ""Zorgkosten declareren"""
+Financiele sector,Verzekeraars,Dela,https://www.dela.nl/,https://www.dela.nl/nabestaandenzorg,,heuristic,8,"linktekst: ""Praktische hulp en een luisterend oor"""
+Financiele sector,Verzekeraars,ANWB,https://www.anwb.nl/verzekeringen,https://www.anwb.nl/verzekeringen/veelgestelde-vragen,,heuristic,7,"linktekst: ""Bekijk alle veelgestelde vragen"""
+Financiele sector,Verzekeraars,Anderzorg,https://www.anderzorg.nl/,https://www.anderzorg.nl/klantenservice,,heuristic,10,"linktekst: ""Contact"""
+Financiele sector,Verzekeraars,VinkVink,https://www.vinkvink.nl/,https://www.vinkvink.nl/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Financiele sector,Verzekeraars,Ohra,https://www.ohra.nl/,https://www.ohra.nl/klantenservice,,heuristic,10,"linktekst: ""Service & Contact"""
+Financiele sector,Verzekeraars,Klaverblad,https://www.klaverblad.nl/,https://www.klaverblad.nl/betalen-en-betalingsachterstanden,,heuristic,8,"linktekst: ""Hulp bij betalingsachterstanden"""
+Financiele sector,Verzekeraars,Lifetri,https://lifetri.nl/,,,none,0,llm: no pick
+Financiele sector,Pensioenbeleggingen,DEGIRO,https://www.degiro.nl/,https://www.degiro.nl/helpdesk/,,heuristic,10,"linktekst: ""Help"""
+Financiele sector,Pensioenbeleggingen,BrightPensioen,https://brightpensioen.nl/,https://brightpensioen.nl/veelgestelde-vragen/,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Financiele sector,Pensioenbeleggingen,Meesman,https://www.meesman.nl/,https://www.meesman.nl/veelgestelde-vragen/,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Financiele sector,Pensioenbeleggingen,Brand New Day,https://brandnewday.info/pensioenrekening-beleggen/,,,none,0,no internal links
+Financiele sector,Overig,VGZ,https://www.vgz.nl/,https://www.vgz.nl/service-en-contact,,heuristic,10,"linktekst: ""Klantenservice"""
+Financiele sector,Overig,Freo,https://www.freo.nl/,https://www.freo.nl/hulp-bij-betalen,,heuristic,8,"linktekst: ""Hulp bij betalen"""
+Financiele sector,Overig,DLL,https://www.dllgroup.com/nl/nl-nl,https://www.dllgroup.com/nl/nl-nl/contact,,llm,0,Geen aparte support/FAQ/help-sectie aanwezig; de contactpagina is de enige klantenservice-ingang.
+Financiele sector,Overig,Holland Gold,https://www.hollandgold.nl/,https://www.hollandgold.nl/faq/,,heuristic,7,"linktekst: ""Meestgestelde vragen"""
+Financiele sector,Overig,Buut,https://www.buut.com/,https://www.buut.com/vraag-en-antwoord/,,heuristic,8,"linktekst: ""Hulp"""
+Financiele sector,Overig,Vivid,https://vivid.money/nl-nl/,https://vivid.money/nl-nl/support/,,heuristic,9,"linktekst: ""Neem contact op met ons"""
+Financiele sector,Overig,Yoursafe,https://www.yoursafe.com/en/index.html,https://www.yoursafe.com/en/apple-pay-faq.html,,heuristic,7,"linktekst: ""More info here"""
+Financiele sector,Pensioenfonds,ABP,https://www.abp.nl/,https://www.abp.nl/contact,,llm,0,"Enige klantenservice-ingang in de lijst; geen specifieke FAQ/support-pagina aanwezig, dus de algemene contactpagina is de beste kandidaat."
+Financiele sector,Pensioenfonds,PFZW,https://www.pfzw.nl/particulieren.html,https://www.pfzw.nl/particulieren/klantenservice.html,,heuristic,10,"linktekst: ""Klantenservice"""
+Financiele sector,Pensioenfonds,PMT,https://www.pmt.nl/,https://www.pmt.nl/nieuw-pensioenstelsel/veelgestelde-vragen-nieuw-pensioenstelsel/,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Financiele sector,Pensioenfonds,BPFbouw,https://www.bpfbouw.nl/,https://www.bpfbouw.nl/contact,,llm,0,"‘Service en contact’ is de enige servicegerichte sectie en het meest waarschijnlijke punt voor hulp/uitleg, terwijl de overige links inhoudelijke pensioenonderwerpen zijn."
+Financiele sector,Pensioenfonds,PME,https://www.pmepensioen.nl/,https://www.pmepensioen.nl/contact,,llm,0,Enige klantenservice-/supportpagina in de lijst; geen aparte FAQ-sectie aanwezig.
+Financiele sector,Pensioenfonds,Pensioen vervoer,https://www.pfvervoer.nl/,,,none,0,llm: no pick
+Financiele sector,Pensioenfonds,Stichting Bedrijfstakpensioenfonds voor de Grafische Bedrijven,https://www.pensioenfondspgb.nl/deelnemers/,https://www.pensioenfondspgb.nl/deelnemers/service-contact-deelnemers/,,llm,0,"Enige expliciete service-/contactsectie voor deelnemers, waar hulp en uitlegvideo's te verwachten zijn."
+Financiele sector,Pensioenfonds,Pensioenfonds Rail & OV,https://railov.nl/,https://railov.nl/hulp-pensioenzaken/,,heuristic,8,"linktekst: ""Iemand machtigen om uw pensioen te beheren"""
+Financiele sector,Pensioenfonds,BeFrank,https://www.befrank.nl/,https://www.befrank.nl/contact/,,llm,0,Geen aparte support/FAQ-pagina aanwezig; contactpagina is het dichtst bij klantenservice/hulp.

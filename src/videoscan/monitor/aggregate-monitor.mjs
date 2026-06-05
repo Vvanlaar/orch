@@ -143,7 +143,15 @@ function loadOrgScans(dir, meta) {
   for (const scanFile of meta.scanFiles || []) {
     const full = join(orgDir, scanFile);
     if (!existsSync(full)) continue;
-    const scan = JSON.parse(readFileSync(full, "utf-8"));
+    let scan;
+    try {
+      scan = JSON.parse(readFileSync(full, "utf-8"));
+    } catch {
+      // A scan killed mid-write (org-timeout) can leave a truncated JSON;
+      // skip it rather than crash the whole aggregation.
+      console.warn(`  skipping corrupt scan file: ${full}`);
+      continue;
+    }
     for (const d of scan.details || []) {
       allDetails.push(d);
       for (const p of d.players || []) playerSet.add(p.name);

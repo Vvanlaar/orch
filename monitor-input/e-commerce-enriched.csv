@@ -1,0 +1,77 @@
+﻿segment,sub_sector,organisatie,url_homepage,url_support,url_product,url_support_method,url_support_score,url_support_note
+E-commerce,Elektronica / gadgets,123inkt,https://www.123inkt.nl,https://www.123inkt.nl/help,,heuristic,8,"linktekst: ""123inkt.nl/help"""
+E-commerce,Elektronica / gadgets,Allekabels,https://www.allekabels.nl,https://www.allekabels.nl/x/customer-service,,heuristic,10,"linktekst: ""7 Dagen klantenservice"""
+E-commerce,Elektronica / gadgets,Apple,https://www.apple.com/nl,https://support.apple.com/nl-nl/mac?cid=gn-ols-mac-psp-prodfly,,heuristic,9,"linktekst: ""Support voor Mac"""
+E-commerce,Elektronica / gadgets,Cameranu,https://www.cameranu.nl,https://www.cameranu.nl/klantenservice,,heuristic,10,"linktekst: ""Klantenservice"""
+E-commerce,Elektronica / gadgets,Coolblue,https://www.coolblue.nl,,,none,0,llm: no pick
+E-commerce,Elektronica / gadgets,MediaMarkt,https://www.mediamarkt.nl,https://www.mediamarkt.nl/nl/service/klantenservice,,heuristic,10,"linktekst: ""Klantenservice"""
+E-commerce,Elektronica / telecom,Smartphonehoesjes.nl,https://www.smartphonehoesjes.nl,https://www.smartphonehoesjes.nl/klantenservice/,,heuristic,10,"linktekst: ""Service"""
+E-commerce,Huis / klussen,Beter Bed,https://www.beterbed.nl,https://www.beterbed.nl/Klantenservice,,heuristic,10,"linktekst: ""Klantenservice"""
+E-commerce,Huis / klussen,Gamma,https://www.gamma.nl,,,none,0,llm: no pick
+E-commerce,Huis / klussen,Hornbach,https://www.hornbach.nl,https://www.hornbach.nl/services/vraag-contact/,,llm,0,Vraag-&-contact-pagina is de duidelijkste klantenservice/FAQ-sectie waar instructievideo's te verwachten zijn.
+E-commerce,Huis / klussen,IKEA,https://www.ikea.com/nl/nl,https://www.ikea.com/nl/nl/customer-service/services/,,heuristic,10,"linktekst: ""Services"""
+E-commerce,Huis / klussen,Intratuin,https://www.intratuin.nl,https://www.intratuin.nl/klantenservice/faq-mijn-bestelling#bestelling-levertijd,,heuristic,10,"linktekst: ""Vandaag besteld binnen 1-3 dagen bezorgd*"""
+E-commerce,Huis / klussen,Jysk,https://jysk.nl,https://jysk.nl/customer-service,,heuristic,10,"linktekst: ""Klantenservice"""
+E-commerce,Huis / klussen,Karwei,https://www.karwei.nl,,,none,0,llm: no pick
+E-commerce,Huis / klussen,Kwantum,https://www.kwantum.nl,https://www.kwantum.nl/informatie-en-service/klantenservice,,heuristic,10,"linktekst: ""Klantenservice"""
+E-commerce,Huis / klussen,Leen Bakker,https://www.leenbakker.nl,https://www.leenbakker.nl/klantenservice,,heuristic,10,"linktekst: ""Klantenservice"""
+E-commerce,Huis / klussen,Praxis,https://www.praxis.nl,https://www.praxis.nl/service/klantenservice,,heuristic,10,"linktekst: ""Ga naar onze klantenservice"""
+E-commerce,Huis / klussen,Roobol,https://www.roobol.com,https://www.roobol.com/klantenservice/,,heuristic,10,"linktekst: ""Service"""
+E-commerce,Huis / klussen,Toolstation,https://www.toolstation.nl,https://www.toolstation.nl/contact,,heuristic,10,"linktekst: ""Klantenservice"""
+E-commerce,Huis / klussen,VidaXL,https://www.vidaxl.nl,,,none,0,llm: no pick
+E-commerce,Marktplaatsen,Amazon Nederland,https://www.amazon.nl,https://www.amazon.nl/gp/help/customer/display.html?nodeId=508510&ref_=nav_cs_help,,heuristic,10,"linktekst: ""Klantenservice"""
+E-commerce,Marktplaatsen,Bol,https://www.bol.com,https://www.bol.com/nl/nl/inf/wat-is-de-beste-e-reader-voor-jou/43679/,,heuristic,8,"linktekst: ""Hulp bij aankoop van je e-reader"""
+E-commerce,Marktplaatsen,Marktplaats,https://www.marktplaats.nl,https://help.marktplaats.nl/s/,,heuristic,8,"linktekst: ""Help en info"""
+E-commerce,Marktplaatsen,Vinted,https://www.vinted.nl,https://www.vinted.nl/help,,heuristic,10,"linktekst: ""Helpdesk"""
+E-commerce,Cadeaus,Albelli,https://www.albelli.nl,,,none,0,llm: no pick
+E-commerce,Cadeaus,Topbloemen,https://topbloemen.nl/,https://topbloemen.nl/contact-met-onze-klantenservice-topbloemen,,heuristic,10,"linktekst: ""Contact met onze klantenservice"""
+E-commerce,Cadeaus,Boekenvoordeel,https://www.boekenvoordeel.nl,https://www.boekenvoordeel.nl/klantenservice,,heuristic,10,"linktekst: ""Klantenservice"""
+E-commerce,Cadeaus,Greetz,https://www.greetz.nl,https://hulp.greetz.nl/nl/,,llm,0,Het 'hulp'-subdomein is de klantenservice/helpsectie waar instructie- en uitlegvideo's te verwachten zijn.
+E-commerce,Mode,About You,https://www.aboutyou.nl,https://www.aboutyou.nl/h,,heuristic,8,"linktekst: ""Help & Contact"""
+E-commerce,Mode,ASOS,https://www.asos.com/nl,,,none,0,no internal links
+E-commerce,Mode,C&A,https://www.c-and-a.com/nl/nl,https://www.c-and-a.com/nl/nl/shop/service/veelgestelde-vragen,,heuristic,7,"linktekst: ""FAQs"""
+E-commerce,Mode,G-Star RAW,https://www.g-star.com/nl_nl,https://www.g-star.com/nl_nl/customer-service/contact,,heuristic,10,"linktekst: ""Druk op enter om naar onze contactpagina te gaan"""
+E-commerce,Mode,H&M,https://www2.hm.com/nl_nl,,,none,0,no internal links
+E-commerce,Mode,Hunkemöller,https://www.hunkemoller.nl,https://www.hunkemoller.nl/klantenservice/hunkemoller-app,,heuristic,10,"linktekst: ""Hunkemöller App"""
+E-commerce,Mode,Kleertjes.com,https://www.kleertjes.com,https://www.kleertjes.com/klantenservice/,,heuristic,10,"linktekst: ""service"""
+E-commerce,Mode,Lucardi,https://www.lucardi.nl,https://www.lucardi.nl/klantenservice-contact.html,,heuristic,8,"linktekst: ""Ik heb hulp nodig"""
+E-commerce,Mode,Nelson,https://www.nelson.nl,https://www.nelson.nl/klantenservice/,,heuristic,10,"linktekst: ""Klantenservice"""
+E-commerce,Mode,Omoda,https://www.omoda.nl,https://www.omoda.nl/klantenservice/,,heuristic,10,"linktekst: ""Klantenservice"""
+E-commerce,Mode,Scapino,https://www.scapino.nl,https://www.scapino.nl/klantenservice/,,heuristic,10,"linktekst: ""klantenservice"""
+E-commerce,Mode,The Sting,https://www.thesting.com/nl-nl,https://www.thesting.com/nl-nl/customercare.html,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+E-commerce,Mode,WE Fashion,https://www.wefashion.nl,,,none,0,no internal links
+E-commerce,Mode,Wehkamp,https://www.wehkamp.nl,https://www.wehkamp.nl/klantenservice/categorie/bezorgen/vraag/hoe-snel-bezorgen-jullie,,heuristic,10,"linktekst: ""Vandaag besteld, morgen in huis"""
+E-commerce,Mode,Zalando,https://www.zalando.nl,,,none,0,no internal links
+E-commerce,Mode,Zara,https://www.zara.com/nl,,,none,0,no internal links
+E-commerce,Mode,Zeeman,https://www.zeeman.com/nl,https://www.zeeman.com/nl-nl/faqs,,heuristic,10,"linktekst: ""Klantenservice"""
+E-commerce,Sport,Adidas,https://www.adidas.nl,,,none,0,no internal links
+E-commerce,Sport,Bever,https://www.bever.nl,https://www.bever.nl/klantenservice.html,,heuristic,10,"linktekst: ""Klantenservice"""
+E-commerce,Sport,Decathlon,https://www.decathlon.nl,,,none,0,no internal links
+E-commerce,Sport,Foot Locker,https://www.footlocker.nl,,,none,0,llm: no pick
+E-commerce,Sport,JD Sports,https://www.jdsports.nl,https://www.jdsports.nl/customer-service/faqs/,,heuristic,10,"linktekst: ""Hulp"""
+E-commerce,Sport,Nike,https://www.nike.com/nl,https://www.nike.com/nl/help,,heuristic,8,"linktekst: ""Help"""
+E-commerce,Sportvoeding,Upfront,https://upfront.nl/,https://upfront.nl/pages/support,,heuristic,9,"linktekst: ""Support"""
+E-commerce,Sportvoeding,XXL Nutrition,https://xxlnutrition.com/nl,,,none,0,no internal links
+E-commerce,Supermarkt,Albert Heijn Online,https://www.ah.nl,,,none,0,no internal links
+E-commerce,Supermarkt,Dirk,https://www.dirk.nl,https://www.dirk.nl/contact,,llm,0,Geen aparte FAQ/klantenservice-pagina in de lijst; Contact is de enige hulp-/supportgerelateerde URL.
+E-commerce,Supermarkt,Gall & Gall,https://www.gall.nl,https://www.gall.nl/service/faq-bezorgen/,,heuristic,7,"linktekst: ""Retourneren"""
+E-commerce,Supermarkt,HelloFresh,https://www.hellofresh.nl,https://www.hellofresh.nl/about/faq,,heuristic,8,"linktekst: ""Hulp"""
+E-commerce,Supermarkt,Jumbo,https://www.jumbo.com,,,error,0,"load failed: page.goto: Timeout 20000ms exceeded.
+Call log:
+[2m  - navig"
+E-commerce,Supermarkt,Nespresso,https://www.nespresso.com/nl,,,error,0,load failed: page.goto: net::ERR_HTTP2_PROTOCOL_ERROR at https://www.nesp
+E-commerce,Supermarkt,Picnic,https://picnic.app/nl,https://jobs.picnic.app/nl/vacatures/klantenservice-medewerker?utm_source=picnic-website&utm_medium=footer-link,,heuristic,10,"linktekst: ""Word klantenservice medewerker"""
+E-commerce,Supermarkt,Plus,https://www.plus.nl,https://www.plus.nl/consumentenservice,,heuristic,10,"linktekst: ""Klantenservice"""
+E-commerce,Supermarkt,Thuisbezorgd,https://www.thuisbezorgd.nl,https://www.thuisbezorgd.nl/klantenservice,,heuristic,10,"linktekst: ""Klantenservice"""
+E-commerce,Supermarkt,Hoogvliet,https://www.hoogvliet.com/,https://www.hoogvliet.com/klantenservice;pgid=Z8xGCt6_FTxSRpki3GH5ImF30000QVBUr2uL;sid=y1Q_gNsl7ScTgrEEszWQg8AvxqIZMjFV1yS-kxfZRTPp2Q==,,heuristic,10,"linktekst: ""Klantenservice"""
+E-commerce,Supermarkt,Douglas,https://www.douglas.nl,,,none,0,no internal links
+E-commerce,Verzorging / gezondheid,Etos,https://www.etos.nl,https://www.etos.nl/klantenservice/,,heuristic,10,"linktekst: ""Klantenservice"""
+E-commerce,Verzorging / gezondheid,Holland & Barrett,https://www.hollandandbarrett.nl,https://www.hollandandbarrett.nl/info/algemene-voorwaarden/actievoorwaarden,,llm,0,"Enige /info-pagina, maar betreft voorwaarden — geen echte klantenservice/FAQ-sectie met uitlegvideo's."
+E-commerce,Verzorging / gezondheid,ICI Paris XL,https://www.iciparisxl.nl,,,none,0,no internal links
+E-commerce,Verzorging / gezondheid,Kruidvat,https://www.kruidvat.nl,,,none,0,no internal links
+E-commerce,Verzorging / gezondheid,Pearle,https://www.pearle.nl,https://www.pearle.nl/klantenservice,,heuristic,10,"linktekst: ""Klantenservice"""
+E-commerce,Verzorging / gezondheid,Specsavers,https://www.specsavers.nl,https://www.specsavers.nl/veelgestelde-vragen/topic/contactlenzen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+E-commerce,Warenhuizen,Action,https://www.action.com/nl-nl,https://www.action.com/nl-nl/klantenservice/,,heuristic,10,"linktekst: ""Klantenservice"""
+E-commerce,Warenhuizen,De Bijenkorf,https://www.debijenkorf.nl,https://www.debijenkorf.nl/klantenservice,,heuristic,10,"linktekst: ""Bekijk veelgestelde vragen"""
+E-commerce,Warenhuizen,HEMA,https://www.hema.nl,https://www.hema.nl/klantenservice,,heuristic,10,"linktekst: ""klantenservice"""
+E-commerce,Warenhuizen,Wibra,https://www.wibra.nl,https://service.wibra.nl/hc/nl,,heuristic,10,"linktekst: ""Klantenservice"""

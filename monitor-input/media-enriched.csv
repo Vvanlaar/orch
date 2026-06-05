@@ -1,0 +1,74 @@
+﻿segment,sub_sector,organisatie,url_homepage,url_support,url_product,url_support_method,url_support_score,url_support_note
+Media,"Dag, week- en maandbladen",Elsevier,https://elsevier.nl,,,error,0,load failed: page.goto: net::ERR_CONNECTION_REFUSED at https://elsevier.n
+Media,"Dag, week- en maandbladen",Quote,https://www.quotenet.nl/,https://abonnement.quotenet.nl/faq,,heuristic,7,"linktekst: ""FAQ"""
+Media,"Dag, week- en maandbladen",Libelle,https://libelle.nl,,,none,0,no internal links
+Media,"Dag, week- en maandbladen",LINDA.,https://linda.nl,http://klantenservice.linda.nl/nl/support/home/,,heuristic,10,"linktekst: ""klantenservice"""
+Media,"Dag, week- en maandbladen",Vogue Nederland,https://vogue.nl,,,none,0,llm: no pick
+Media,"Dag, week- en maandbladen",Elle,https://elle.nl,,,error,0,"load failed: page.goto: net::ERR_CONNECTION_REFUSED at https://elle.nl/
+C"
+Media,"Dag, week- en maandbladen",Marie Claire,https://marieclaire.nl,https://marieclaire.nl/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Media,"Dag, week- en maandbladen",National Geographic NL,https://nationalgeographic.nl,,,none,0,llm: no pick
+Media,"Dag, week- en maandbladen",Bazaar,https://bazaar.nl,https://www.bazaar.nl/contact/,,llm,0,Enige klantenservice-gerelateerde link; geen specifieke FAQ/help-pagina aanwezig in de navigatie.
+Media,"Dag, week- en maandbladen",Flow,https://flowmagazine.nl,https://www.flowmagazine.nl/service/,,heuristic,10,"linktekst: ""Klantenservice"""
+Media,"Dag, week- en maandbladen",Happinez,https://happinez.nl,https://www.happinez.nl/klantenservice/,,heuristic,10,"linktekst: ""Klantenservice"""
+Media,"Dag, week- en maandbladen",Quest,https://quest.nl,https://shop.quest.nl/faq/abonnement-voorwaarden,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Media,"Dag, week- en maandbladen",Vrij Nederland,https://www.vn.nl/,https://www.vn.nl/service/,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Media,"Dag, week- en maandbladen",EW,https://www.ewmagazine.nl/,https://www.ewmagazine.nl/service/,,heuristic,10,"linktekst: ""Klantenservice"""
+Media,"Dag, week- en maandbladen",Margriet,https://margriet.nl,https://mijnomgeving.margriet.nl/,,heuristic,10,"linktekst: ""Klantenservice"""
+Media,"Dag, week- en maandbladen",Bladen,https://bladen.nl,https://www.bladen.nl/klantenservice/veelgestelde-vragen,,heuristic,10,"linktekst: ""Klantenservice"""
+Media,"Dag, week- en maandbladen",AutoWeek,https://www.autoweek.nl/,https://mijnomgeving.autoweek.nl/,,heuristic,10,"linktekst: ""Klantenservice"""
+Media,"Dag, week- en maandbladen",DonaldDuck,https://www.donaldduck.nl/,https://x,,existing,,from input
+Media,Nieuws en journalistiek,NOS,https://nos.nl,https://over.nos.nl/adres-en-route/,,llm,0,Enige contact-/hulpgerichte link; geen specifieke FAQ/support-pagina aanwezig in de lijst.
+Media,Nieuws en journalistiek,Nu.nl,https://nu.nl,https://www.nu.nl/uitgelicht/6398020/hoe-ervaar-jij-de-psychische-hulp-bij-de-huisarts.html,,heuristic,8,"linktekst: ""Praat mee |Hoe ervaar jij de psychische hulp bij de huisarts?"""
+Media,Nieuws en journalistiek,RTL Nieuws,https://rtlnieuws.nl,,,none,0,llm: no pick
+Media,Nieuws en journalistiek,Volkskrant,https://volkskrant.nl,https://mijnomgeving.volkskrant.nl/,,heuristic,10,"linktekst: ""KlantenserviceAntwoord op al uw vragen"""
+Media,Nieuws en journalistiek,Trouw,https://trouw.nl,https://mijnomgeving.trouw.nl/,,heuristic,10,"linktekst: ""KlantenserviceAntwoord op al uw vragen"""
+Media,Nieuws en journalistiek,NRC,https://nrc.nl,https://service.nrc.nl/digitaal,,heuristic,7,"linktekst: ""FAQ Digitaal Lezen"""
+Media,Nieuws en journalistiek,Telegraaf,https://telegraaf.nl,https://help.telegraaf.nl/,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Media,Nieuws en journalistiek,Het Financieele Dagblad,https://fd.nl,https://fd.nl/service#mijn-abonnement,,heuristic,8,"linktekst: ""Hulp bij inloggen"""
+Media,Nieuws en journalistiek,GeenStijl,https://geenstijl.nl,https://www.geenstijl.nl/contact,,llm,0,Enige support-/hulpgerelateerde pagina; GeenStijl heeft geen aparte FAQ-/klantenservicesectie.
+Media,Nieuws en journalistiek,Follow the Money,https://followthemoney.com,https://followthemoney.com/ttp-help/,,heuristic,8,"linktekst: ""Help"""
+Media,Nieuws en journalistiek,Tweakers,https://tweakers.net,https://tweakers.net/info/over-tweakers/contact/,,llm,0,Enige support-gerelateerde link; de overige zijn content- of productsecties zonder aparte FAQ/help-pagina.
+Media,Nieuws en journalistiek,De Correspondent,https://decorrespondent.nl,https://decorrespondent.nl/help,,heuristic,8,"linktekst: ""Help"""
+Media,Nieuws en journalistiek,Business Insider NL,https://businessinsider.nl,,,none,0,no internal links
+Media,Nieuws en journalistiek,Nieuwsvisie,https://nieuwsvisie.nl,https://www.nieuwsvisie.nl/contact/,,llm,0,Geen aparte support/FAQ-pagina aanwezig; de contactpagina is het enige hulp-/klantcontactkanaal.
+Media,Nieuws en journalistiek,AD,https://ad.nl,https://mijnomgeving.ad.nl/,,heuristic,10,"linktekst: ""Klantenservice"""
+Media,Nieuws en journalistiek,Parool,https://parool.nl,https://mijnomgeving.parool.nl/,,heuristic,10,"linktekst: ""KlantenserviceAntwoord op al uw vragen"""
+Media,Omroep en streaming,Omroep Gelderland,https://omroepgelderland.nl,,,none,0,no internal links
+Media,Omroep en streaming,Omroep Brabant,https://omroepbrabant.nl,https://www.omroepbrabant.nl/contact,,llm,0,Enige hulp-/contactgerelateerde link; geen aparte support- of FAQ-pagina aanwezig.
+Media,Omroep en streaming,RTV Rijnmond,https://rtvrijnmond.nl,,,error,0,load failed: page.goto: net::ERR_CERT_AUTHORITY_INVALID at https://rtvrij
+Media,Omroep en streaming,AT5,https://at5.nl,https://www.at5.nl/contact,,llm,0,Geen aparte support/FAQ-sectie aanwezig; contactpagina is de enige hulp-gerelateerde optie.
+Media,Omroep en streaming,NH Nieuws,https://nhnieuws.nl,https://jouw.nhnieuws.nl/,,llm,0,"""NH Helpt"" is de hulp-/supportsectie, specifieker dan de algemene contactpagina."
+Media,Omroep en streaming,Omroep Fryslân,https://omroepfryslan.nl,,,none,0,no internal links
+Media,Omroep en streaming,NPO,https://npo.nl,https://npo.nl/start/serie/op-de-spoed?at_medium=display&at_channel=npo.nl&at_campaign=npo_npo_linkage&at_creation=tips&at_variant=organic&at_general_placement=home||||||&at_format=tegel_portrait;0_0&at_detail_placement=,,heuristic,8,"linktekst: ""Een lach en een traan op de spoedeisende hulp
+																					- Kijk op NPO"""
+Media,Omroep en streaming,Videoland,https://videoland.com,https://hulp.videoland.com/s/,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Media,Omroep en streaming,Ziggo,https://ziggo.nl,https://www.ziggo.nl/klantenservice/contact/nummerbehoud,,heuristic,10,"linktekst: ""Nummerbehoud"""
+Media,Omroep en streaming,KPN,https://kpn.nl,,,none,0,no internal links
+Media,Omroep en streaming,BNNVARA,https://bnnvara.nl,https://www.bnnvara.nl/over,,llm,0,Geen specifieke support/FAQ-pagina aanwezig; 'Contact' onder /over is het dichtst bij klantenservice/hulp.
+Media,Omroep en streaming,AVROTROS,https://avrotros.nl,https://www.avrotros.nl/faq~50/,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Media,Omroep en streaming,VPRO,https://vpro.nl,https://www.vpro.nl/info/vpro-contact,,llm,0,Enige hulp-/contactgerichte link; geen aparte support- of FAQ-pagina aanwezig in de navigatie.
+Media,Omroep en streaming,NPO Radio 1,https://nporadio1.nl,https://www.nporadio1.nl/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Media,Omroep en streaming,Viaplay,https://viaplay.nl,,,none,0,no internal links
+Media,Omroep en streaming,Netflix (NL),https://netflix.com,https://help.netflix.com/support/412,,heuristic,9,"linktekst: ""FAQ"""
+Media,Omroep en streaming,Disney+,https://disneyplus.com,https://help.disneyplus.com/?utm_source=disneyplus&utm_medium=web&utm_campaign=unauthenticated-site-footer&utm_content=home-page,,heuristic,8,"linktekst: ""Help Center"""
+Media,Omroep en streaming,HBO Max,https://hbomax.com,https://help.hbomax.com/Answer/Detail/000002544,,heuristic,8,"linktekst: ""Help Center"""
+Media,Omroep en streaming,Prime Video,https://primevideo.com,https://www.primevideo.com/help/ref=atv_hp_nd_nav?nodeId=GZVH7DTWNBGPRPDS,,heuristic,8,"linktekst: ""Cookie Notice"""
+Media,Omroep en streaming,NPO Start,https://npostart.nl,,,none,0,no internal links
+Media,Omroep en streaming,Omroep MAX,https://omroepmax.nl,https://www.omroepmax.nl/contact/,,llm,0,Geen aparte support/FAQ-pagina aanwezig; contactpagina is de enige klantenservice-gerelateerde optie.
+Media,Omroep en streaming,EO,https://eo.nl,https://mijn.eo.nl/veelgestelde-vragen,,heuristic,8,"linktekst: ""Hulp nodig?"""
+Media,Omroep en streaming,KRO-NCRV,https://kro-ncrv.nl,https://kro-ncrv.nl/veelgestelde-vragen-over-kro-ncrv,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Media,Omroep en streaming,Kijk.nl,https://kijk.nl,https://www.kijk.nl/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Media,Omroep en streaming,SkyShowtime,https://skyshowtime.com,https://www.skyshowtime.com/nl/help,,llm,0,Het algemene Help-/supportcentrum waar FAQ's en instructie-/uitlegvideo's verzameld staan.
+Media,Omroep en streaming,Spotify,https://open.spotify.com/,https://www.spotify.com/nl/about-us/contact/,,llm,0,Geen FAQ/support-pagina in de lijst; de contactpagina is de enige hulp-gerelateerde ingang.
+Media,Omroep en streaming,Podimo,https://podimo.com/nl,https://support.podimo.com/hc/nl-nl/sections/31874845578385,,heuristic,7,"linktekst: ""Podcaster FAQ"""
+Media,Omroep en streaming,Storytel,https://www.storytel.com/nl,https://support.storytel.com/hc/nl,,heuristic,8,"linktekst: ""Contact en help"""
+Media,Sociale media,Facebook,https://facebook.com,https://www.facebook.com/help/568137493302217,,heuristic,8,"linktekst: ""Jouw advertentievoorkeuren"""
+Media,Sociale media,Instagram,https://instagram.com,https://help.instagram.com/,,heuristic,8,"linktekst: ""Help"""
+Media,Sociale media,X (Twitter),https://x.com,https://help.x.com/,,heuristic,8,"linktekst: ""Help Center"""
+Media,Sociale media,LinkedIn,https://linkedin.com,https://www.linkedin.com/jobs/customer-service-jobs-hilversum?trk=homepage-basic_suggested-search,,heuristic,10,"linktekst: ""Customer Service"""
+Media,Sociale media,TikTok,https://tiktok.com,,,none,0,llm: no pick
+Media,Sociale media,Snapchat,https://snapchat.com,https://help.snapchat.com/,,heuristic,9,"linktekst: ""Support"""
+Media,Sociale media,Pinterest,https://pinterest.nl,,,none,0,no internal links
+Media,Sociale media,Reddit,https://reddit.com,https://www.reddit.com/r/PeterExplainsTheJoke/comments/1tvx46q/who_is_the_girl_on_the_left_are_they_calling_elon/,,heuristic,8,"linktekst: ""Who is the girl on the left? Are they calling Elon the girl? Peter help"""
+Media,Sociale media,Threads,https://threads.net,,,none,0,no internal links

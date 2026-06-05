@@ -25,7 +25,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCAN_SCRIPT = resolve(__dirname, "..", "scan.mjs");
 
 function parseArgs(argv) {
-  const out = { maxPages: 40, maxVideos: 10, delay: 3000 };
+  const out = { maxPages: 40, maxVideos: 10, delay: 3000, orgTimeout: 20 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--input") out.input = argv[++i];
@@ -35,6 +35,7 @@ function parseArgs(argv) {
     else if (a === "--max-videos") out.maxVideos = Number(argv[++i]);
     else if (a === "--limit") out.limit = Number(argv[++i]);
     else if (a === "--delay") out.delay = Number(argv[++i]);
+    else if (a === "--org-timeout") out.orgTimeout = Number(argv[++i]);
     else if (a === "--fresh") out.fresh = true;
     else if (a === "--help" || a === "-h") out.help = true;
   }
@@ -63,6 +64,9 @@ Options:
   --max-videos <n>      Stop crawl after n pages with video (default: 10)
   --max-pages <n>       Safety cap on pages crawled per org (default: 40)
   --delay <ms>          Inter-page delay in scan.mjs (default: 3000)
+  --org-timeout <min>   Kill a single org's scan after N minutes and move on;
+                        the org is marked timedOut in its meta so a resume
+                        skips it (default: 20, 0 = no limit)
   --fresh               Re-scan every org (default: skip orgs already scanned)
   --limit <n>           Only process first N orgs (smoke test)
 
@@ -71,7 +75,16 @@ Example:
 `);
 }
 
-function runScan({ startUrl, seedFile, segment, maxPages, maxVideos, delay, cwd }) {
+function killTree(pid) {
+  // child.kill() leaves Chromium grandchildren alive on Windows — kill the tree.
+  if (process.platform === "win32") {
+    spawn("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" }).unref();
+  } else {
+    try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+  }
+}
+
+function runScan({ startUrl, seedFile, segment, maxPages, maxVideos, delay, cwd, timeoutMs }) {
   return new Promise((resolveFn, reject) => {
     const args = [
       SCAN_SCRIPT,
@@ -91,9 +104,24 @@ function runScan({ startUrl, seedFile, segment, maxPages, maxVideos, delay, cwd 
       cwd,
       stdio: "inherit",
     });
-    child.on("error", reject);
+    // Bot-walled sites (Cloudflare 403 + 30s backoff) can stall one org for
+    // hours; cap wall-clock per org and move on (org gets meta.timedOut).
+    let timedOut = false;
+    const timer = timeoutMs
+      ? setTimeout(() => {
+          timedOut = true;
+          console.error(`  org-timeout after ${Math.round(timeoutMs / 60000)}min — killing scan`);
+          killTree(child.pid);
+        }, timeoutMs)
+      : null;
+    child.on("error", (err) => {
+      if (timer) clearTimeout(timer);
+      reject(err);
+    });
     child.on("exit", (code) => {
-      if (code === 0) resolveFn();
+      if (timer) clearTimeout(timer);
+      if (timedOut) reject(new Error("org-timeout"));
+      else if (code === 0) resolveFn();
       else reject(new Error(`scan.mjs exited ${code}`));
     });
   });
@@ -166,8 +194,9 @@ async function main() {
     if (!opts.fresh && existsSync(metaPath)) {
       try {
         const prev = JSON.parse(readFileSync(metaPath, "utf-8"));
-        if ((prev.scanFiles || []).length > 0) {
-          console.log(`[${i + 1}/${limit}] ${row.organisatie} — already scanned, skip`);
+        if ((prev.scanFiles || []).length > 0 || prev.timedOut) {
+          const why = prev.timedOut ? "timed out earlier" : "already scanned";
+          console.log(`[${i + 1}/${limit}] ${row.organisatie} — ${why}, skip`);
           continue;
         }
       } catch { /* unreadable meta → re-scan */ }
@@ -196,6 +225,7 @@ async function main() {
     }
 
     const startedAt = Date.now();
+    let orgTimedOut = false;
     try {
       await runScan({
         startUrl,
@@ -205,8 +235,10 @@ async function main() {
         maxVideos: opts.maxVideos,
         delay: opts.delay,
         cwd: orgDir,
+        timeoutMs: opts.orgTimeout > 0 ? opts.orgTimeout * 60000 : 0,
       });
     } catch (err) {
+      orgTimedOut = err.message === "org-timeout";
       console.error(`  scan failed: ${err.message}`);
     } finally {
       if (seedFile) { try { rmSync(seedFile); } catch {} }
@@ -224,6 +256,7 @@ async function main() {
       orgDir: orgSlug,
       scanFiles: findScanOutputs(orgDir),
       scannedAt: new Date(startedAt).toISOString(),
+      ...(orgTimedOut ? { timedOut: true } : {}),
     };
     writeFileSync(
       join(outDir, `${orgSlug}.meta.json`),

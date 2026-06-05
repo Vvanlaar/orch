@@ -1,0 +1,56 @@
+﻿segment,sub_sector,organisatie,url_homepage,url_support,url_product,url_support_method,url_support_score,url_support_note
+Reis en vakantie,Accomodaties,AirBNB,https://www.airbnb.nl/,https://www.airbnb.nl/help/home?from=footer,,heuristic,8,"linktekst: ""Helpcentrum"""
+Reis en vakantie,Vervoer,nightjet,https://www.nightjet.com/nl/#/home,https://www.nightjet.com/nl/buchung/faq/buchung-im-nightjet,,heuristic,7,"linktekst: ""FAQ"""
+Reis en vakantie,Vervoer,NS,https://www.ns.nl/,https://www.ns.nl/klantenservice/abonnementen-en-producten/samenreiskorting.html,,heuristic,10,"linktekst: ""Samenreiskorting"""
+Reis en vakantie,Overig,social deal,https://www.socialdeal.nl/#join,https://www.socialdeal.nl/klantenservice/,,heuristic,10,"linktekst: ""Klantenservice"""
+Reis en vakantie,Vervoer,NS International,https://www.nsinternational.com/,https://www.nsinternational.com/nl/service-en-contact,,llm,0,Service & Contact is de centrale klantenservice/hulp-sectie waar uitleg- en FAQ-content (incl. instructievideo's) te verwachten is.
+Reis en vakantie,Overig,9292,https://9292.nl/,https://9292.nl/contact/,,llm,0,"Enige 'Contact & service'-pagina; meest waarschijnlijke hub voor klantenservice/hulp en uitlegvideo's, geen aparte FAQ-pagina aanwezig."
+Reis en vakantie,Vervoer,Eurostar,https://www.eurostar.com/nl-nl,https://help.eurostar.com/faq/?language=nl-nl&intcmp_HP_Header,,heuristic,8,"linktekst: ""Help"""
+Reis en vakantie,Vervoer,BlaBlaCar,https://www.blablacar.nl/,,,none,0,llm: no pick
+Reis en vakantie,Accomodaties,Ibis,https://ibis.accor.com/nl.html,,,none,0,llm: no pick
+Reis en vakantie,Accomodaties,natuurhuisje.nl,https://www.natuurhuisje.nl/,https://faq-verhuurder.natuurhuisje.nl/,,heuristic,7,"linktekst: ""FAQ"""
+Reis en vakantie,Accomodaties,Booking.com,https://Booking.com,https://secure.booking.com/help.nl.html?label=gen173nr-10CAEoggI46AdIM1gEaKkBiAEBmAEzuAEXyAEM2AED6AEB-AEBiAIBqAIBuAKJloXRBsACAdICJGEwNDUwYWI0LTJhNjQtNDBlMC1hNDgzLTRkMDc1ZDcyMWFmNtgCAeACAQ&aid=304142&sid=57da087f59723dcfe79f3cdef6c8bbcd,,heuristic,10,"linktekst: ""Contact Klantenservice"""
+Reis en vakantie,Vervoer,FlixBus,https://www.flixbus.nl/,https://www.flixbus.nl/service,,llm,0,De 'Alle services' hub is de centrale klantenservice/hulp-sectie waar instructie- en uitlegvideo's het meest waarschijnlijk staan.
+Reis en vakantie,Reisbureaus,ANWB Reizen,https://www.anwb.nl/vakantie/reizen-van-anwb,https://www.anwb.nl/vakantie/reizen-van-anwb/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Reis en vakantie,Reisbureaus,De Jong Intra Vakanties,https://www.dejongintra.nl/,,,none,0,llm: no pick
+Reis en vakantie,Deelvervoer,Uber,https://www.uber.com/nl/nl/,https://help.uber.com/,,heuristic,8,"linktekst: ""Help"""
+Reis en vakantie,Deelvervoer,Greenwheels,https://www.greenwheels.com/,https://www.greenwheels.com/help,,heuristic,8,"linktekst: ""Help"""
+Reis en vakantie,Vervoer,interrail,https://www.interrail.eu/nl,,,none,0,llm: no pick
+Reis en vakantie,Reisbureaus,Kras reizen,http://kras.reisaanbod.nl/,,,none,0,llm: no pick
+Reis en vakantie,Overig,getyourguide,https://www.getyourguide.com/nl-nl/,https://www.getyourguide.com/contact/?referrer_source=site_footer,,llm,0,Enige support/contact-gerelateerde link; geen specifieke FAQ/helpcenter-pagina aanwezig in de lijst.
+Reis en vakantie,Deelvervoer,roadsurfer,https://roadsurfer.com/nl/,https://rent-help.roadsurfer.com/hc/nl/sections/4469382000531,,heuristic,8,"linktekst: ""Ik heb hulp nodig bij de bediening van mijn camper"""
+Reis en vakantie,Vervoer,Transavia,https://www.transavia.com/home/nl-nl,https://www.transavia.com/service/nl-nl,,heuristic,8,"linktekst: ""Help centerBekijk de veelgestelde vragen"""
+Reis en vakantie,Reisbureaus,TravelBird,https://travelbird.nl/,https://travelbird.nl/veelgestelde-vragen,,heuristic,7,"linktekst: ""FAQ"""
+Reis en vakantie,Deelvervoer,Bolt,https://bolt.eu/nl-nl/,https://bolt.eu/nl-nl/support/,,heuristic,9,"linktekst: ""Support"""
+Reis en vakantie,Accomodaties,Zoover,https://www.zoover.nl/,https://www.zoover.nl/contact,,heuristic,10,"linktekst: ""Klantenservice"""
+Reis en vakantie,Accomodaties,Hotels.com,https://nl.hotels.com/,,,error,0,load failed: page.goto: net::ERR_HTTP2_PROTOCOL_ERROR at https://nl.hotel
+Reis en vakantie,Reisbureaus,OAD,https://www.oad.nl/,https://www.oad.nl/faq,,heuristic,7,"linktekst: ""Vind snel antwoord op jouw vraag."""
+Reis en vakantie,Vervoer,spoordeelwinkel,https://spoordeelwinkel.nachtjeweg.nl/,https://spoordeelwinkel.nachtjeweg.nl/veelgestelde-vragen,,heuristic,7,"linktekst: ""FAQ"""
+Reis en vakantie,Deelvervoer,MyWheels,https://mywheels.nl/,https://help.mywheels.nl/nl/,,heuristic,9,"linktekst: ""Support"""
+Reis en vakantie,Accomodaties,campings.nl,https://www.campings.nl/,https://www.campings.nl/faq,,heuristic,7,"linktekst: ""FAQ"""
+Reis en vakantie,Reisbureaus,Corendon,https://www.corendon.nl/,https://www.corendon.nl/klantenservice/,,heuristic,10,"linktekst: ""Veelgestelde vragen"""
+Reis en vakantie,Overig,saily,https://saily.com/nl/,https://support.saily.com/hc/nl/categories/12777374878876-Probleemoplossing,,heuristic,8,"linktekst: ""ProbleemoplossingLos veelvoorkomende problemen op met stapsgewijze hulp."""
+Reis en vakantie,Vervoer,govolta,https://govolta.nl/nl/,https://govolta.nl/nl/faq,,heuristic,7,"linktekst: ""FAQ"""
+Reis en vakantie,Accomodaties,Expedia,https://www.expedia.nl/,,,none,0,llm: no pick
+Reis en vakantie,Reisbureaus,Sunweb,https://www.sunweb.nl/,,,none,0,llm: no pick
+Reis en vakantie,Overig,Parkmobile,https://parkmobile.io/,https://support.parkmobile.io/hc/en-us?user_id=gdfc47hpmx&_gl=1*shayqe*_gcl_au*MTc1NTgzMTM3OS4xNzUyNzQ2NDcw&utm_source=pm_tld,,heuristic,8,"linktekst: ""Help Center"""
+Reis en vakantie,Reisbureaus,sawadee,https://www.sawadee.nl/,https://www.sawadee.nl/service/veelgestelde-vragen/,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Reis en vakantie,Vervoer,Cheaptickets.nl,https://www.cheaptickets.nl/,https://www.cheaptickets.nl/klantenservice,,heuristic,10,"linktekst: ""Contact"""
+Reis en vakantie,Reisbureaus,Eliza was here,https://www.elizawashere.nl/,https://service.elizawashere.nl/nl/support/home,,heuristic,9,"linktekst: ""Vragen & Contact"""
+Reis en vakantie,Accomodaties,vakantiehuisjes.nl,https://vakantiehuisjes.nl,https://www.vakantiehuisjes.nl/faq,,heuristic,7,"linktekst: ""FAQ"""
+Reis en vakantie,Reisbureaus,VakantieXperts,https://vx.nl/,https://www.vx.nl/service-en-vragen,,llm,0,"Specifieke service-/FAQ-pagina ('Service en vragen'), waar uitlegvideo's eerder te verwachten zijn dan op de algemene contactpagina's."
+Reis en vakantie,Reisbureaus,Expedia,https://www.expedia.nl/,,,none,0,llm: no pick
+Reis en vakantie,Reisbureaus,Prijsvrij Vakanties,https://www.prijsvrij.nl/,https://www.prijsvrij.nl/veelgestelde-vragen,,heuristic,10,"linktekst: ""Klantenservice"""
+Reis en vakantie,Reisbureaus,Vakantiediscounter,https://www.vakantiediscounter.nl/,https://klantenservice.vakantiediscounter.nl/,,heuristic,10,"linktekst: ""Klantenservice"""
+Reis en vakantie,Accomodaties,Eurocamp,https://www.eurocamp.nl/,https://www.eurocamp.nl/informatie/eurocamp-camping-vakanties/hulp-en-contact,,heuristic,8,"linktekst: ""Contact"""
+Reis en vakantie,Deelvervoer,Sixt share,https://www.sixt.nl/,https://www.sixt.nl/help-center/,,heuristic,8,"linktekst: ""Hulp"""
+Reis en vakantie,Vervoer,Treinreiswinkel,https://www.treinreiswinkel.nl/,https://www.treinreiswinkel.nl/faq,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Reis en vakantie,Reisbureaus,D-reizen,https://www.d-reizen.nl/,https://service.d-reizen.nl/hc/nl,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Reis en vakantie,Accomodaties,Agoda,https://www.agoda.com/nl-nl/,,,none,0,llm: no pick
+Reis en vakantie,Deelvervoer,GoBoony,https://www.goboony.nl/,,,none,0,llm: no pick
+Reis en vakantie,Accomodaties,landall greenparks,https://www.landal.nl/,https://www.landal.nl/contact-en-vragen,,llm,0,De enige servicegerichte link ('Service & contact') die naar veelgestelde vragen en hulp leidt; de overige links zijn de homepage en individuele parkpagina's.
+Reis en vakantie,Reisbureaus,Stip Reizen,https://www.stipreizen.nl/,https://www.stipreizen.nl/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Reis en vakantie,Accomodaties,roompot.nl,https://www.roompot.nl/,https://www.roompot.nl/contact-en-vragen/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Reis en vakantie,Vervoer,Vliegwinkel.nl,https://Vliegwinkel.nl,https://www.vliegwinkel.nl/klantenservice,,heuristic,10,"linktekst: ""Contact"""
+Reis en vakantie,Accomodaties,belvilla,https://www.belvilla.nl/,https://www.belvilla.nl/nl/klantenservice/cookies,,heuristic,10,"linktekst: ""cookiebeleid"""
+Reis en vakantie,Vervoer,KLM,https://www.klm.nl/,,,error,0,load failed: page.goto: net::ERR_HTTP2_PROTOCOL_ERROR at https://www.klm.

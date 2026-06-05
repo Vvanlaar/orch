@@ -1,0 +1,80 @@
+﻿segment,sub_sector,organisatie,url_homepage,url_support,url_product,url_support_method,url_support_score,url_support_note
+Culturele sector,Musea,Rijksmuseum,https://www.rijksmuseum.nl,https://www.rijksmuseum.nl/nl/footer/contact,,llm,0,Enige link gericht op bezoekersvragen/hulp; geen aparte FAQ- of supportpagina aanwezig in de lijst.
+Culturele sector,Musea,Van Gogh Museum,https://www.vangoghmuseum.nl,,,none,0,llm: no pick
+Culturele sector,Musea,Anne Frank Huis,https://www.annefrank.org,https://www.annefrank.org/nl/museum/veelgestelde-vragen/,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Musea,Stedelijk Museum Amsterdam,https://www.stedelijk.nl,https://www.stedelijk.nl/nl/bezoeken/faq,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Musea,NEMO,https://www.nemosciencemuseum.nl,,,none,0,llm: no pick
+Culturele sector,Musea,Het Scheepvaartmuseum,https://www.hetscheepvaartmuseum.nl,https://www.hetscheepvaartmuseum.nl/bezoek/veelgestelde-vragen,,heuristic,7,"linktekst: ""veelgestelde vragen"""
+Culturele sector,Musea,Wereld Museum Amsterdam,https://amsterdam.wereldmuseum.nl/,https://amsterdam.wereldmuseum.nl/nl/over-wereldmuseum-amsterdam/contact,,llm,0,Geen aparte FAQ/support-pagina aanwezig; Contact is de enige hulp-/klantenservicesectie.
+Culturele sector,Musea,Eye Filmmuseum,https://www.eyefilm.nl,https://www.eyefilm.nl/plan-je-bezoek,,llm,0,Praktische informatie is de dichtstbijzijnde hulp-/bezoekersinformatiesectie; er is geen aparte support/FAQ-pagina.
+Culturele sector,Musea,Moco Amsterdam,https://www.mocomuseum.com,https://www.mocomuseum.com/contact/,,llm,0,Geen aparte support/FAQ-pagina aanwezig; de contactpagina is de enige hulp-/klantenservice-ingang.
+Culturele sector,Musea,Hermitage Amsterdam,https://www.hartmuseum.nl,https://www.hartmuseum.nl/veelgestelde-vragen/,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Musea,Mauritshuis,https://www.mauritshuis.nl,https://www.mauritshuis.nl/contact,,llm,0,Geen aparte support/FAQ-pagina aanwezig; contact is de dichtstbijzijnde hulp-/klantenservice-ingang.
+Culturele sector,Musea,Kunstmuseum Den Haag,https://www.kunstmuseum.nl,https://www.kunstmuseum.nl/nl/bezoek/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Musea,Escher in Het Paleis,https://www.escherinhetpaleis.nl,https://escherinhetpaleis.nl/bezoek/bezoekersinformatie,,llm,0,Bezoekersinformatie is de meest hulp-/FAQ-achtige pagina met praktische bezoekersvragen; een echte support/veelgestelde-vragensectie ontbreekt.
+Culturele sector,Musea,Museum Boijmans Van Beuningen,https://www.boijmans.nl,https://www.boijmans.nl/Depot/Praktische-informatie,,llm,0,Praktische-informatiepagina is de meest support/FAQ-achtige sectie met bezoek- en instructie-info; geen aparte hulp/FAQ aanwezig.
+Culturele sector,Musea,Kunsthal Rotterdam,https://www.kunsthal.nl,https://www.kunsthal.nl/nl/plan-je-bezoek/praktische-informatie/veelgestelde-vragen/,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Musea,Maritiem Museum Rotterdam,https://www.maritiemmuseum.nl,https://maritiemmuseum.nl/plan-je-bezoek/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Musea,Nederlands Fotomuseum,https://www.nederlandsfotomuseum.nl,https://nederlandsfotomuseum.nl/veelgestelde-vragen/,,heuristic,7,"linktekst: ""FAQ"""
+Culturele sector,Musea,Belasting & Douane Museum,https://www.bdmuseum.nl,,,none,0,llm: no pick
+Culturele sector,Musea,Spoorwegmuseum,https://www.spoorwegmuseum.nl,https://www.spoorwegmuseum.nl/bezoek/veelgestelde-vragen/,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Musea,Centraal Museum,https://www.centraalmuseum.nl,https://www.centraalmuseum.nl/nl/over-het-museum/faq,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Musea,Museum Speelklok,https://www.museumspeelklok.nl,https://www.museumspeelklok.nl/praktische-informatie/,,llm,0,Praktische informatie is de meest waarschijnlijke plek voor bezoekersvragen/FAQ; een echte support- of klantenservicepagina ontbreekt.
+Culturele sector,Musea,Nederlands Openluchtmuseum,https://www.openluchtmuseum.nl,https://www.openluchtmuseum.nl/nl/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Musea,Kröller-Müller Museum,https://krollermuller.nl,https://krollermuller.nl/faq,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Musea,Fries Museum,https://www.friesmuseum.nl,https://www.friesmuseum.nl/bezoekinfo,,llm,0,Bezoekinfo is de meest praktische sectie met veelgestelde bezoekersvragen; een aparte support/FAQ-pagina ontbreekt.
+Culturele sector,Musea,Groninger Museum,https://www.groningermuseum.nl,https://www.groningermuseum.nl/bezoek/plan-je-bezoek,,llm,0,"Praktische bezoekersinformatie/veelgestelde-vragen hub; geen aparte support/FAQ-pagina aanwezig, dit komt het dichtst in de buurt."
+Culturele sector,Musea,Drents Museum,https://drentsmuseum.nl,https://drentsmuseum.nl/contact,,llm,0,Geen aparte FAQ/klantenservicepagina aanwezig; Contact is de enige hulp-gerelateerde optie.
+Culturele sector,Musea,Naturalis Biodiversity Center,https://www.naturalis.nl,https://www.naturalis.nl/museum/praktische-informatie,,llm,0,Praktische info is de dichtstbijzijnde bezoekers-hulp/FAQ-achtige pagina; er is geen aparte support/veelgestelde-vragen sectie.
+Culturele sector,Musea,Corpus,https://corpusexperience.nl,https://corpusexperience.nl/plan-je-bezoek/veelgestelde-vragen/,,heuristic,7,"linktekst: ""VEELGESTELDE VRAGEN"""
+Culturele sector,Musea,Zuiderzeemuseum,https://www.zuiderzeemuseum.nl,https://www.zuiderzeemuseum.nl/contact,,llm,0,Geen aparte FAQ/support-pagina aanwezig; contact is de enige hulp-/klantenservicegerichte pagina.
+Culturele sector,Musea,Batavialand,https://www.batavialand.nl,https://www.batavialand.nl/plan-je-bezoek/veelgestelde-vragen/,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Musea,Museum de Fundatie,https://www.museumdefundatie.nl,https://museumdefundatie.nl/nl/over-het-museum/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Musea,De Pont,https://depont.nl,https://www.depont.nl/bezoek-tickets/praktische-informatie,,llm,0,"Praktische informatie is de meest FAQ-achtige, specifieke hulppagina; meer gericht dan de algemene contactpagina."
+Culturele sector,Podia en theaters,Internationaal Theater Amsterdam,https://ita.nl,https://ita.nl/nl/plan-uw-bezoek/,,llm,0,"Bezoekersinformatie/praktische hulp is hier het meest waarschijnlijk; geen aparte FAQ/klantenservicepagina aanwezig, en dit is specifieker dan de algemene contactpagina."
+Culturele sector,Podia en theaters,Koninklijk Theater Carré,https://carre.nl,https://carre.nl/pagina/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Podia en theaters,DeLaMar,https://delamar.nl,https://delamar.nl/je-bezoek/veelgestelde-vragen/,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Podia en theaters,TivoliVredenburg,https://www.tivolivredenburg.nl,https://www.tivolivredenburg.nl/bezoek/faq/,,heuristic,7,"linktekst: ""Bekijk"""
+Culturele sector,Podia en theaters,AFAS Live,https://www.afaslive.nl,https://www.afaslive.nl/faq,,heuristic,7,"linktekst: ""FAQ"""
+Culturele sector,Podia en theaters,Paradiso,https://www.paradiso.nl,https://www.paradiso.nl/contact,,llm,0,Geen aparte FAQ/klantenservice-pagina aanwezig; contactpagina is het meest waarschijnlijke hulp-/supportkanaal.
+Culturele sector,Podia en theaters,Melkweg,https://www.melkweg.nl,https://www.melkweg.nl/nl/bezoekersinfo/,,llm,0,Bezoekersinfo is de meest waarschijnlijke plek voor praktische FAQ/hulp voor bezoekers; een aparte klantenservice/FAQ-pagina ontbreekt in de links.
+Culturele sector,Podia en theaters,013,https://www.013.nl,https://www.013.nl/contact,,llm,0,Geen aparte FAQ/support-pagina aanwezig; contact is de dichtstbijzijnde klantenservice-sectie.
+Culturele sector,Podia en theaters,Doornroosje,https://www.doornroosje.nl,https://www.doornroosje.nl/veelgestelde-vragen/,,llm,0,"Dit is de veelgestelde-vragen/FAQ-pagina, specifieker dan de algemene contactpagina."
+Culturele sector,Podia en theaters,Rotown,https://www.rotown.nl,https://www.rotown.nl/info/,,llm,0,De info-sectie is de meest waarschijnlijke plek voor praktische info/veelgestelde vragen; er is geen aparte support- of FAQ-pagina.
+Culturele sector,Podia en theaters,Luxor Theater,https://www.luxortheater.nl,https://luxortheater.nl/updates/samen-houden-we-het-nieuwe-luxor-nieuw-help-mee-met-onze-stoelenactie/,,heuristic,8,"linktekst: ""Samen houden we het Nieuwe Luxor nieuw: help mee met onze stoelenactie!"""
+Culturele sector,Podia en theaters,Theater Rotterdam,https://www.theaterrotterdam.nl,https://www.theaterrotterdam.nl/pQv1QfV/faq,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Podia en theaters,Parkstad Limburg Theaters,https://www.plt.nl,https://www.plt.nl/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Podia en theaters,Muziekgebouw Eindhoven,https://mge.nl,https://mge.nl/bezoek-ons/veelgestelde-vragen/,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Podia en theaters,Chassé Theater,https://www.chasse.nl,https://www.chasse.nl/nl/veelgestelde-vragen-df19,,heuristic,7,"linktekst: ""veelgestelde vragen"""
+Culturele sector,Podia en theaters,Stadsschouwburg Groningen,https://www.spotgroningen.nl,https://www.spotgroningen.nl/informatie/veelgestelde-vragen/,,heuristic,7,"linktekst: ""FAQ"""
+Culturele sector,Podia en theaters,Het Nationale Theater,https://www.hnt.nl,https://www.hnt.nl/nl/het-nationale-theater-plan-je-bezoek-s7v2,,llm,0,'Je bezoek' is de praktische bezoekers-/hulpsectie met FAQ-achtige info; er is geen aparte support/FAQ-pagina en dit is specifieker dan de algemene contactpagina.
+Culturele sector,Podia en theaters,Philharmonie Haarlem,https://www.theater-haarlem.nl,,,none,0,no internal links
+Culturele sector,Festivals en evenementen,Lowlands,https://lowlands.nl,https://lowlands.nl/faq/,,heuristic,7,"linktekst: ""FAQ"""
+Culturele sector,Festivals en evenementen,Pinkpop,https://www.pinkpop.nl,https://www.pinkpop.nl/faq/,,heuristic,7,"linktekst: ""FAQ"""
+Culturele sector,Festivals en evenementen,Mysteryland,https://www.mysteryland.nl,https://www.mysteryland.nl/info,,heuristic,7,"linktekst: ""FAQ"""
+Culturele sector,Festivals en evenementen,Awakenings Festival,https://www.awakenings.com,https://www.awakenings.com/en/customer-support/,,heuristic,9,"linktekst: ""FAQ"""
+Culturele sector,Festivals en evenementen,North Sea Jazz Festival,https://www.northseajazz.com,https://www.northseajazz.com/nl/tickets/faq-mobiele-tickets,,heuristic,7,"linktekst: ""FAQ mobiele tickets"""
+Culturele sector,Festivals en evenementen,Amsterdam Dance Event,https://www.amsterdam-dance-event.nl,https://www.amsterdam-dance-event.nl/en/faq-and-contact/,,heuristic,7,"linktekst: ""FAQ / Contact"""
+Culturele sector,Festivals en evenementen,Into The Great Wide Open,https://intothegreatwideopen.nl,https://intothegreatwideopen.nl/praktisch,,llm,0,Praktische informatie is de meest waarschijnlijke plek voor veelgestelde vragen/hulp; er is geen aparte support- of FAQ-pagina.
+Culturele sector,Festivals en evenementen,Down The Rabbit Hole,https://downtherabbithole.nl,https://downtherabbithole.nl/faq,,heuristic,7,"linktekst: ""Faq"""
+Culturele sector,Festivals en evenementen,Paaspop,https://www.paaspop.nl,https://www.paaspop.nl/nl/veelgestelde-vragen,,heuristic,7,"linktekst: ""FAQ"""
+Culturele sector,Festivals en evenementen,Zwarte Cross,https://www.zwartecross.nl,https://www.zwartecross.nl/veelgestelde-vragen/,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Festivals en evenementen,DGTL,https://dgtl.nl,,,none,0,llm: no pick
+Culturele sector,Festivals en evenementen,Le Guess Who?,https://leguesswho.com,https://leguesswho.com/support,,heuristic,9,"linktekst: ""Support LGW"""
+Culturele sector,Festivals en evenementen,International Film Festival Rotterdam,https://iffr.com,https://iffr.com/nl/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Festivals en evenementen,Nederlands Film Festival,https://www.filmfestival.nl,https://www.filmfestival.nl/festival/plan-je-bezoek/faq,,heuristic,7,"linktekst: ""FAQ"""
+Culturele sector,Festivals en evenementen,Oerol,https://oerol.nl,https://oerol.nl/veelgestelde-vragen/,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Festivals en evenementen,Festival Boulevard,https://festivalboulevard.nl,https://www.festivalboulevard.nl/nl/faq,,heuristic,7,"linktekst: ""FAQ"""
+Culturele sector,Festivals en evenementen,Grachtenfestival,https://grachtenfestival.nl,,,none,0,no internal links
+Culturele sector,Attractieparken,Efteling,https://www.efteling.com,https://www.efteling.com/nl/contact-route,,heuristic,10,"linktekst: ""Klantenservice & contact"""
+Culturele sector,Attractieparken,Walibi Holland,https://www.walibi.nl,https://www.walibi.nl/nl/plan-je-bezoek/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Attractieparken,Toverland,https://www.toverland.com,https://www.toverland.com/contact/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Attractieparken,Duinrell,https://www.duinrell.nl,https://www.duinrell.nl/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Attractieparken,Slagharen,https://www.slagharen.com,https://www.slagharen.com/bereid-uw-bezoek-voor/relevante-informatie/faqs,,heuristic,7,"linktekst: ""FAQ"""
+Culturele sector,Attractieparken,Madurodam,https://www.madurodam.nl,https://www.madurodam.nl/nl/praktische-informatie/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Attractieparken,DierenPark Amersfoort,https://dierenparkamersfoort.nl,https://dierenparkamersfoort.nl/contact/,,heuristic,7,"linktekst: ""Contact en routeVeelgestelde vragen, mail, Facebook Messenger"""
+Culturele sector,Attractieparken,Safaripark Beekse Bergen,https://www.beeksebergen.nl,https://www.beeksebergen.nl/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Attractieparken,ARTIS,https://www.artis.nl,https://www.artis.nl/nl/contact-informatie/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Culturele sector,Attractieparken,Avonturenpark Hellendoorn,https://www.avonturenpark.nl,https://www.avonturenpark.nl/info/klantenservice-contact,,heuristic,10,"linktekst: ""Info"""
+Culturele sector,Attractieparken,Julianatoren,https://www.julianatoren.nl,https://www.julianatoren.nl/info/praktische-informatie/,,llm,0,Praktische-informatiepagina bevat meestal veelgestelde vragen/uitleg; geen aparte FAQ/support-URL beschikbaar en specifieker dan algemene contactpagina.
+Culturele sector,Attractieparken,Drievliet,https://www.drievliet.nl,https://www.drievliet.nl/info,,llm,0,De 'Info'-sectie is de meest waarschijnlijke plek voor klantenservice/veelgestelde-vragen; een echte FAQ/support-pagina ontbreekt in de lijst.

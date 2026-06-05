@@ -1,0 +1,90 @@
+﻿segment,sub_sector,organisatie,url_homepage,url_support,url_product,url_support_method,url_support_score,url_support_note
+Zorg,Ziekenhuizen en ziekenhuisgroepen,Amsterdam UMC,https://www.amsterdamumc.nl/,https://www.amsterdamumc.nl/nl/spoed,,heuristic,8,"linktekst: ""Spoedeisende Hulp (SEH)"""
+Zorg,Ziekenhuizen en ziekenhuisgroepen,UMC Utrecht,https://www.umcutrecht.nl/,https://www.umcutrecht.nl/nl/voorbereiden-op-uw-afspraak-of-behandeling,,llm,0,Voorbereidingspagina voor afspraak/behandeling is de meest waarschijnlijke plek voor instructie- en uitlegvideo's voor patiënten.
+Zorg,Ziekenhuizen en ziekenhuisgroepen,Erasmus MC,https://www.erasmusmc.nl/,https://www.erasmusmc.nl/nl-nl/patientenzorg/ondersteuning-en-begeleiding,,heuristic,9,"linktekst: ""Ondersteuning en begeleiding"""
+Zorg,Ziekenhuizen en ziekenhuisgroepen,Radboudumc,https://www.radboudumc.nl/,https://www.radboudumc.nl/en/research/support-and-quality,,heuristic,9,"linktekst: ""Support en kwaliteit"""
+Zorg,Ziekenhuizen en ziekenhuisgroepen,Maastricht UMC+,https://www.mumc.nl/,https://www.mumc.nl/patient-bezoeker/ondersteuning-en-begeleiding,,heuristic,9,"linktekst: ""Ondersteuning en begeleiding"""
+Zorg,Ziekenhuizen en ziekenhuisgroepen,LUMC,https://www.lumc.nl/,https://www.lumc.nl/actueel/2026/prijzen-subsidies-en-benoemingen-29-mei-2026/,,heuristic,9,"linktekst: ""Koninklijke Onderscheiding, SURF Research Support Luminary Award, LUF-subsidies,"""
+Zorg,Ziekenhuizen en ziekenhuisgroepen,UMC Groningen,https://www.umcg.nl/,https://www.umcg.nl/-/contact-met-het-umcg,,llm,0,Geen support/FAQ-pagina aanwezig; contactpagina is de dichtstbijzijnde hulp-/serviceingang.
+Zorg,Ziekenhuizen en ziekenhuisgroepen,Catharina Ziekenhuis,https://www.catharinaziekenhuis.nl/,https://www.catharinaziekenhuis.nl/afdelingen/spoedeisende-hulp-huisartsenpost/,,heuristic,8,"linktekst: ""Spoedeisende Hulp"""
+Zorg,Ziekenhuizen en ziekenhuisgroepen,St. Antonius Ziekenhuis,https://www.antoniusziekenhuis.nl/,https://www.antoniusziekenhuis.nl/huisartsenspoedpost-en-spoedeisende-hulp,,heuristic,8,"linktekst: ""Huisartsenpost en Spoedeisende Hulp"""
+Zorg,Ziekenhuizen en ziekenhuisgroepen,Isala,https://www.isala.nl/,,,none,0,no internal links
+Zorg,Ziekenhuizen en ziekenhuisgroepen,Máxima MC,https://www.mmc.nl/,https://www.mmc.nl/patienten-en-bezoekers/veelgestelde-vragen/,,heuristic,7,"linktekst: ""veelgestelde vragen"""
+Zorg,Ziekenhuizen en ziekenhuisgroepen,Jeroen Bosch Ziekenhuis,https://www.jeroenboschziekenhuis.nl/,https://www.jeroenboschziekenhuis.nl/medische-informatie,,llm,0,"Medische-informatie is de sectie waar patiënten uitleg over aandoeningen/behandelingen vinden, meest waarschijnlijke plek voor instructie-/uitlegvideo's."
+Zorg,Ziekenhuizen en ziekenhuisgroepen,Noordwest Ziekenhuisgroep,https://www.nwz.nl/,https://www.nwz.nl/mijn-noordwest/,,llm,0,Patiëntenportaal 'Mijn Noordwest' is de meest waarschijnlijke plek voor uitleg-/instructievideo's over gebruik van de digitale dienst; een echte support/FAQ-sectie ontbreekt in de links.
+Zorg,Ziekenhuizen en ziekenhuisgroepen,OLVG,https://www.olvg.nl/,https://www.olvg.nl/het-patienten-servicepunt/,,llm,0,"Het patiëntenservicepunt is het centrale hulp-/serviceloket voor patiëntenvragen, dichter bij support/FAQ dan een algemene contactpagina."
+Zorg,Ziekenhuizen en ziekenhuisgroepen,HagaZiekenhuis,https://www.hagaziekenhuis.nl/,https://www.hagaziekenhuis.nl/veelgestelde-vragen,,heuristic,7,"linktekst: ""geenVeelgestelde vragen"""
+Zorg,Ziekenhuizen en ziekenhuisgroepen,Rijnstate,https://www.rijnstate.nl/,,,none,0,no internal links
+Zorg,Ziekenhuizen en ziekenhuisgroepen,Zuyderland,https://www.zuyderland.nl/,https://zuyderland.nl/ziekenhuis/patientinformatie/klantcontactcentrum/aanvraag-inzien-eigen-medische-gegevens/,,heuristic,10,"linktekst: ""Medisch dossier opvragen"""
+Zorg,Ziekenhuizen en ziekenhuisgroepen,Medisch Spectrum Twente,https://www.mst.nl/,https://www.mst.nl/voor-patienten/,,llm,0,"De patiëntensectie bevat de praktische uitleg, voorbereidingen en instructie-/uitlegvideo's voor patiënten, dichter bij support/FAQ dan de algemene contactpagina."
+Zorg,Ziekenhuizen en ziekenhuisgroepen,Franciscus Gasthuis & Vlietland,https://www.franciscus.nl/,https://www.franciscus.nl/uw-opname,,llm,0,Patiënt-voorbereidingssectie waar instructie-/uitlegvideo's over opname het meest waarschijnlijk staan; geen aparte FAQ/support-pagina aanwezig.
+Zorg,Ziekenhuizen en ziekenhuisgroepen,Amphia,https://www.amphia.nl/,https://www.amphia.nl/patienten-en-bezoekers/mijnamphia/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veelgestelde vragen mijnAmphia"""
+Zorg,Huisartsen,Arts en Zorg,https://www.artsenzorg.nl/,https://www.artsenzorg.nl/faq,,heuristic,7,"linktekst: ""FAQ"""
+Zorg,Huisartsen,Onze Huisartsen,https://www.onzehuisartsen.nl/,https://www.onzehuisartsen.nl/praktijkvoering/ondersteuning-in-de-huisartsenpraktijk/,,heuristic,9,"linktekst: ""Ondersteuning in de huisartsenpraktijk"""
+Zorg,Huisartsen,Huisartsen Eemland,https://huisartseneemland.nl/,https://huisartseneemland.nl/praktijkvoering/hr-ondersteuning/,,heuristic,9,"linktekst: ""Arbeidsmarkt"""
+Zorg,Huisartsen,RegiozorgNU,https://www.regiozorgnu.nl/,https://www.regiozorgnu.nl/praktijkondersteuning/,,heuristic,9,"linktekst: ""Praktijkondersteuning"""
+Zorg,Huisartsen,De huisartsenconnectie,https://www.dehuisartsenconnectie.nl/,https://www.dehuisartsenconnectie.nl/projecten-programmas/project-digitale-ondersteuning-voor-patienten-zeeland,,heuristic,9,"linktekst: ""Lees verder over Project 'Digitale Ondersteuning voor Patiënten in Zeeland'"""
+Zorg,Huisartsen,Zorroo,https://www.zorroo.nl/,https://www.zorroo.nl/zelf-zorgzaken-regelen/,,llm,0,"De 'Zelf regelen'-sectie biedt zelfservice/uitleg over zorgzaken regelen, waar instructievideo's het meest waarschijnlijk staan."
+Zorg,Huisartsen,Mediis,https://www.mediis.nl/,https://www.mediis.nl/contact,,llm,0,Geen aparte support/FAQ-pagina aanwezig; contact is de enige klantenservice-/hulpingang.
+Zorg,Huisartsen,Huisarts en Zorg / HenZ,https://www.huisartsenzorg.nl/,https://www.huisartsenzorg.nl/contact-huisarts-en-zorg/,,llm,0,Geen aparte support/FAQ-sectie aanwezig; de contactpagina is de enige hulp-/serviceingang.
+Zorg,Huisartsen,Amsterdamse Huisartsenalliantie,https://www.amsterdamsehuisartsen.nl/,https://www.amsterdamsehuisartsen.nl/nieuws-en-agenda/sneller-de-juiste-hulp-op-de-juiste-plek-met-het-verkennend-gesprek/,,heuristic,8,"linktekst: ""Sneller de juiste hulp op de juiste plek met het verkennend gesprek 27-05-2026Ji"""
+Zorg,Huisartsen,Buurtdokters,https://www.buurtdokters.net/,https://www.buurtdokters.net/faq,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Zorg,Gehandicaptenzorg,’s Heeren Loo,https://www.sheerenloo.nl/,https://www.sheerenloo.nl/hulp-thuis,,heuristic,9,"linktekst: ""Hulp en ondersteuning voor thuis"""
+Zorg,Gehandicaptenzorg,Philadelphia Zorg,https://www.philadelphia.nl/,https://www.philadelphia.nl/ondersteuning,,heuristic,9,"linktekst: ""Ondersteuning"""
+Zorg,Gehandicaptenzorg,Ipse de Bruggen,https://www.ipsedebruggen.nl/,https://www.ipsedebruggen.nl/contact,,llm,0,Geen aparte support/FAQ-pagina in de links; algemene contactpagina is het dichtst bij klantenservice.
+Zorg,Gehandicaptenzorg,Amerpoort,https://www.amerpoort.nl/,,,none,0,no internal links
+Zorg,Gehandicaptenzorg,Bartiméus,https://www.bartimeus.nl/,https://bartimeus.nl/contact,,llm,0,Geen specifieke support/FAQ-pagina aanwezig; Contact is de enige klantenservice-achtige sectie.
+Zorg,Gehandicaptenzorg,Koninklijke Visio,https://www.visio.org/,https://www.visio.org/overzicht-ervaringsverhalen/leon-13-met-een-beetje-hulp-lukt-het-allemaal,,heuristic,8,"linktekst: ""Leon (13) ""Met een beetje hulp lukt het allemaal!"""""
+Zorg,Gehandicaptenzorg,Kentalis,https://www.kentalis.nl/,https://www.kentalis.nl/contact,,llm,0,Geen aparte support/FAQ-sectie aanwezig; contactpagina is de enige hulp-/klantenservice-ingang.
+Zorg,Gehandicaptenzorg,Pluryn,https://www.pluryn.nl/,,,none,0,llm: no pick
+Zorg,Gehandicaptenzorg,Siza,https://www.siza.nl/,https://www.siza.nl/contact,,llm,0,Geen aparte support/FAQ-pagina aanwezig; contactpagina is de dichtstbijzijnde hulp-/servicesectie.
+Zorg,Gehandicaptenzorg,Cordaan,https://www.cordaan.nl/,https://www.cordaan.nl/jeugd/hulp-in-het-gezin/,,heuristic,8,"linktekst: ""Hulp in het gezin"""
+Zorg,Gehandicaptenzorg,Middin,https://www.middin.nl/,https://www.middin.nl/hulp-voor-jou,,heuristic,8,"linktekst: ""Hulp voor jou"""
+Zorg,Gehandicaptenzorg,ASVZ,https://www.asvz.nl/,https://www.asvz.nl/ondersteuning-thuis,,heuristic,9,"linktekst: ""Ondersteuning Thuis"""
+Zorg,Gehandicaptenzorg,Lunet,https://www.lunet.nl/,https://lunet.nl/professional/clientbureau,,llm,0,"Cliëntbureau 'voor alle vragen' is het dichtst bij een support/veelgestelde-vragen-loket, specifieker dan de algemene contactpagina."
+Zorg,Gehandicaptenzorg,Amarant,https://www.amarant.nl/,https://amarant.nl/clienten-en-verwanten/,,llm,0,"Sectie voor bestaande cliënten en verwanten is de meest waarschijnlijke plek voor hulp/uitlegvideo's, specifieker dan de algemene contactpagina."
+Zorg,Gehandicaptenzorg,Esdégé-Reigersdaal,https://www.esdege-reigersdaal.nl/,,,none,0,no internal links
+Zorg,Gehandicaptenzorg,De Twentse Zorgcentra,https://www.detwentsezorgcentra.nl/,https://www.detwentsezorgcentra.nl/hulp-thuis/ondersteuning-aan-huis/,,heuristic,9,"linktekst: ""Ondersteuning aan huis"""
+Zorg,Gehandicaptenzorg,Cosis,https://www.cosis.nu/,https://www.cosis.nu/diensten/hulp-bij-mij-thuis,,heuristic,9,"linktekst: ""Ondersteuning bij jou thuis
+
+				Samen met Cosis kun je gewoon thuis blijven won"""
+Zorg,Gehandicaptenzorg,Prisma,https://www.prismanet.nl/,https://www.prismanet.nl/ervaringsverhalen/jimmy-ondersteuning-thuis,,heuristic,9,"linktekst: ""Jimmy krijgt ondersteuning thuis
+                        > Lees het verhaal van """
+Zorg,Gehandicaptenzorg,Zozijn,https://www.zozijn.nl/,https://www.zozijn.nl/over-zozijn/veelgestelde-vragen,,heuristic,7,"linktekst: ""Veel gestelde vragen"""
+Zorg,Gehandicaptenzorg,Sherpa,https://www.sherpa.org/,,,none,0,no internal links
+Zorg,GGZ,Parnassia Groep,https://www.parnassiagroep.nl/,https://www.parnassiagroep.nl/ik-zoek-hulp-voor-mijzelf-of-een-naaste,,heuristic,8,"linktekst: ""Ik zoek hulp voor mijzelf of een naaste"""
+Zorg,GGZ,Arkin,https://arkin.nl/,https://arkin.nl/hulp-bij-crisis/,,heuristic,8,"linktekst: ""Hulp bij crisis"""
+Zorg,GGZ,Pro Persona Holding,https://www.propersona.nl/,https://propersona.nl/hulp-voor-jou/,,heuristic,8,"linktekst: ""Hulp voor jou 
+					
+						+
+						-"""
+Zorg,GGZ,GGz Centraal,https://www.ggzcentraal.nl/,https://www.ggzcentraal.nl/clienten/advies-ondersteuning/,,heuristic,9,"linktekst: ""Advies & ondersteuning"""
+Zorg,GGZ,Dimence Groep,https://www.dimencegroep.nl/,https://www.dimencegroep.nl/contact,,llm,0,Geen specifieke support/FAQ-pagina aanwezig; Contact is de enige klantgerichte hulp-ingang.
+Zorg,GGZ,GGzE,https://www.ggze.nl/,https://www.ggze.nl/als-je-crisis-bent,,heuristic,8,"linktekst: ""Hulp bij crisis
+      
+            Als je acuut hulp nodig hebt
+      
+
+  Lees m"""
+Zorg,GGZ,Lentis,https://www.lentis.nl/,,,none,0,no internal links
+Zorg,GGZ,GGZ Rivierduinen,https://www.rivierduinen.nl/,https://www.rivierduinen.nl/mijnrivierduinen/,,llm,0,Patiëntenportaal is de plek waar instructie-/uitlegvideo's voor cliënten het meest waarschijnlijk staan; er is geen aparte FAQ/support-sectie.
+Zorg,GGZ,GGZ Drenthe,https://ggzdrenthe.nl/,https://www.ggzdrenthe.nl/naasten/naastenondersteuning,,heuristic,9,"linktekst: ""Naastenondersteuning"""
+Zorg,GGZ,Altrecht,https://www.altrecht.nl/,https://www.altrecht.nl/hulp-bij/,,heuristic,8,"linktekst: ""Hulp bij"""
+Zorg,Jeugdzorg,Partners voor Jeugd,https://www.partnersvoorjeugd.nl/,,,none,0,llm: no pick
+Zorg,Jeugdzorg,Levvel,https://www.levvel.nl/,https://www.levvel.nl/extra-zorg-en-ondersteuning,,heuristic,9,"linktekst: ""Extra hulp en ondersteuning"""
+Zorg,Jeugdzorg,Enver,https://www.enver.nl/,https://www.enver.nl/jongeren/#belangrijk-om-te-weten-als-je-hulp-van-ons-krijgt,,heuristic,8,"linktekst: ""Belangrijk om te weten als je hulp van ons krijgt"""
+Zorg,Jeugdzorg,iHub Zorg,https://www.ihub.nl/,https://www.ihub.nl/familiezorg/hoe-wij-helpen,,heuristic,8,"linktekst: ""Lees hier hoe wij hulp bieden"""
+Zorg,Jeugdzorg,Koraal,https://www.koraal.nl/,https://www.koraal.nl/jeugdhulp/ondersteuning-thuis,,heuristic,9,"linktekst: ""Ondersteuning thuis"""
+Zorg,Jeugdzorg,Accare,https://www.accare.nl/,https://www.accare.nl/hulp-bij,,heuristic,8,"linktekst: ""Hulp bij"""
+Zorg,Jeugdzorg,MetMaya,https://metmaya.nl/,https://metmaya.nl/hulp-nodig/,,heuristic,8,"linktekst: ""Hulp nodig"""
+Zorg,Jeugdzorg,Youké Sterke Jeugd,https://youke.nl/,https://youke.nl/ouders/hulp/,,heuristic,8,"linktekst: ""Ik zoek hulp bij"""
+Zorg,Ouderenzorg,Espria,https://www.espria.nl/,https://www.espria.nl/contact,,llm,0,Geen aparte support/FAQ-pagina aanwezig; contactpagina is de enige hulp-gerelateerde optie.
+Zorg,Ouderenzorg,Cordaan,https://www.cordaan.nl/,https://www.cordaan.nl/jeugd/hulp-in-het-gezin/,,heuristic,8,"linktekst: ""Hulp in het gezin"""
+Zorg,Ouderenzorg,Laurens,https://www.laurens.nl/,https://laurens.nl/hulp-thuis/,,heuristic,8,"linktekst: ""Hulp thuis"""
+Zorg,Ouderenzorg,Aafje,https://www.aafje.nl/,https://www.aafje.nl/aafje-bij-u-thuis/huishoudelijke-ondersteuning/,,heuristic,9,"linktekst: ""Huishoudelijke ondersteuning"""
+Zorg,Ouderenzorg,BrabantZorg,https://www.brabantzorg.eu/,https://www.brabantzorg.eu/veelgestelde-vragen/,,heuristic,7,"linktekst: ""Veelgestelde vragen"""
+Zorg,Ouderenzorg,Omring,https://www.omring.nl/,https://www.omring.nl/zorg-aan-huis/advies-en-begeleiding/klantenservice,,heuristic,10,"linktekst: ""Klantenservice"""
+Zorg,Ouderenzorg,Noorderbreedte,https://www.noorderbreedte.eu/,https://www.noorderbreedte.eu/klantenservice/,,heuristic,10,"linktekst: ""Klantenservice"""
+Zorg,Ouderenzorg,Surplus,https://www.surplus.nl/,https://surplus.nl/bij-u-thuis/thuisondersteuning/,,heuristic,9,"linktekst: ""Thuisondersteuning"""
+Zorg,Ouderenzorg,Florence,https://www.florence.nl/,https://www.florence.nl/zorg-thuis/huishoudelijke-hulp,,heuristic,8,"linktekst: ""Huishoudelijke hulp"""
+Zorg,Ouderenzorg,Zorgbalans,https://www.zorgbalans.nl/,https://www.zorgbalans.nl/zorgbalans-bij-u-thuis/huishoudelijke-ondersteuning,,heuristic,9,"linktekst: ""Huishoudelijke ondersteuning"""
