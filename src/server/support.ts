@@ -41,6 +41,7 @@ import {
   type RunSupportFn,
 } from '../core/support-paths.js';
 import { mountHubspot } from './hubspot.js';
+import { hasScope, loadTokens, lookupToken, tokenFromRequest, type TokenMap } from './auth.js';
 
 const log = createLogger('support');
 
@@ -72,35 +73,9 @@ function isPrivateOrLoopback(bind: string): boolean {
   return isLoopback(s) || PRIVATE_IPV4_RE.test(s) || /^fe80:/i.test(s);
 }
 
-type TokenEntry = { name?: string; createdAt?: string };
-// Record (not Map) because tokens.json deserializes as a plain object. The
-// `Object.hasOwn` guard at lookup sites is what protects against prototype-
-// pollution keys (constructor, __proto__, etc.) returning truthy.
-type TokenMap = Record<string, TokenEntry>;
-
-function loadTokens(path = TOKENS_FILE): TokenMap {
-  try {
-    const raw = readFileSync(path, 'utf8');
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    // Drop any entry whose value isn't a plausibly-shaped TokenEntry so a
-    // malformed tokens.json doesn't crash bearerAuth on entry.name access.
-    const out: TokenMap = {};
-    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-      if (v && typeof v === 'object' && !Array.isArray(v)) {
-        const entry = v as { name?: unknown; createdAt?: unknown };
-        out[k] = {
-          name: typeof entry.name === 'string' ? entry.name : undefined,
-          createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : undefined,
-        };
-      }
-    }
-    return out;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
-    throw err;
-  }
-}
+// Token map + loader live in ./auth.ts (shared with the global API/WS gate).
+// Entries now carry `scopes`; support endpoints require the `support` scope,
+// which `admin`/`*` tokens also satisfy (see hasScope).
 
 // Refuse to expose unauthenticated endpoints. Called once at boot; throws on
 // misconfiguration so the operator sees the failure before any request lands.
@@ -260,33 +235,34 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
     log.info(`/api/support/* loaded with ${Object.keys(tokens).length} bearer token(s) from ${TOKENS_FILE}`);
   }
 
-  // Bearer auth — Object.hasOwn check is critical: `tokens[m[1]]` alone would
-  // return Object.prototype members (constructor, __proto__, toString) as
-  // truthy, bypassing auth. Same posture for anonymous mode below.
+  // Bearer auth — token resolution + prototype-pollution guard live in
+  // ./auth.ts. A valid token must carry the `support` scope (admin/* satisfies
+  // it); a token that exists but lacks the scope gets 403, not 401.
   const bearerAuth: RequestHandler = (req, res, next) => {
     const r = req as AuthedRequest;
-    const header = r.headers.authorization || '';
-    const m = header.match(/^Bearer\s+(.+)$/);
-    if (!m) {
+    const tk = tokenFromRequest(r);
+    if (!tk) {
       res.status(401).json({ error: 'bearer token required' });
       return;
     }
-    const entry = Object.hasOwn(tokens, m[1]) ? tokens[m[1]] : null;
+    const entry = lookupToken(tokens, tk);
     if (!entry) {
       res.status(401).json({ error: 'invalid token' });
       return;
     }
-    r.bearerToken = m[1];
+    if (!hasScope(entry, 'support')) {
+      res.status(403).json({ error: 'token lacks support scope' });
+      return;
+    }
+    r.bearerToken = tk;
     r.tokenName = entry.name || 'unnamed';
     next();
   };
 
   const anonymousAuth: RequestHandler = (req, _res, next) => {
     const r = req as AuthedRequest;
-    const header = r.headers.authorization || '';
-    const m = header.match(/^Bearer\s+(.+)$/);
-    const tk = m ? m[1] : null;
-    const entry = tk && Object.hasOwn(tokens, tk) ? tokens[tk] : null;
+    const tk = tokenFromRequest(r);
+    const entry = lookupToken(tokens, tk);
     r.bearerToken = entry ? tk : null;
     r.tokenName = entry ? (entry.name || 'unnamed') : 'anonymous';
     next();

@@ -47,8 +47,13 @@ import { asyncHandler, expressErrorMiddleware, installProcessHandlers } from '..
 import { adoRouter } from './webhooks/ado.js';
 import { githubRouter } from './webhooks/github.js';
 import { mountSupport } from './support.js';
+import { hasScope, isAdminEntry, loadTokens, lookupToken, tokenFromRequest, tokenFromUrl } from './auth.js';
 
 const log = createLogger('server');
+
+// Token map for the global API/WS gate. Loaded once at boot (same file +
+// reload-on-restart semantics as mountSupport).
+const apiTokens = loadTokens();
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -58,7 +63,14 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 
 const clients = new Set<WebSocket>();
 
-wss.on('connection', async (ws) => {
+wss.on('connection', async (ws, req) => {
+  // /ws streams internal task output + orchestrator state — admin only.
+  // Support-only clients never open it; reject any non-admin upgrade.
+  const wsEntry = lookupToken(apiTokens, tokenFromUrl(req.url));
+  if (!isAdminEntry(wsEntry)) {
+    ws.close(4403, 'admin scope required');
+    return;
+  }
   clients.add(ws);
   try {
     // Send current tasks with streaming output on connect. Use the shared cache so
@@ -188,6 +200,42 @@ function broadcastOutput(taskId: number, chunk: string): void {
 
 app.use(cors({ origin: [/^https?:\/\/localhost(:\d+)?$/, /^https?:\/\/127\.0\.0\.1(:\d+)?$/] }));
 app.use(express.json());
+
+// --- Global API auth gate ---------------------------------------------------
+// Every /api/* route requires an admin token, except:
+//   - the public allowlist below, and
+//   - /api/support/* (gated inside mountSupport with the support scope, which
+//     also honors BB_SUPPORT_ALLOW_ANONYMOUS).
+// This is what keeps a LAN / support-scoped user out of tasks, repos, terminals,
+// config/credentials, processes, and the orchestrator. Without it, exposing the
+// dashboard on the network would hand every visitor the full internal tool.
+const PUBLIC_API = new Set<string>([
+  '/api/whoami',                 // reports caller scopes to the SPA (drives the token gate)
+  '/api/notifications/incoming', // webhook-like ingestion from external notifiers (no token to present)
+]);
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api/')) return next();
+  if (PUBLIC_API.has(req.path)) return next();
+  if (req.path === '/api/support' || req.path.startsWith('/api/support/')) return next();
+  const entry = lookupToken(apiTokens, tokenFromRequest(req));
+  if (!entry) {
+    res.status(401).json({ error: 'bearer token required' });
+    return;
+  }
+  if (!hasScope(entry, 'admin')) {
+    res.status(403).json({ error: 'admin scope required' });
+    return;
+  }
+  next();
+});
+
+// Identify the caller's token scopes — drives the SPA's tab/route gating.
+// Public by design: returns { scopes: [] } for no/invalid token so the UI can
+// fall back to its token-entry screen instead of erroring.
+app.get('/api/whoami', (req, res) => {
+  const entry = lookupToken(apiTokens, tokenFromRequest(req));
+  res.json({ name: entry?.name ?? null, scopes: entry?.scopes ?? [] });
+});
 
 // Dashboard - in dev, redirect to Vite (so a stale dist/dashboard/ from a
 // previous `pnpm build` can't shadow live source). In prod, serve dist.

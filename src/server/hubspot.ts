@@ -31,10 +31,11 @@ function classifyHsErr(err: unknown): HsErr | null {
   return { kind: 'error', status, message: String(e.message || err).slice(0, 200) };
 }
 
-// Upstream HubSpot 4xx → 502 (we proxied a bad request); everything else 500.
+// Upstream HubSpot 4xx → 502 (we proxied a bad request); everything else
+// (5xx, network, our own caps) → 500.
 function upstreamStatus(err: unknown): number {
   const s = (err as { status?: number }).status;
-  return s && s >= 400 ? 502 : 500;
+  return s !== undefined && s >= 400 && s < 500 ? 502 : 500;
 }
 
 export function mountHubspot(app: Express, opts: { auth: RequestHandler }): void {
@@ -44,21 +45,26 @@ export function mountHubspot(app: Express, opts: { auth: RequestHandler }): void
   // failure is reported via `ticketsError` (200 with empty list) so the UI can
   // distinguish "no tickets" from "HubSpot down".
   app.get('/api/support/tickets', auth, asyncHandler(async (req, res) => {
-    const creds = await loadHubspotCreds();
-    if (!creds.token) { res.status(400).json({ error: 'No HubSpot token configured' }); return; }
     const limit = Math.max(1, Math.min(parseInt(String(req.query.limit)) || 20, 50));
     const investigateProperty = config.hubspot.investigateProperty;
-    const hub = await loadHubspot();
+    let hubId: string | null = null;
     try {
+      const creds = await loadHubspotCreds();
+      if (!creds.token) { res.status(400).json({ error: 'No HubSpot token configured' }); return; }
+      hubId = creds.hubId;
+      // Creds/lib load + the API call are all inside the try so any failure
+      // (missing bb-skills, import error, HubSpot down) lands in ticketsError
+      // rather than a bare 500 — the UI distinguishes "no tickets" from "down".
+      const hub = await loadHubspot();
       const tickets = await hub.listRecentTickets(creds.token, limit, [investigateProperty]);
       const pipelineCounts: Record<string, number> = {};
       for (const t of tickets) {
         const stage = t.properties?.hs_pipeline_stage || '(unstaged)';
         pipelineCounts[stage] = (pipelineCounts[stage] || 0) + 1;
       }
-      res.json({ tickets, pipelineCounts, hubId: creds.hubId, investigateProperty, ticketsError: null });
+      res.json({ tickets, pipelineCounts, hubId, investigateProperty, ticketsError: null });
     } catch (err) {
-      res.json({ tickets: [], pipelineCounts: {}, hubId: creds.hubId, investigateProperty, ticketsError: classifyHsErr(err) });
+      res.json({ tickets: [], pipelineCounts: {}, hubId, investigateProperty, ticketsError: classifyHsErr(err) });
     }
   }));
 

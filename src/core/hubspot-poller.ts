@@ -82,7 +82,13 @@ export async function runHubspotInvestigateScan(
   scanInFlight = (async () => {
     try {
       const creds = await loadHubspotCreds();
-      if (!creds.token) return;
+      if (!creds.token) {
+        // Surface why the scan no-oped so the status hero doesn't show stale
+        // counts (or nothing) with no explanation.
+        lastScan = { startedAt: Date.now(), finishedAt: Date.now(), scanned: 0, investigated: 0, skipped: 0, errors: 0, error: 'no HubSpot token configured' };
+        record(log, { type: 'hubspot-investigate-scan-skip', reason: 'no HubSpot token configured' });
+        return;
+      }
       const hub = await loadHubspot();
       const propertyName = config.hubspot.investigateProperty;
 

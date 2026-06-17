@@ -84,8 +84,8 @@ export async function fetchMachineId() {
   } catch {}
 }
 
-// Fetch on module load
-fetchMachineId();
+// Note: fetchMachineId() is invoked from App.svelte's admin bootstrap (not at
+// module load) so a support/anon session doesn't fire an admin-gated request.
 
 export async function fetchTasks() {
   try {
