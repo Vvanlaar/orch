@@ -73,6 +73,48 @@
   let questionEl: HTMLTextAreaElement | null = $state(null);
   let tokenEl: HTMLInputElement | null = $state(null);
 
+  // --- inbox (HubSpot tickets) sub-view --------------------------------------
+  type Mode = 'ask' | 'inbox';
+  let mode = $state<Mode>('ask');
+
+  type Ticket = { id: string; properties?: Record<string, string | null | undefined> };
+  type Engagement = { type: string; timestamp: number | null; ownerId: number | null; bodyPreview: string; isInvestigationNote: boolean };
+  type CachedResult = { intent: string; body: string; stage: string; finishedAt: number };
+  type Summary = {
+    lastScan: null | { startedAt: number; finishedAt: number | null; scanned: number; investigated: number; skipped: number; errors: number; error?: string };
+    inProgress: boolean;
+    recent: Array<{ type: string; ts: number; [k: string]: unknown }>;
+  };
+
+  let tickets = $state<Ticket[]>([]);
+  let ticketsError = $state<string | null>(null);
+  let hubId = $state<string>('');
+  let investigateProperty = $state<string>('');
+  let inboxLoading = $state<boolean>(false);
+  let ticketLimit = $state<number>(20);
+  let inboxFilter = $state<'all' | 'flagged'>('all');
+  let inboxSearch = $state<string>('');
+  let selectedId = $state<string | null>(null);
+  let selectedTicket = $state<Ticket | null>(null);
+  let selectedEngagements = $state<Engagement[]>([]);
+  let selectedCapped = $state<boolean>(false);
+  let detailLoading = $state<boolean>(false);
+  let noteBody = $state<string | null>(null);
+  let summary = $state<Summary | null>(null);
+  let cachedLabel = $state<string>('');
+  let summaryTimer: ReturnType<typeof setInterval> | null = null;
+
+  const filteredTickets = $derived(
+    tickets.filter((t) => {
+      if (inboxFilter === 'flagged' && !(investigateProperty && t.properties?.[investigateProperty] === 'true')) return false;
+      const s = inboxSearch.trim().toLowerCase();
+      if (!s) return true;
+      const subj = String(t.properties?.subject || '').toLowerCase();
+      const content = String(t.properties?.content || '').toLowerCase();
+      return subj.includes(s) || content.includes(s);
+    }),
+  );
+
   // --- localStorage helpers --------------------------------------------------
   function saveToken(): void {
     // Persist via the session store so scopes (and the gate) stay consistent.
@@ -220,14 +262,18 @@
   }
 
   // --- ask flow --------------------------------------------------------------
-  async function ask(): Promise<void> {
+  // Shared by the Ask box (no args → uses the bound question/intent) and the
+  // inbox Investigate/Draft buttons (pass q/intent/subject; recordHistory off).
+  async function ask(opts: { q?: string; intent?: Intent; subject?: { type: 'ticket'; id: string }; recordHistory?: boolean } = {}): Promise<void> {
     const t = token.trim();
     if (authMode === 'token' && !t) {
       toast('Paste a bearer token in the header first.');
       tokenEl?.focus();
       return;
     }
-    const q = question.trim();
+    const q = (opts.q ?? question).trim();
+    const useIntent: Intent = opts.intent ?? intent;
+    const recordHistory = opts.recordHistory ?? true;
     if (!q) { questionEl?.focus(); return; }
 
     resetAnswer();
@@ -242,7 +288,7 @@
       const res = await fetch('/api/support/ask', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ question: q, intent }),
+        body: JSON.stringify({ question: q, intent: useIntent, ...(opts.subject ? { subject: opts.subject } : {}) }),
       });
       body = await res.json();
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
@@ -275,8 +321,8 @@
       showTerminal(term.error ? `${term.stage}: ${term.error}` : term.stage, term.stage !== 'ok' && term.stage !== 'cancelled');
       scheduleRender();
       if (/\[customer:\d+\]/.test(rawAnswer)) revealVisible = true;
-      if (term.stage === 'ok' && rawAnswer.trim()) {
-        pushHistoryEntry({ question: q, answer: rawAnswer, intent, keyId: currentKeyId });
+      if (term.stage === 'ok' && rawAnswer.trim() && recordHistory) {
+        pushHistoryEntry({ question: q, answer: rawAnswer, intent: useIntent, keyId: currentKeyId });
       }
       finish();
     });
@@ -357,6 +403,138 @@
     }
   }
 
+  // --- inbox flow ------------------------------------------------------------
+  async function apiGet(path: string): Promise<Record<string, unknown>> {
+    const t = token.trim();
+    const headers: Record<string, string> = {};
+    if (t) headers['Authorization'] = `Bearer ${t}`;
+    const res = await fetch(path, { headers });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((body as { error?: string }).error || `HTTP ${res.status}`);
+    return body as Record<string, unknown>;
+  }
+
+  function setMode(m: Mode): void {
+    if (mode === m) return;
+    // Tear down any in-flight stream before swapping answer surfaces, else the
+    // EventSource keeps mutating the shared rawAnswer and bleeds into the other
+    // view (the two answer panels share one answerEl binding).
+    if (streaming) cancel();
+    mode = m;
+    if (m === 'inbox') {
+      if (!tickets.length) loadTickets();
+      startSummaryPolling();
+    } else {
+      stopSummaryPolling();
+    }
+  }
+
+  async function loadTickets(): Promise<void> {
+    inboxLoading = true;
+    try {
+      const data = await apiGet(`/api/support/tickets?limit=${ticketLimit}`);
+      tickets = (data.tickets as Ticket[]) || [];
+      hubId = (data.hubId as string) || '';
+      investigateProperty = (data.investigateProperty as string) || '';
+      const te = data.ticketsError as { message?: string } | null;
+      ticketsError = te ? (te.message || 'HubSpot error') : null;
+    } catch (err) {
+      ticketsError = (err as Error).message;
+      tickets = [];
+    } finally {
+      inboxLoading = false;
+    }
+  }
+
+  function ticketUrlFor(id: string): string {
+    return hubId ? `https://app.hubspot.com/contacts/${hubId}/ticket/${id}` : `ticket:${id}`;
+  }
+
+  async function selectTicket(id: string): Promise<void> {
+    // Switching ticket mid-stream would leave the previous run writing into the
+    // shared rawAnswer under the new ticket's detail — cancel it first.
+    if (streaming) cancel();
+    selectedId = id;
+    selectedTicket = null;
+    selectedEngagements = [];
+    selectedCapped = false;
+    noteBody = null;
+    cachedLabel = '';
+    detailLoading = true;
+    resetAnswer();
+    try {
+      const data = await apiGet(`/api/support/tickets/${id}`);
+      if (selectedId !== id) return; // superseded by a newer selection
+      selectedTicket = data.ticket as Ticket;
+      selectedEngagements = (data.engagements as Engagement[]) || [];
+      selectedCapped = !!data.capped;
+      if (data.hubId) hubId = data.hubId as string;
+    } catch (err) {
+      toast(`Failed to load ticket: ${(err as Error).message}`);
+      detailLoading = false;
+      return;
+    }
+    detailLoading = false;
+    // Re-show the most recent cached Investigate/Draft for this ticket (no keyId
+    // is stored, so reveal isn't offered on cached output).
+    try {
+      const r = await apiGet(`/api/support/results/${id}`);
+      // Bail if the user re-selected another ticket or kicked off a live run
+      // during the awaits — don't clobber the current answer with stale cache.
+      if (selectedId !== id || streaming) return;
+      const results = (r.results as CachedResult[]) || [];
+      if (results.length) {
+        const latest = results.slice().sort((a, b) => (b.finishedAt || 0) - (a.finishedAt || 0))[0];
+        rawAnswer = latest.body;
+        cachedLabel = `cached ${latest.intent}`;
+        scheduleRender();
+      }
+    } catch { /* no cache yet */ }
+  }
+
+  async function runTicketAction(actionIntent: Intent): Promise<void> {
+    if (!selectedId) return;
+    cachedLabel = '';
+    await ask({ q: `${ticketUrlFor(selectedId)} ${actionIntent}`, intent: actionIntent, subject: { type: 'ticket', id: selectedId }, recordHistory: false });
+  }
+
+  async function viewNote(): Promise<void> {
+    if (!selectedId) return;
+    try {
+      const data = await apiGet(`/api/support/tickets/${selectedId}/note`);
+      noteBody = (data.body as string) || '';
+    } catch (err) {
+      toast(`No AI note: ${(err as Error).message}`);
+    }
+  }
+
+  async function loadSummary(): Promise<void> {
+    try { summary = (await apiGet('/api/support/investigate-summary')) as unknown as Summary; }
+    catch { /* poller may be disabled; hero just hides */ }
+  }
+  function startSummaryPolling(): void {
+    loadSummary();
+    if (!summaryTimer) summaryTimer = setInterval(loadSummary, 10_000);
+  }
+  function stopSummaryPolling(): void {
+    if (summaryTimer) { clearInterval(summaryTimer); summaryTimer = null; }
+  }
+
+  function ticketSubject(t: Ticket): string {
+    return String(t.properties?.subject || '(no subject)');
+  }
+  // HubSpot returns datetime props as either epoch-ms strings or ISO strings;
+  // handle both. Returns '' for missing/unparseable so the row hides the chip.
+  function ticketAge(t: Ticket): string {
+    const v = t.properties?.hs_lastmodifieddate;
+    if (!v) return '';
+    const ms = /^\d+$/.test(String(v)) ? Number(v) : Date.parse(String(v));
+    return Number.isFinite(ms) && ms > 0 ? relTime(ms) : '';
+  }
+  function isFlagged(t: Ticket): boolean {
+    return !!(investigateProperty && t.properties?.[investigateProperty] === 'true');
+  }
+
   // --- lifecycle -------------------------------------------------------------
   onMount(() => {
     history = loadHistory();
@@ -388,6 +566,7 @@
     return () => {
       document.removeEventListener('keydown', onKey);
       finish();
+      stopSummaryPolling();
     };
   });
 
@@ -419,10 +598,16 @@
         </span>
       </div>
       <div class="hero-actions">
-        <button class="ghost-btn" type="button" onclick={() => drawerOpen = !drawerOpen}>
-          ⌖ recents
-          {#if history.length > 0}<span class="badge-count">{history.length}</span>{/if}
-        </button>
+        <div class="mode-toggle" role="group" aria-label="Support view">
+          <button class="mode-btn" class:active={mode === 'ask'} aria-pressed={mode === 'ask'} type="button" onclick={() => setMode('ask')}>Ask</button>
+          <button class="mode-btn" class:active={mode === 'inbox'} aria-pressed={mode === 'inbox'} type="button" onclick={() => setMode('inbox')}>Inbox</button>
+        </div>
+        {#if mode === 'ask'}
+          <button class="ghost-btn" type="button" onclick={() => drawerOpen = !drawerOpen}>
+            ⌖ recents
+            {#if history.length > 0}<span class="badge-count">{history.length}</span>{/if}
+          </button>
+        {/if}
         {#if authMode === 'token'}
           <input
             bind:this={tokenEl}
@@ -441,6 +626,7 @@
     </div>
   </section>
 
+  {#if mode === 'ask'}
   <section class="panel ask-panel">
     <div class="panel-title"><span>Ask</span></div>
     <textarea
@@ -456,7 +642,7 @@
         <option value="draft">draft reply</option>
         <option value="reply">reply</option>
       </select>
-      <button class="primary-btn" disabled={streaming} onclick={ask}>Ask →</button>
+      <button class="primary-btn" disabled={streaming} onclick={() => ask()}>Ask →</button>
       {#if streaming}
         <button class="ghost-btn" type="button" onclick={cancel}>Cancel</button>
       {/if}
@@ -481,6 +667,11 @@
       {/if}
     </div>
   </section>
+  {/if}
+
+  {#if mode === 'inbox'}
+    {@render inbox()}
+  {/if}
 
   {#if revealVisible}
     <section class="panel">
@@ -556,6 +747,116 @@
     </footer>
   {/if}
 </aside>
+
+{#snippet inbox()}
+  <section class="panel inbox-status">
+    <div class="panel-title">
+      <span>HubSpot tickets</span>
+      <button class="ghost-btn sm" type="button" disabled={inboxLoading} onclick={loadTickets}>
+        {inboxLoading ? 'loading…' : '↻ refresh'}
+      </button>
+    </div>
+    <div class="status-row">
+      {#if summary?.lastScan}
+        <span class="stat"><b>{summary.lastScan.scanned}</b> scanned</span>
+        <span class="stat"><b>{summary.lastScan.investigated}</b> investigated</span>
+        <span class="stat"><b>{summary.lastScan.skipped}</b> skipped</span>
+        <span class="stat" class:err={summary.lastScan.errors > 0}><b>{summary.lastScan.errors}</b> errors</span>
+        <span class="stat muted">
+          {summary.inProgress ? 'scanning…' : (summary.lastScan.finishedAt ? `last scan ${relTime(summary.lastScan.finishedAt)}` : '')}
+        </span>
+        {#if summary.lastScan.error}<span class="stat err" title={summary.lastScan.error}>scan error</span>{/if}
+      {:else}
+        <span class="stat muted">auto-investigate idle (set HUBSPOT_AUTO_INVESTIGATE=true to enable)</span>
+      {/if}
+    </div>
+  </section>
+
+  <div class="inbox-grid">
+    <section class="panel inbox-list">
+      <div class="filter-bar">
+        <div class="seg">
+          <button class="seg-btn" class:active={inboxFilter === 'all'} type="button" onclick={() => inboxFilter = 'all'}>All</button>
+          <button class="seg-btn" class:active={inboxFilter === 'flagged'} type="button" onclick={() => inboxFilter = 'flagged'}>AI-flagged</button>
+        </div>
+        <input class="search-input" type="search" placeholder="search subject / content" bind:value={inboxSearch} />
+      </div>
+      {#if ticketsError}
+        <div class="terminal error">{ticketsError}</div>
+      {/if}
+      {#if inboxLoading && tickets.length === 0}
+        <div class="list-empty">loading tickets…</div>
+      {:else if filteredTickets.length === 0}
+        <div class="list-empty">no tickets{inboxSearch || inboxFilter === 'flagged' ? ' match the filter' : ''}</div>
+      {:else}
+        <ul class="ticket-list">
+          {#each filteredTickets as t (t.id)}
+            <li>
+              <button type="button" class="ticket-row" class:active={t.id === selectedId} onclick={() => selectTicket(t.id)}>
+                <span class="ticket-ico">TKT</span>
+                <span class="ticket-main">
+                  <span class="ticket-subj">{ticketSubject(t)}</span>
+                  <span class="ticket-meta">
+                    {#if t.properties?.hs_pipeline_stage}<span class="chip">{t.properties.hs_pipeline_stage}</span>{/if}
+                    {#if isFlagged(t)}<span class="chip ai">AI</span>{/if}
+                    {#if ticketAge(t)}<span class="ticket-time">{ticketAge(t)}</span>{/if}
+                  </span>
+                </span>
+              </button>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </section>
+
+    <section class="panel inbox-detail">
+      {#if !selectedId}
+        <div class="list-empty">select a ticket to view its detail and run Investigate / Draft</div>
+      {:else if detailLoading}
+        <div class="list-empty">loading ticket…</div>
+      {:else if selectedTicket}
+        <div class="detail-head">
+          <div class="detail-title">{ticketSubject(selectedTicket)}</div>
+          <a class="ghost-btn sm" href={ticketUrlFor(selectedTicket.id)} target="_blank" rel="noreferrer noopener">open in HubSpot ↗</a>
+        </div>
+        <div class="detail-actions">
+          <button class="primary-btn" disabled={streaming} onclick={() => runTicketAction('investigate')}>Investigate</button>
+          <button class="ghost-btn" disabled={streaming} onclick={() => runTicketAction('draft')}>Draft reply</button>
+          <button class="ghost-btn" type="button" onclick={viewNote}>View AI note</button>
+          {#if streaming}<button class="ghost-btn" type="button" onclick={cancel}>Cancel</button>{/if}
+          {#if cachedLabel}<span class="chip cached">{cachedLabel}</span>{/if}
+        </div>
+
+        {#if selectedTicket.properties?.content}
+          <div class="detail-body">{selectedTicket.properties.content}</div>
+        {/if}
+
+        <div class="panel-body">
+          <div bind:this={answerEl} class="answer placeholder">Run Investigate or Draft to see the streamed answer here.</div>
+          {#if terminal}<div class="terminal" class:error={terminal.isError}>{terminal.text}</div>{/if}
+        </div>
+
+        {#if noteBody}
+          <div class="note-box">
+            <div class="note-head">AI investigation note</div>
+            <div class="note-body">{noteBody}</div>
+          </div>
+        {/if}
+
+        <div class="timeline">
+          <div class="timeline-head">Timeline {selectedCapped ? '(truncated — too many engagements)' : `(${selectedEngagements.length})`}</div>
+          {#each selectedEngagements as e}
+            <div class="tl-item">
+              <span class="tl-type">{e.type}{e.isInvestigationNote ? ' · AI' : ''}</span>
+              {#if e.timestamp}<span class="tl-time">{relTime(e.timestamp)}</span>{/if}
+              <span class="tl-preview">{e.bodyPreview}</span>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </section>
+  </div>
+{/snippet}
 
 <style>
   :global(:root) {
@@ -962,4 +1263,81 @@
     cursor: pointer;
   }
   .drawer-clear:hover { color: var(--danger); border-color: var(--danger); }
+
+  /* --- inbox sub-view ------------------------------------------------------ */
+  .mode-toggle { display: inline-flex; border: 1px solid var(--border-primary); border-radius: 6px; overflow: hidden; }
+  .mode-btn {
+    background: transparent; color: var(--text-muted); border: 0;
+    padding: 5px 12px; font-size: 11px; cursor: pointer;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .mode-btn.active { background: var(--support-accent); color: var(--bg-deep); font-weight: 600; }
+
+  .ghost-btn.sm { padding: 3px 8px; font-size: 10px; }
+
+  .status-row { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; padding: 4px 2px; }
+  .stat { font-size: 12px; color: var(--text-primary); }
+  .stat b { color: var(--text-heading); }
+  .stat.muted { color: var(--text-muted); }
+  .stat.err b, .stat.err { color: var(--danger); }
+
+  .inbox-grid { display: grid; grid-template-columns: minmax(280px, 360px) 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 820px) { .inbox-grid { grid-template-columns: 1fr; } }
+
+  .filter-bar { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+  .seg { display: inline-flex; border: 1px solid var(--border-primary); border-radius: 6px; overflow: hidden; }
+  .seg-btn { background: transparent; color: var(--text-muted); border: 0; padding: 4px 10px; font-size: 11px; cursor: pointer; }
+  .seg-btn.active { background: var(--support-accent-soft); color: var(--support-accent); }
+  .search-input {
+    flex: 1; min-width: 140px; background: var(--bg-deep);
+    border: 1px solid var(--border-primary); color: var(--text-primary);
+    padding: 5px 10px; border-radius: 6px; font-size: 12px;
+  }
+  .search-input:focus { outline: none; border-color: var(--support-accent); }
+
+  .list-empty { color: var(--text-muted); font-size: 12px; padding: 16px 4px; }
+
+  .ticket-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 60vh; overflow-y: auto; }
+  .ticket-row {
+    display: flex; gap: 10px; align-items: flex-start; width: 100%; text-align: left;
+    background: var(--bg-deep); border: 1px solid var(--border-primary); border-radius: 8px;
+    padding: 8px 10px; cursor: pointer; color: var(--text-primary);
+  }
+  .ticket-row:hover { border-color: var(--support-accent-dim); }
+  .ticket-row.active { border-color: var(--support-accent); background: var(--support-accent-soft); }
+  .ticket-ico {
+    font-family: 'IBM Plex Mono', monospace; font-size: 9px; font-weight: 700;
+    color: var(--support-accent); border: 1px solid var(--support-accent-dim);
+    border-radius: 4px; padding: 2px 4px; margin-top: 1px;
+  }
+  .ticket-main { display: grid; gap: 4px; min-width: 0; flex: 1; }
+  .ticket-subj { font-size: 12px; color: var(--text-heading); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ticket-meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .ticket-time { font-size: 10px; color: var(--text-muted); }
+  .chip {
+    font-size: 10px; padding: 1px 6px; border-radius: 999px;
+    border: 1px solid var(--border-primary); color: var(--text-muted);
+  }
+  .chip.ai { color: var(--support-accent); border-color: var(--support-accent-dim); }
+  .chip.cached { color: var(--info); border-color: var(--info); }
+
+  .detail-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .detail-title { font-size: 14px; font-weight: 600; color: var(--text-heading); }
+  .detail-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .detail-body {
+    background: var(--bg-deep); border: 1px solid var(--border-primary); border-radius: 8px;
+    padding: 10px 12px; font-size: 12px; color: var(--text-primary);
+    white-space: pre-wrap; max-height: 220px; overflow-y: auto; margin-bottom: 12px;
+  }
+
+  .note-box { border: 1px solid var(--support-accent-dim); border-radius: 8px; margin: 12px 0; }
+  .note-head { background: var(--support-accent-soft); color: var(--support-accent); font-size: 11px; padding: 5px 10px; }
+  .note-body { padding: 10px 12px; font-size: 12px; white-space: pre-wrap; color: var(--text-primary); max-height: 260px; overflow-y: auto; }
+
+  .timeline { margin-top: 14px; border-top: 1px solid var(--border-primary); padding-top: 10px; }
+  .timeline-head { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
+  .tl-item { display: grid; grid-template-columns: auto auto 1fr; gap: 8px; align-items: baseline; padding: 4px 0; font-size: 11px; border-bottom: 1px dashed var(--border-primary); }
+  .tl-type { color: var(--support-accent); font-family: 'IBM Plex Mono', monospace; }
+  .tl-time { color: var(--text-muted); }
+  .tl-preview { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>

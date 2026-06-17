@@ -1,0 +1,2096 @@
+diff --git a/package.json b/package.json
+index f8118b1..e181b11 100644
+--- a/package.json
++++ b/package.json
+@@ -8,6 +8,7 @@
+   "scripts": {
+     "dev:server": "tsx watch src/server/index.ts",
+     "dev:dashboard": "vite src/dashboard",
++    "dev:dashboard:network": "vite src/dashboard --host",
+     "clean": "rm -rf dist",
+     "build": "tsc && pnpm build:dashboard",
+     "rebuild": "pnpm clean && pnpm build",
+@@ -19,6 +20,7 @@
+     "check:watch": "svelte-check --tsconfig ./src/dashboard/tsconfig.json --watch",
+     "migrate": "tsx src/core/db/migrate.ts",
+     "dev": "concurrently --kill-others \"pnpm:dev:server\" \"pnpm:dev:dashboard\"",
++    "dev:network": "concurrently --kill-others \"pnpm:dev:server\" \"pnpm:dev:dashboard:network\"",
+     "postinstall": "pnpm exec playwright install chromium",
+     "build:desktop": "pnpm build && cp -r dist/server dist/core dist/dashboard desktop/ && cd desktop && pnpm install && pnpm exec electron-builder --win"
+   },
+diff --git a/src/core/config.ts b/src/core/config.ts
+index 6fe64f3..b139431 100644
+--- a/src/core/config.ts
++++ b/src/core/config.ts
+@@ -10,6 +10,7 @@ export const config: Config = {
+   server: {
+     port: parseInt(envOr('PORT', '3011')),
+     dashboardPort: parseInt(envOr('DASHBOARD_PORT', '3010')),
++    host: envOr('HOST', '127.0.0.1'),
+   },
+   github: {
+     webhookSecret: envOr('GITHUB_WEBHOOK_SECRET', ''),
+@@ -45,6 +46,11 @@ export const config: Config = {
+     serviceRoleKey: envOr('SUPABASE_SERVICE_ROLE_KEY', ''),
+     machineId: envOr('MACHINE_ID', ''),
+   },
++  hubspot: {
++    autoInvestigate: envOr('HUBSPOT_AUTO_INVESTIGATE', 'false') === 'true',
++    investigateProperty: envOr('HUBSPOT_INVESTIGATE_PROPERTY', 'ai_investigate_bbsupport'),
++    scanIntervalMs: parseInt(envOr('HUBSPOT_SCAN_INTERVAL_MS', '600000')),
++  },
+ };
+ 
+ export const WORKSPACES_DIR = path.resolve(
+diff --git a/src/core/hubspot-investigated-store.ts b/src/core/hubspot-investigated-store.ts
+new file mode 100644
+index 0000000..c06b35e
+--- /dev/null
++++ b/src/core/hubspot-investigated-store.ts
+@@ -0,0 +1,57 @@
++// Persistence for the auto-investigate dedup Set. Without this, a process
++// restart between `createTicketNote` succeeding and the next scan reading
++// engagements can re-investigate the same ticket: HubSpot's /engagements/v1
++// listing is not strictly read-your-writes, so the just-posted marker note
++// may not be visible yet. Disk persistence closes that window.
++//
++// Format: <DATA_DIR>/hubspot-investigated.json
++//   { "ticketIds": ["111", "222", ...], "updatedAt": 1700000000000 }
++// Mode 0o600 (the ticket ids aren't secret, but the file lives next to
++// tokens.json which is — uniform posture keeps the surface small).
++
++import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from 'node:fs';
++import { join } from 'node:path';
++import { DATA_DIR } from './support-paths.js';
++
++const STORE_FILE = join(DATA_DIR, 'hubspot-investigated.json');
++
++export function loadInvestigated(): string[] {
++  try {
++    const parsed = JSON.parse(readFileSync(STORE_FILE, 'utf8'));
++    const ids = Array.isArray(parsed?.ticketIds) ? parsed.ticketIds : [];
++    return ids.filter((id: unknown): id is string => typeof id === 'string');
++  } catch (err) {
++    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
++    // A corrupt file is non-fatal: re-investigating at most once beats crashing
++    // the poll cycle. The engagement-marker check still prevents duplicate notes
++    // within a single process lifetime.
++    console.warn('[hubspot-investigated-store] load failed:', (err as NodeJS.ErrnoException).code || (err as Error).message);
++    return [];
++  }
++}
++
++export function persistInvestigated(ticketIds: Iterable<string>): void {
++  try {
++    if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
++    const body = JSON.stringify({ ticketIds: Array.from(ticketIds), updatedAt: Date.now() });
++    writeFileSync(STORE_FILE, body, { encoding: 'utf8', mode: 0o600 });
++    // writeFileSync's mode is only honored on creation; chmod makes 0o600
++    // idempotent across overwrites (no-op on Windows).
++    try { chmodSync(STORE_FILE, 0o600); } catch { /* windows / unsupported */ }
++  } catch (err) {
++    console.warn('[hubspot-investigated-store] persist failed:', (err as NodeJS.ErrnoException).code || (err as Error).message);
++  }
++}
++
++// Debounce so a 50-ticket scan doesn't trigger 50 fs writes — dedup is
++// session-stable in memory; persistence only matters across restarts.
++let debounceTimer: NodeJS.Timeout | null = null;
++const DEBOUNCE_MS = 1000;
++export function schedulePersist(ticketIds: Iterable<string>): void {
++  if (debounceTimer) clearTimeout(debounceTimer);
++  debounceTimer = setTimeout(() => {
++    debounceTimer = null;
++    persistInvestigated(ticketIds);
++  }, DEBOUNCE_MS);
++  debounceTimer.unref?.();
++}
+diff --git a/src/core/hubspot-poller.ts b/src/core/hubspot-poller.ts
+new file mode 100644
+index 0000000..2f586c1
+--- /dev/null
++++ b/src/core/hubspot-poller.ts
+@@ -0,0 +1,211 @@
++// Auto-investigate poller — ported from bb-dashboard scripts/hubspot-poller.mjs.
++// Scans HubSpot tickets flagged with the investigate property, runs the
++// bb-support investigate flow, and posts the synthesis back as a ticket note.
++// A dedup store + per-process marker check prevent double-posting.
++//
++// Activity is surfaced to the dashboard Support → Inbox status hero via
++// getInvestigateSummary(); the client polls it (no WebSocket events needed).
++
++import type { Config } from './types.js';
++import { loadHubspot, loadHubspotCreds, loadRunSupport } from './support-paths.js';
++import { loadInvestigated, schedulePersist } from './hubspot-investigated-store.js';
++
++// ask.mjs + claude run serially inside runSupportQuery; one deadline suffices.
++const INVESTIGATE_TIMEOUT_MS = 7 * 60_000;
++
++async function investigate(url: string): Promise<string> {
++  const runSupportQuery = await loadRunSupport();
++  const ac = new AbortController();
++  const timer = setTimeout(() => ac.abort(), INVESTIGATE_TIMEOUT_MS);
++  let synthesis = '';
++  try {
++    const result = await runSupportQuery({
++      question: `${url} investigate`,
++      intent: 'investigate',
++      format: 'html',
++      signal: ac.signal,
++      onChunk: (c) => { synthesis += c; },
++    });
++    if (result.stage === 'cancelled') throw new Error(`investigate timed out after ${INVESTIGATE_TIMEOUT_MS / 1000}s`);
++    if (result.stage !== 'ok') throw new Error(`${result.stage}: ${(result.claudeStderr || result.askStderr).trim() || '(no detail)'}`);
++    const out = synthesis.trim();
++    if (!out) throw new Error('claude produced no output');
++    return out;
++  } finally {
++    clearTimeout(timer);
++  }
++}
++
++const investigated = new Set<string>(loadInvestigated());
++const INVESTIGATED_LRU_CAP = 10_000;
++
++// Re-entry guard: a new tick is a no-op while a scan runs.
++let scanInFlight: Promise<ScanSummary | undefined> | null = null;
++// Per-ticket inflight: a long investigate must not be re-queued from the next tick.
++const ticketInFlight = new Set<string>();
++
++type ScanSummary = { scanned: number; investigated: number; skipped: number; errors: number };
++type LastScan = ScanSummary & { startedAt: number; finishedAt: number | null; error?: string };
++
++// Recent poller activity, capped so the buffer can't grow unbounded.
++const INVESTIGATE_LOG_CAP = 50;
++type LogEvent = Record<string, unknown> & { type: string };
++const investigateLog: Array<LogEvent & { ts: number }> = [];
++let lastScan: LastScan | null = null;
++
++type LogFn = ((event: LogEvent) => void) | undefined;
++type BroadcastFn = ((event: string, data: unknown) => void) | undefined;
++
++function record(log: LogFn, event: LogEvent): void {
++  investigateLog.push({ ...event, ts: Date.now() });
++  if (investigateLog.length > INVESTIGATE_LOG_CAP) investigateLog.shift();
++  log?.(event);
++}
++
++export function getInvestigateSummary() {
++  return {
++    lastScan: lastScan ? { ...lastScan } : null,
++    inProgress: !!(lastScan && lastScan.startedAt && !lastScan.finishedAt),
++    recent: investigateLog.slice().reverse(),
++  };
++}
++
++export async function runHubspotInvestigateScan(
++  config: Config,
++  { broadcast, log }: { broadcast?: BroadcastFn; log?: LogFn } = {},
++): Promise<ScanSummary | undefined> {
++  if (!config.hubspot.autoInvestigate) return;
++  if (scanInFlight) {
++    record(log, { type: 'hubspot-investigate-scan-skip', reason: 'previous scan still running' });
++    return scanInFlight;
++  }
++  scanInFlight = (async () => {
++    try {
++      const creds = await loadHubspotCreds();
++      if (!creds.token) {
++        // Surface why the scan no-oped so the status hero doesn't show stale
++        // counts (or nothing) with no explanation.
++        lastScan = { startedAt: Date.now(), finishedAt: Date.now(), scanned: 0, investigated: 0, skipped: 0, errors: 0, error: 'no HubSpot token configured' };
++        record(log, { type: 'hubspot-investigate-scan-skip', reason: 'no HubSpot token configured' });
++        return;
++      }
++      const hub = await loadHubspot();
++      const propertyName = config.hubspot.investigateProperty;
++
++      lastScan = { startedAt: Date.now(), finishedAt: null, scanned: 0, investigated: 0, skipped: 0, errors: 0 };
++      record(log, { type: 'hubspot-investigate-scan-start', property: propertyName });
++
++      let tickets;
++      try {
++        tickets = await hub.searchTicketsByProperty(creds.token, propertyName, 'true', 50);
++      } catch (err) {
++        const message = (err as Error).message;
++        record(log, { type: 'hubspot-investigate-scan-error', error: message });
++        broadcast?.('hubspot-investigate-error', { phase: 'search', property: propertyName, error: message });
++        const summary: ScanSummary = { scanned: 0, investigated: 0, skipped: 0, errors: 1 };
++        lastScan = { ...lastScan!, ...summary, finishedAt: Date.now() };
++        return summary;
++      }
++
++      record(log, { type: 'hubspot-investigate-scan-found', count: tickets.length });
++
++      const summary: ScanSummary = { scanned: tickets.length, investigated: 0, skipped: 0, errors: 0 };
++      // Mirror into lastScan so the status hero shows live progress.
++      const liveUpdate = () => { lastScan = { ...lastScan!, ...summary }; };
++      liveUpdate();
++
++      for (const ticket of tickets) {
++        const ticketId = ticket.id;
++        if (investigated.has(ticketId)) { summary.skipped++; liveUpdate(); continue; }
++
++        let alreadyDone = false;
++        try {
++          const engagements = await hub.getTicketEngagements(creds.token, ticketId);
++          alreadyDone = engagements.some(
++            (e) => e.engagement?.type === 'NOTE' && hub.isInvestigationNote(e.metadata?.body),
++          );
++        } catch (err) {
++          const code = (err as NodeJS.ErrnoException).code;
++          record(log, { type: 'hubspot-investigate-check-error', ticketId, error: (err as Error).message, code });
++          summary.errors++;
++          // Only the pagination cap is structural — fail closed and mark done.
++          // Transient errors (429/5xx/network) must NOT mark done, or the ticket
++          // is permanently blacklisted for this process lifetime.
++          if (code === 'ENGAGEMENT_PAGINATION_CAP') markInvestigated(ticketId);
++          liveUpdate();
++          continue;
++        }
++
++        if (alreadyDone) { markInvestigated(ticketId); summary.skipped++; liveUpdate(); continue; }
++
++        const url = creds.hubId ? hub.ticketUrl(creds.hubId, ticketId) : null;
++        if (!url) {
++          record(log, { type: 'hubspot-investigate-skip', ticketId, reason: 'no hubId configured' });
++          summary.skipped++;
++          liveUpdate();
++          continue;
++        }
++
++        const subject = ticket.properties?.subject || ticketId;
++        record(log, { type: 'hubspot-investigate-running', ticketId, subject });
++
++        if (ticketInFlight.has(ticketId)) { summary.skipped++; liveUpdate(); continue; }
++        ticketInFlight.add(ticketId);
++        try {
++          const synthesis = await investigate(url);
++          await hub.createTicketNote(creds.token, ticketId, hub.buildInvestigationNoteBody(synthesis));
++          markInvestigated(ticketId);
++          summary.investigated++;
++          record(log, { type: 'hubspot-investigate-done', ticketId, subject });
++          broadcast?.('hubspot-investigated', { ticketId, subject });
++        } catch (err) {
++          const message = (err as Error).message;
++          record(log, { type: 'hubspot-investigate-run-error', ticketId, error: message });
++          summary.errors++;
++          broadcast?.('hubspot-investigate-error', { phase: 'run', ticketId, subject, error: message });
++        } finally {
++          ticketInFlight.delete(ticketId);
++          liveUpdate();
++        }
++      }
++
++      lastScan = { ...lastScan!, ...summary, finishedAt: Date.now() };
++      return summary;
++    } catch (err) {
++      // Pre-search import/credential failures: surface instead of leaving the
++      // prior cycle's lastScan visible with no error breadcrumb.
++      lastScan = {
++        startedAt: lastScan?.startedAt || Date.now(),
++        finishedAt: Date.now(),
++        scanned: 0, investigated: 0, skipped: 0, errors: 1,
++        error: (err as Error).message,
++      };
++      throw err;
++    } finally {
++      scanInFlight = null;
++    }
++  })();
++  return scanInFlight;
++}
++
++function markInvestigated(ticketId: string): void {
++  if (investigated.has(ticketId)) {
++    investigated.delete(ticketId); // refresh recency
++  } else if (investigated.size >= INVESTIGATED_LRU_CAP) {
++    const oldest = investigated.values().next().value;
++    if (oldest !== undefined) investigated.delete(oldest);
++  }
++  investigated.add(ticketId);
++  schedulePersist(investigated);
++}
++
++// Stamp lastScan with a top-of-cycle crash so a broken import doesn't leave the
++// previous scan's summary visible forever, masking that auto-investigate stopped.
++export function stampCycleCrash(err: unknown): void {
++  const now = Date.now();
++  lastScan = {
++    startedAt: now, finishedAt: now,
++    scanned: 0, investigated: 0, skipped: 0, errors: 1,
++    error: (err as Error)?.message || String(err),
++  };
++}
+diff --git a/src/core/support-paths.ts b/src/core/support-paths.ts
+new file mode 100644
+index 0000000..2772f54
+--- /dev/null
++++ b/src/core/support-paths.ts
+@@ -0,0 +1,124 @@
++// Shared filesystem locations + dynamic-import helpers for the bb-support /
++// HubSpot integration. Single source of truth so support.ts (Q&A endpoints),
++// hubspot.ts (ticket-inbox endpoints) and hubspot-poller.ts (auto-investigate)
++// agree on where tokens / keys / results / dedup state live, and where to
++// import the bb-skills .mjs libraries from.
++//
++// The bb-skills .mjs are imported dynamically (pathToFileURL keeps Windows /
++// MSYS paths un-mangled) so orch's TypeScript build never statically depends
++// on bb-skills being present at compile time.
++
++import { existsSync } from 'node:fs';
++import { homedir } from 'node:os';
++import { dirname, join, resolve as resolvePath } from 'node:path';
++import { fileURLToPath, pathToFileURL } from 'node:url';
++
++const __dirname = dirname(fileURLToPath(import.meta.url));
++
++// Defaults match the standalone bb-support-web deployment so existing
++// tokens.json / audit.jsonl / results keep working across host switches.
++export const DATA_DIR = process.env.BB_SUPPORT_DATA_DIR || join(homedir(), '.claude', 'bb-support-web');
++export const RESULTS_DIR = join(DATA_DIR, 'results');
++
++// First candidate that exists on disk, else the last (so error messages point
++// at the canonical location).
++function firstExisting(...candidates: string[]): string {
++  for (const c of candidates) { if (existsSync(c)) return c; }
++  return candidates[candidates.length - 1];
++}
++
++// bb-support/scripts holds run-support.mjs, reveal.mjs, hubspot.mjs.
++// Prefer BB_SUPPORT_SCRIPTS_DIR, then a sibling-of-orch checkout (deploy
++// layout), then the developer's ~/bb-skills worktree / ~/.claude/skills symlink.
++export const SCRIPTS_DIR = process.env.BB_SUPPORT_SCRIPTS_DIR || firstExisting(
++  resolvePath(__dirname, '..', '..', '..', 'bb-skills', 'bb-support', 'scripts'),
++  join(homedir(), 'bb-skills', 'bb-support', 'scripts'),
++  join(homedir(), '.claude', 'skills', 'bb-support', 'scripts'),
++);
++
++// hubspot-creds.mjs lives in _shared, a sibling of bb-support. Resolve it the
++// same way so it tracks whichever bb-skills root SCRIPTS_DIR landed on.
++const SHARED_DIR = firstExisting(
++  resolvePath(SCRIPTS_DIR, '..', '..', '_shared'),
++  join(homedir(), 'bb-skills', '_shared'),
++  join(homedir(), '.claude', 'skills', '_shared'),
++);
++const HUBSPOT_CREDS_PATH = join(SHARED_DIR, 'hubspot-creds.mjs');
++
++// --- hubspot.mjs surface (only the functions orch uses) --------------------
++export interface HubspotTicket {
++  id: string;
++  properties?: Record<string, string | null | undefined>;
++}
++export interface HubspotEngagement {
++  engagement?: { type?: string; timestamp?: number | null; ownerId?: number | null };
++  metadata?: { body?: string };
++}
++export interface HubspotLib {
++  listRecentTickets(token: string, limit?: number, extraProps?: string[]): Promise<HubspotTicket[]>;
++  searchTicketsByProperty(token: string, propertyName: string, value: string, limit?: number): Promise<HubspotTicket[]>;
++  getTicket(token: string, ticketId: string): Promise<HubspotTicket>;
++  getTicketEngagements(token: string, ticketId: string): Promise<HubspotEngagement[]>;
++  createTicketNote(token: string, ticketId: string, body: string): Promise<unknown>;
++  isInvestigationNote(body: string | undefined): boolean;
++  buildInvestigationNoteBody(synthesis: string): string;
++  stripHtml(s: string): string;
++  ticketUrl(hubId: string, ticketId: string): string | null;
++}
++
++export interface HubspotCreds {
++  token: string | null;
++  hubId: string | null;
++  source: string | null;
++}
++
++let hubspotLibCache: HubspotLib | null = null;
++export async function loadHubspot(): Promise<HubspotLib> {
++  if (hubspotLibCache) return hubspotLibCache;
++  const url = pathToFileURL(join(SCRIPTS_DIR, 'hubspot.mjs')).href;
++  const mod = await import(url);
++  if (typeof mod.listRecentTickets !== 'function') {
++    throw new Error(`hubspot.mjs missing expected exports at ${url}`);
++  }
++  hubspotLibCache = mod as HubspotLib;
++  return hubspotLibCache;
++}
++
++type LoadCredsFn = () => HubspotCreds;
++let loadCredsCache: LoadCredsFn | null = null;
++export async function loadHubspotCreds(): Promise<HubspotCreds> {
++  if (!loadCredsCache) {
++    const url = pathToFileURL(HUBSPOT_CREDS_PATH).href;
++    const mod = await import(url);
++    if (typeof mod.loadHubspotCreds !== 'function') {
++      throw new Error(`hubspot-creds.mjs missing loadHubspotCreds export at ${url}`);
++    }
++    loadCredsCache = mod.loadHubspotCreds as LoadCredsFn;
++  }
++  return loadCredsCache();
++}
++
++// --- run-support.mjs surface (shared by support.ts Q&A + the poller) -------
++export type RunStage = 'ok' | 'ask' | 'claude' | 'cancelled' | 'spawn';
++export type Intent = 'investigate' | 'draft' | 'reply';
++export type Format = 'markdown' | 'html';
++export type RunSupportFn = (opts: {
++  question: string;
++  keyFile?: string;
++  intent?: Intent;
++  format?: Format;
++  onChunk: (text: string) => void;
++  signal?: AbortSignal;
++}) => Promise<{ stage: RunStage; exitCode: number | null; askStderr: string; claudeStderr: string }>;
++
++let runSupportCache: RunSupportFn | null = null;
++export async function loadRunSupport(): Promise<RunSupportFn> {
++  if (runSupportCache) return runSupportCache;
++  const url = pathToFileURL(join(SCRIPTS_DIR, 'run-support.mjs')).href;
++  const mod = await import(url);
++  if (typeof mod.runSupportQuery !== 'function') {
++    throw new Error(`runSupportQuery export missing from ${url}`);
++  }
++  runSupportCache = mod.runSupportQuery as RunSupportFn;
++  return runSupportCache;
++}
+diff --git a/src/core/types.ts b/src/core/types.ts
+index 9015a80..6205e25 100644
+--- a/src/core/types.ts
++++ b/src/core/types.ts
+@@ -79,6 +79,7 @@ export interface Config {
+   server: {
+     port: number;
+     dashboardPort: number;
++    host: string; // listen interface; '0.0.0.0' to expose on the LAN
+   };
+   github: {
+     webhookSecret: string;
+@@ -114,6 +115,13 @@ export interface Config {
+     serviceRoleKey: string;
+     machineId: string;
+   };
++  hubspot: {
++    // Creds (token, hubId) come from the bb-skills cred cascade, not here —
++    // this block is only the auto-investigate poller knobs.
++    autoInvestigate: boolean;
++    investigateProperty: string;
++    scanIntervalMs: number;
++  };
+ }
+ 
+ // --- Orchestrator types ---
+diff --git a/src/dashboard/App.svelte b/src/dashboard/App.svelte
+index acc9385..49d98e5 100644
+--- a/src/dashboard/App.svelte
++++ b/src/dashboard/App.svelte
+@@ -7,7 +7,7 @@
+   import ProcessList from './components/ProcessList.svelte';
+   import { connect } from './stores/websocket.svelte';
+   import { fetchPRs, fetchWorkItems, fetchResolvedByMe, fetchResolvedWithComments } from './stores/workItems.svelte';
+-  import { fetchTasks } from './stores/tasks.svelte';
++  import { fetchTasks, fetchMachineId } from './stores/tasks.svelte';
+   import { fetchClaudeUsage } from './stores/usage.svelte';
+   import { fetchReviewedItems, fetchTeamMembers } from './stores/testing.svelte';
+   import { fetchCurrentUser } from './stores/currentUser.svelte';
+@@ -20,14 +20,21 @@
+   import VideoscanPage from './components/VideoscanPage.svelte';
+   import SupportPage from './components/SupportPage.svelte';
+   import DashboardOverview from './components/DashboardOverview.svelte';
++  import TokenGate from './components/TokenGate.svelte';
+   import { getRoute } from './lib/router.svelte';
++  import { isReady, isAdmin, canSupport, loadWhoami } from './stores/session.svelte';
+ 
+   let route = $derived(getRoute());
++  let ready = $derived(isReady());
++  let admin = $derived(isAdmin());
++  let support = $derived(canSupport());
+   let lastRefreshedAt = $state<string>('');
+ 
+   // Ticket-y data is only useful on /tickets; skip elsewhere so a /videoscan
+-  // session doesn't re-pull PRs / work items every refresh.
++  // session doesn't re-pull PRs / work items every refresh. All of this data is
++  // admin-only, so a support/anon session fetches nothing (avoids 401 noise).
+   function refreshAll(refresh = false) {
++    if (!isAdmin()) return;
+     const r = getRoute();
+     fetchTasks();
+     fetchClaudeUsage();
+@@ -54,9 +61,20 @@
+     refreshAll();
+   });
+ 
++  // Resolve the caller's scopes first; the bootstrap effect below then wires up
++  // WS + initial data once (and only) an admin session is established.
++  let bootstrapped = false;
++  $effect(() => {
++    if (admin && !bootstrapped) {
++      bootstrapped = true;
++      fetchMachineId();
++      connect();
++      refreshAll();
++    }
++  });
++
+   onMount(() => {
+-    connect();
+-    refreshAll();
++    loadWhoami();
+ 
+     // Refresh when the tab regains focus after being hidden for >5min.
+     // No periodic interval — WS pushes task/output updates, and ticket data
+@@ -76,31 +94,43 @@
+   });
+ </script>
+ 
+-<div class="container">
+-  <Header {refreshAll} {lastRefreshedAt} />
+-  {#if route === '/videoscan'}
+-    <VideoscanPage />
+-  {:else if route === '/support'}
+-    <SupportPage />
+-  {:else if route === '/tickets'}
+-    <WorkItems />
+-    <OrchestratorPanel />
+-    <div class="bottom-grid">
+-      <div class="bottom-left">
+-        <TaskList />
+-        <ProcessList />
++{#if !ready}
++  <div class="boot">Loading…</div>
++{:else if admin}
++  <div class="container">
++    <Header {refreshAll} {lastRefreshedAt} />
++    {#if route === '/videoscan'}
++      <VideoscanPage />
++    {:else if route === '/support'}
++      <SupportPage />
++    {:else if route === '/tickets'}
++      <WorkItems />
++      <OrchestratorPanel />
++      <div class="bottom-grid">
++        <div class="bottom-left">
++          <TaskList />
++          <ProcessList />
++        </div>
++        <div class="bottom-right">
++          <TestingAssignment />
++        </div>
+       </div>
+-      <div class="bottom-right">
+-        <TestingAssignment />
+-      </div>
+-    </div>
+-  {:else}
+-    <DashboardOverview />
+-  {/if}
+-</div>
+-<NotificationSidebar />
+-<OrchestratorChat />
+-<ToastContainer />
++    {:else}
++      <DashboardOverview />
++    {/if}
++  </div>
++  <NotificationSidebar />
++  <OrchestratorChat />
++  <ToastContainer />
++{:else if support}
++  <!-- Support-scoped session: only the support Q&A surface, no admin chrome. -->
++  <div class="container support-only">
++    <SupportPage />
++  </div>
++  <ToastContainer />
++{:else}
++  <TokenGate />
++{/if}
+ 
+ <style>
+   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+@@ -111,6 +141,15 @@
+     padding: 0;
+   }
+ 
++  .boot {
++    min-height: 100vh;
++    display: flex;
++    align-items: center;
++    justify-content: center;
++    color: var(--text-muted, #8b949e);
++    font-size: 14px;
++  }
++
+   :global(body) {
+     font-family: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+     background: var(--bg-deep);
+diff --git a/src/dashboard/components/SupportPage.svelte b/src/dashboard/components/SupportPage.svelte
+index a446995..da025c7 100644
+--- a/src/dashboard/components/SupportPage.svelte
++++ b/src/dashboard/components/SupportPage.svelte
+@@ -11,6 +11,7 @@
+   // streaming chunks don't pin the main thread.
+   import { onMount } from 'svelte';
+   import { sanitizeMarkdown } from '../lib/sanitize';
++  import { getToken, setToken } from '../stores/session.svelte';
+ 
+   // Minimal interface for the vendored marked bundle (no .d.ts ships). Two
+   // methods used; keeping the surface narrow catches drift if we ever swap the
+@@ -31,7 +32,8 @@
+   type RunStage = 'ok' | 'ask' | 'claude' | 'cancelled' | 'spawn';
+ 
+   // --- state -----------------------------------------------------------------
+-  const TOKEN_KEY = 'bb-support-web/token';
++  // Token is owned by the session store (localStorage 'orch/token') so it stays
++  // in sync with the app-wide auth used for /api/whoami and the SSE ?token=.
+   const HISTORY_KEY = 'orch-support-history';
+   const HISTORY_CAP = 50;
+ 
+@@ -44,7 +46,7 @@
+     keyId: string | null;
+   };
+ 
+-  let token = $state<string>(typeof localStorage !== 'undefined' ? (localStorage.getItem(TOKEN_KEY) || '') : '');
++  let token = $state<string>(getToken());
+   let authMode = $state<'token' | 'anonymous'>('token');
+   let question = $state<string>('');
+   let intent = $state<Intent>('investigate');
+@@ -71,9 +73,52 @@
+   let questionEl: HTMLTextAreaElement | null = $state(null);
+   let tokenEl: HTMLInputElement | null = $state(null);
+ 
++  // --- inbox (HubSpot tickets) sub-view --------------------------------------
++  type Mode = 'ask' | 'inbox';
++  let mode = $state<Mode>('ask');
++
++  type Ticket = { id: string; properties?: Record<string, string | null | undefined> };
++  type Engagement = { type: string; timestamp: number | null; ownerId: number | null; bodyPreview: string; isInvestigationNote: boolean };
++  type CachedResult = { intent: string; body: string; stage: string; finishedAt: number };
++  type Summary = {
++    lastScan: null | { startedAt: number; finishedAt: number | null; scanned: number; investigated: number; skipped: number; errors: number; error?: string };
++    inProgress: boolean;
++    recent: Array<{ type: string; ts: number; [k: string]: unknown }>;
++  };
++
++  let tickets = $state<Ticket[]>([]);
++  let ticketsError = $state<string | null>(null);
++  let hubId = $state<string>('');
++  let investigateProperty = $state<string>('');
++  let inboxLoading = $state<boolean>(false);
++  let ticketLimit = $state<number>(20);
++  let inboxFilter = $state<'all' | 'flagged'>('all');
++  let inboxSearch = $state<string>('');
++  let selectedId = $state<string | null>(null);
++  let selectedTicket = $state<Ticket | null>(null);
++  let selectedEngagements = $state<Engagement[]>([]);
++  let selectedCapped = $state<boolean>(false);
++  let detailLoading = $state<boolean>(false);
++  let noteBody = $state<string | null>(null);
++  let summary = $state<Summary | null>(null);
++  let cachedLabel = $state<string>('');
++  let summaryTimer: ReturnType<typeof setInterval> | null = null;
++
++  const filteredTickets = $derived(
++    tickets.filter((t) => {
++      if (inboxFilter === 'flagged' && !(investigateProperty && t.properties?.[investigateProperty] === 'true')) return false;
++      const s = inboxSearch.trim().toLowerCase();
++      if (!s) return true;
++      const subj = String(t.properties?.subject || '').toLowerCase();
++      const content = String(t.properties?.content || '').toLowerCase();
++      return subj.includes(s) || content.includes(s);
++    }),
++  );
++
+   // --- localStorage helpers --------------------------------------------------
+   function saveToken(): void {
+-    try { localStorage.setItem(TOKEN_KEY, token.trim()); } catch { /* quota */ }
++    // Persist via the session store so scopes (and the gate) stay consistent.
++    setToken(token);
+   }
+ 
+   function loadHistory(): HistoryEntry[] {
+@@ -217,14 +262,18 @@
+   }
+ 
+   // --- ask flow --------------------------------------------------------------
+-  async function ask(): Promise<void> {
++  // Shared by the Ask box (no args → uses the bound question/intent) and the
++  // inbox Investigate/Draft buttons (pass q/intent/subject; recordHistory off).
++  async function ask(opts: { q?: string; intent?: Intent; subject?: { type: 'ticket'; id: string }; recordHistory?: boolean } = {}): Promise<void> {
+     const t = token.trim();
+     if (authMode === 'token' && !t) {
+       toast('Paste a bearer token in the header first.');
+       tokenEl?.focus();
+       return;
+     }
+-    const q = question.trim();
++    const q = (opts.q ?? question).trim();
++    const useIntent: Intent = opts.intent ?? intent;
++    const recordHistory = opts.recordHistory ?? true;
+     if (!q) { questionEl?.focus(); return; }
+ 
+     resetAnswer();
+@@ -239,7 +288,7 @@
+       const res = await fetch('/api/support/ask', {
+         method: 'POST',
+         headers,
+-        body: JSON.stringify({ question: q, intent }),
++        body: JSON.stringify({ question: q, intent: useIntent, ...(opts.subject ? { subject: opts.subject } : {}) }),
+       });
+       body = await res.json();
+       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+@@ -272,8 +321,8 @@
+       showTerminal(term.error ? `${term.stage}: ${term.error}` : term.stage, term.stage !== 'ok' && term.stage !== 'cancelled');
+       scheduleRender();
+       if (/\[customer:\d+\]/.test(rawAnswer)) revealVisible = true;
+-      if (term.stage === 'ok' && rawAnswer.trim()) {
+-        pushHistoryEntry({ question: q, answer: rawAnswer, intent, keyId: currentKeyId });
++      if (term.stage === 'ok' && rawAnswer.trim() && recordHistory) {
++        pushHistoryEntry({ question: q, answer: rawAnswer, intent: useIntent, keyId: currentKeyId });
+       }
+       finish();
+     });
+@@ -354,6 +403,138 @@
+     }
+   }
+ 
++  // --- inbox flow ------------------------------------------------------------
++  async function apiGet(path: string): Promise<Record<string, unknown>> {
++    const t = token.trim();
++    const headers: Record<string, string> = {};
++    if (t) headers['Authorization'] = `Bearer ${t}`;
++    const res = await fetch(path, { headers });
++    const body = await res.json().catch(() => ({}));
++    if (!res.ok) throw new Error((body as { error?: string }).error || `HTTP ${res.status}`);
++    return body as Record<string, unknown>;
++  }
++
++  function setMode(m: Mode): void {
++    if (mode === m) return;
++    // Tear down any in-flight stream before swapping answer surfaces, else the
++    // EventSource keeps mutating the shared rawAnswer and bleeds into the other
++    // view (the two answer panels share one answerEl binding).
++    if (streaming) cancel();
++    mode = m;
++    if (m === 'inbox') {
++      if (!tickets.length) loadTickets();
++      startSummaryPolling();
++    } else {
++      stopSummaryPolling();
++    }
++  }
++
++  async function loadTickets(): Promise<void> {
++    inboxLoading = true;
++    try {
++      const data = await apiGet(`/api/support/tickets?limit=${ticketLimit}`);
++      tickets = (data.tickets as Ticket[]) || [];
++      hubId = (data.hubId as string) || '';
++      investigateProperty = (data.investigateProperty as string) || '';
++      const te = data.ticketsError as { message?: string } | null;
++      ticketsError = te ? (te.message || 'HubSpot error') : null;
++    } catch (err) {
++      ticketsError = (err as Error).message;
++      tickets = [];
++    } finally {
++      inboxLoading = false;
++    }
++  }
++
++  function ticketUrlFor(id: string): string {
++    return hubId ? `https://app.hubspot.com/contacts/${hubId}/ticket/${id}` : `ticket:${id}`;
++  }
++
++  async function selectTicket(id: string): Promise<void> {
++    // Switching ticket mid-stream would leave the previous run writing into the
++    // shared rawAnswer under the new ticket's detail — cancel it first.
++    if (streaming) cancel();
++    selectedId = id;
++    selectedTicket = null;
++    selectedEngagements = [];
++    selectedCapped = false;
++    noteBody = null;
++    cachedLabel = '';
++    detailLoading = true;
++    resetAnswer();
++    try {
++      const data = await apiGet(`/api/support/tickets/${id}`);
++      if (selectedId !== id) return; // superseded by a newer selection
++      selectedTicket = data.ticket as Ticket;
++      selectedEngagements = (data.engagements as Engagement[]) || [];
++      selectedCapped = !!data.capped;
++      if (data.hubId) hubId = data.hubId as string;
++    } catch (err) {
++      toast(`Failed to load ticket: ${(err as Error).message}`);
++      detailLoading = false;
++      return;
++    }
++    detailLoading = false;
++    // Re-show the most recent cached Investigate/Draft for this ticket (no keyId
++    // is stored, so reveal isn't offered on cached output).
++    try {
++      const r = await apiGet(`/api/support/results/${id}`);
++      // Bail if the user re-selected another ticket or kicked off a live run
++      // during the awaits — don't clobber the current answer with stale cache.
++      if (selectedId !== id || streaming) return;
++      const results = (r.results as CachedResult[]) || [];
++      if (results.length) {
++        const latest = results.slice().sort((a, b) => (b.finishedAt || 0) - (a.finishedAt || 0))[0];
++        rawAnswer = latest.body;
++        cachedLabel = `cached ${latest.intent}`;
++        scheduleRender();
++      }
++    } catch { /* no cache yet */ }
++  }
++
++  async function runTicketAction(actionIntent: Intent): Promise<void> {
++    if (!selectedId) return;
++    cachedLabel = '';
++    await ask({ q: `${ticketUrlFor(selectedId)} ${actionIntent}`, intent: actionIntent, subject: { type: 'ticket', id: selectedId }, recordHistory: false });
++  }
++
++  async function viewNote(): Promise<void> {
++    if (!selectedId) return;
++    try {
++      const data = await apiGet(`/api/support/tickets/${selectedId}/note`);
++      noteBody = (data.body as string) || '';
++    } catch (err) {
++      toast(`No AI note: ${(err as Error).message}`);
++    }
++  }
++
++  async function loadSummary(): Promise<void> {
++    try { summary = (await apiGet('/api/support/investigate-summary')) as unknown as Summary; }
++    catch { /* poller may be disabled; hero just hides */ }
++  }
++  function startSummaryPolling(): void {
++    loadSummary();
++    if (!summaryTimer) summaryTimer = setInterval(loadSummary, 10_000);
++  }
++  function stopSummaryPolling(): void {
++    if (summaryTimer) { clearInterval(summaryTimer); summaryTimer = null; }
++  }
++
++  function ticketSubject(t: Ticket): string {
++    return String(t.properties?.subject || '(no subject)');
++  }
++  // HubSpot returns datetime props as either epoch-ms strings or ISO strings;
++  // handle both. Returns '' for missing/unparseable so the row hides the chip.
++  function ticketAge(t: Ticket): string {
++    const v = t.properties?.hs_lastmodifieddate;
++    if (!v) return '';
++    const ms = /^\d+$/.test(String(v)) ? Number(v) : Date.parse(String(v));
++    return Number.isFinite(ms) && ms > 0 ? relTime(ms) : '';
++  }
++  function isFlagged(t: Ticket): boolean {
++    return !!(investigateProperty && t.properties?.[investigateProperty] === 'true');
++  }
++
+   // --- lifecycle -------------------------------------------------------------
+   onMount(() => {
+     history = loadHistory();
+@@ -385,6 +566,7 @@
+     return () => {
+       document.removeEventListener('keydown', onKey);
+       finish();
++      stopSummaryPolling();
+     };
+   });
+ 
+@@ -416,10 +598,16 @@
+         </span>
+       </div>
+       <div class="hero-actions">
+-        <button class="ghost-btn" type="button" onclick={() => drawerOpen = !drawerOpen}>
+-          ⌖ recents
+-          {#if history.length > 0}<span class="badge-count">{history.length}</span>{/if}
+-        </button>
++        <div class="mode-toggle" role="group" aria-label="Support view">
++          <button class="mode-btn" class:active={mode === 'ask'} aria-pressed={mode === 'ask'} type="button" onclick={() => setMode('ask')}>Ask</button>
++          <button class="mode-btn" class:active={mode === 'inbox'} aria-pressed={mode === 'inbox'} type="button" onclick={() => setMode('inbox')}>Inbox</button>
++        </div>
++        {#if mode === 'ask'}
++          <button class="ghost-btn" type="button" onclick={() => drawerOpen = !drawerOpen}>
++            ⌖ recents
++            {#if history.length > 0}<span class="badge-count">{history.length}</span>{/if}
++          </button>
++        {/if}
+         {#if authMode === 'token'}
+           <input
+             bind:this={tokenEl}
+@@ -438,6 +626,7 @@
+     </div>
+   </section>
+ 
++  {#if mode === 'ask'}
+   <section class="panel ask-panel">
+     <div class="panel-title"><span>Ask</span></div>
+     <textarea
+@@ -453,7 +642,7 @@
+         <option value="draft">draft reply</option>
+         <option value="reply">reply</option>
+       </select>
+-      <button class="primary-btn" disabled={streaming} onclick={ask}>Ask →</button>
++      <button class="primary-btn" disabled={streaming} onclick={() => ask()}>Ask →</button>
+       {#if streaming}
+         <button class="ghost-btn" type="button" onclick={cancel}>Cancel</button>
+       {/if}
+@@ -478,6 +667,11 @@
+       {/if}
+     </div>
+   </section>
++  {/if}
++
++  {#if mode === 'inbox'}
++    {@render inbox()}
++  {/if}
+ 
+   {#if revealVisible}
+     <section class="panel">
+@@ -554,6 +748,116 @@
+   {/if}
+ </aside>
+ 
++{#snippet inbox()}
++  <section class="panel inbox-status">
++    <div class="panel-title">
++      <span>HubSpot tickets</span>
++      <button class="ghost-btn sm" type="button" disabled={inboxLoading} onclick={loadTickets}>
++        {inboxLoading ? 'loading…' : '↻ refresh'}
++      </button>
++    </div>
++    <div class="status-row">
++      {#if summary?.lastScan}
++        <span class="stat"><b>{summary.lastScan.scanned}</b> scanned</span>
++        <span class="stat"><b>{summary.lastScan.investigated}</b> investigated</span>
++        <span class="stat"><b>{summary.lastScan.skipped}</b> skipped</span>
++        <span class="stat" class:err={summary.lastScan.errors > 0}><b>{summary.lastScan.errors}</b> errors</span>
++        <span class="stat muted">
++          {summary.inProgress ? 'scanning…' : (summary.lastScan.finishedAt ? `last scan ${relTime(summary.lastScan.finishedAt)}` : '')}
++        </span>
++        {#if summary.lastScan.error}<span class="stat err" title={summary.lastScan.error}>scan error</span>{/if}
++      {:else}
++        <span class="stat muted">auto-investigate idle (set HUBSPOT_AUTO_INVESTIGATE=true to enable)</span>
++      {/if}
++    </div>
++  </section>
++
++  <div class="inbox-grid">
++    <section class="panel inbox-list">
++      <div class="filter-bar">
++        <div class="seg">
++          <button class="seg-btn" class:active={inboxFilter === 'all'} type="button" onclick={() => inboxFilter = 'all'}>All</button>
++          <button class="seg-btn" class:active={inboxFilter === 'flagged'} type="button" onclick={() => inboxFilter = 'flagged'}>AI-flagged</button>
++        </div>
++        <input class="search-input" type="search" placeholder="search subject / content" bind:value={inboxSearch} />
++      </div>
++      {#if ticketsError}
++        <div class="terminal error">{ticketsError}</div>
++      {/if}
++      {#if inboxLoading && tickets.length === 0}
++        <div class="list-empty">loading tickets…</div>
++      {:else if filteredTickets.length === 0}
++        <div class="list-empty">no tickets{inboxSearch || inboxFilter === 'flagged' ? ' match the filter' : ''}</div>
++      {:else}
++        <ul class="ticket-list">
++          {#each filteredTickets as t (t.id)}
++            <li>
++              <button type="button" class="ticket-row" class:active={t.id === selectedId} onclick={() => selectTicket(t.id)}>
++                <span class="ticket-ico">TKT</span>
++                <span class="ticket-main">
++                  <span class="ticket-subj">{ticketSubject(t)}</span>
++                  <span class="ticket-meta">
++                    {#if t.properties?.hs_pipeline_stage}<span class="chip">{t.properties.hs_pipeline_stage}</span>{/if}
++                    {#if isFlagged(t)}<span class="chip ai">AI</span>{/if}
++                    {#if ticketAge(t)}<span class="ticket-time">{ticketAge(t)}</span>{/if}
++                  </span>
++                </span>
++              </button>
++            </li>
++          {/each}
++        </ul>
++      {/if}
++    </section>
++
++    <section class="panel inbox-detail">
++      {#if !selectedId}
++        <div class="list-empty">select a ticket to view its detail and run Investigate / Draft</div>
++      {:else if detailLoading}
++        <div class="list-empty">loading ticket…</div>
++      {:else if selectedTicket}
++        <div class="detail-head">
++          <div class="detail-title">{ticketSubject(selectedTicket)}</div>
++          <a class="ghost-btn sm" href={ticketUrlFor(selectedTicket.id)} target="_blank" rel="noreferrer noopener">open in HubSpot ↗</a>
++        </div>
++        <div class="detail-actions">
++          <button class="primary-btn" disabled={streaming} onclick={() => runTicketAction('investigate')}>Investigate</button>
++          <button class="ghost-btn" disabled={streaming} onclick={() => runTicketAction('draft')}>Draft reply</button>
++          <button class="ghost-btn" type="button" onclick={viewNote}>View AI note</button>
++          {#if streaming}<button class="ghost-btn" type="button" onclick={cancel}>Cancel</button>{/if}
++          {#if cachedLabel}<span class="chip cached">{cachedLabel}</span>{/if}
++        </div>
++
++        {#if selectedTicket.properties?.content}
++          <div class="detail-body">{selectedTicket.properties.content}</div>
++        {/if}
++
++        <div class="panel-body">
++          <div bind:this={answerEl} class="answer placeholder">Run Investigate or Draft to see the streamed answer here.</div>
++          {#if terminal}<div class="terminal" class:error={terminal.isError}>{terminal.text}</div>{/if}
++        </div>
++
++        {#if noteBody}
++          <div class="note-box">
++            <div class="note-head">AI investigation note</div>
++            <div class="note-body">{noteBody}</div>
++          </div>
++        {/if}
++
++        <div class="timeline">
++          <div class="timeline-head">Timeline {selectedCapped ? '(truncated — too many engagements)' : `(${selectedEngagements.length})`}</div>
++          {#each selectedEngagements as e}
++            <div class="tl-item">
++              <span class="tl-type">{e.type}{e.isInvestigationNote ? ' · AI' : ''}</span>
++              {#if e.timestamp}<span class="tl-time">{relTime(e.timestamp)}</span>{/if}
++              <span class="tl-preview">{e.bodyPreview}</span>
++            </div>
++          {/each}
++        </div>
++      {/if}
++    </section>
++  </div>
++{/snippet}
++
+ <style>
+   :global(:root) {
+     --support-accent: #2dd4bf;
+@@ -959,4 +1263,81 @@
+     cursor: pointer;
+   }
+   .drawer-clear:hover { color: var(--danger); border-color: var(--danger); }
++
++  /* --- inbox sub-view ------------------------------------------------------ */
++  .mode-toggle { display: inline-flex; border: 1px solid var(--border-primary); border-radius: 6px; overflow: hidden; }
++  .mode-btn {
++    background: transparent; color: var(--text-muted); border: 0;
++    padding: 5px 12px; font-size: 11px; cursor: pointer;
++    font-family: 'IBM Plex Mono', monospace;
++  }
++  .mode-btn.active { background: var(--support-accent); color: var(--bg-deep); font-weight: 600; }
++
++  .ghost-btn.sm { padding: 3px 8px; font-size: 10px; }
++
++  .status-row { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; padding: 4px 2px; }
++  .stat { font-size: 12px; color: var(--text-primary); }
++  .stat b { color: var(--text-heading); }
++  .stat.muted { color: var(--text-muted); }
++  .stat.err b, .stat.err { color: var(--danger); }
++
++  .inbox-grid { display: grid; grid-template-columns: minmax(280px, 360px) 1fr; gap: 16px; align-items: start; }
++  @media (max-width: 820px) { .inbox-grid { grid-template-columns: 1fr; } }
++
++  .filter-bar { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
++  .seg { display: inline-flex; border: 1px solid var(--border-primary); border-radius: 6px; overflow: hidden; }
++  .seg-btn { background: transparent; color: var(--text-muted); border: 0; padding: 4px 10px; font-size: 11px; cursor: pointer; }
++  .seg-btn.active { background: var(--support-accent-soft); color: var(--support-accent); }
++  .search-input {
++    flex: 1; min-width: 140px; background: var(--bg-deep);
++    border: 1px solid var(--border-primary); color: var(--text-primary);
++    padding: 5px 10px; border-radius: 6px; font-size: 12px;
++  }
++  .search-input:focus { outline: none; border-color: var(--support-accent); }
++
++  .list-empty { color: var(--text-muted); font-size: 12px; padding: 16px 4px; }
++
++  .ticket-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 60vh; overflow-y: auto; }
++  .ticket-row {
++    display: flex; gap: 10px; align-items: flex-start; width: 100%; text-align: left;
++    background: var(--bg-deep); border: 1px solid var(--border-primary); border-radius: 8px;
++    padding: 8px 10px; cursor: pointer; color: var(--text-primary);
++  }
++  .ticket-row:hover { border-color: var(--support-accent-dim); }
++  .ticket-row.active { border-color: var(--support-accent); background: var(--support-accent-soft); }
++  .ticket-ico {
++    font-family: 'IBM Plex Mono', monospace; font-size: 9px; font-weight: 700;
++    color: var(--support-accent); border: 1px solid var(--support-accent-dim);
++    border-radius: 4px; padding: 2px 4px; margin-top: 1px;
++  }
++  .ticket-main { display: grid; gap: 4px; min-width: 0; flex: 1; }
++  .ticket-subj { font-size: 12px; color: var(--text-heading); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
++  .ticket-meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
++  .ticket-time { font-size: 10px; color: var(--text-muted); }
++  .chip {
++    font-size: 10px; padding: 1px 6px; border-radius: 999px;
++    border: 1px solid var(--border-primary); color: var(--text-muted);
++  }
++  .chip.ai { color: var(--support-accent); border-color: var(--support-accent-dim); }
++  .chip.cached { color: var(--info); border-color: var(--info); }
++
++  .detail-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
++  .detail-title { font-size: 14px; font-weight: 600; color: var(--text-heading); }
++  .detail-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
++  .detail-body {
++    background: var(--bg-deep); border: 1px solid var(--border-primary); border-radius: 8px;
++    padding: 10px 12px; font-size: 12px; color: var(--text-primary);
++    white-space: pre-wrap; max-height: 220px; overflow-y: auto; margin-bottom: 12px;
++  }
++
++  .note-box { border: 1px solid var(--support-accent-dim); border-radius: 8px; margin: 12px 0; }
++  .note-head { background: var(--support-accent-soft); color: var(--support-accent); font-size: 11px; padding: 5px 10px; }
++  .note-body { padding: 10px 12px; font-size: 12px; white-space: pre-wrap; color: var(--text-primary); max-height: 260px; overflow-y: auto; }
++
++  .timeline { margin-top: 14px; border-top: 1px solid var(--border-primary); padding-top: 10px; }
++  .timeline-head { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
++  .tl-item { display: grid; grid-template-columns: auto auto 1fr; gap: 8px; align-items: baseline; padding: 4px 0; font-size: 11px; border-bottom: 1px dashed var(--border-primary); }
++  .tl-type { color: var(--support-accent); font-family: 'IBM Plex Mono', monospace; }
++  .tl-time { color: var(--text-muted); }
++  .tl-preview { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+ </style>
+diff --git a/src/dashboard/components/TokenGate.svelte b/src/dashboard/components/TokenGate.svelte
+new file mode 100644
+index 0000000..eee0440
+--- /dev/null
++++ b/src/dashboard/components/TokenGate.svelte
+@@ -0,0 +1,92 @@
++<script lang="ts">
++  // Minimal access screen shown when there's no token or the token is unknown.
++  // Submitting stores the token and re-runs /api/whoami; App.svelte then routes
++  // to the support-only or full dashboard based on the returned scopes.
++  import { setToken, getToken, getScopes, isReady } from '../stores/session.svelte';
++
++  let value = $state<string>(getToken());
++  let attempted = $state<boolean>(false);
++
++  function submit(): void {
++    attempted = true;
++    setToken(value);
++  }
++
++  // A token was tried, whoami came back, and it granted nothing → reject it.
++  let invalid = $derived(attempted && isReady() && getToken().length > 0 && getScopes().length === 0);
++</script>
++
++<div class="gate">
++  <div class="card">
++    <h1>Orch</h1>
++    <p class="sub">Enter your access token to continue.</p>
++    <input
++      type="password"
++      bind:value
++      placeholder="Bearer token"
++      autocomplete="off"
++      onkeydown={(e) => { if (e.key === 'Enter') submit(); }}
++    />
++    <button onclick={submit} disabled={!value.trim()}>Continue</button>
++    {#if invalid}
++      <p class="err">That token isn't recognized. Check it and try again.</p>
++    {/if}
++  </div>
++</div>
++
++<style>
++  .gate {
++    min-height: 100vh;
++    display: flex;
++    align-items: center;
++    justify-content: center;
++    background: var(--bg-deep, #0d1117);
++    padding: 24px;
++  }
++  .card {
++    width: 100%;
++    max-width: 360px;
++    background: var(--bg-secondary, #161b22);
++    border: 1px solid var(--border, #30363d);
++    border-radius: 12px;
++    padding: 28px 24px;
++    text-align: center;
++  }
++  h1 {
++    margin: 0 0 4px;
++    font-size: 22px;
++    color: var(--text-primary, #e6edf3);
++  }
++  .sub {
++    margin: 0 0 18px;
++    font-size: 13px;
++    color: var(--text-muted, #8b949e);
++  }
++  input {
++    width: 100%;
++    padding: 10px 12px;
++    margin-bottom: 12px;
++    background: var(--bg-deep, #0d1117);
++    border: 1px solid var(--border, #30363d);
++    border-radius: 8px;
++    color: var(--text-primary, #e6edf3);
++    font-family: 'IBM Plex Mono', monospace;
++    font-size: 13px;
++  }
++  button {
++    width: 100%;
++    padding: 10px 12px;
++    background: #2dd4bf;
++    color: #04211d;
++    border: none;
++    border-radius: 8px;
++    font-weight: 600;
++    cursor: pointer;
++  }
++  button:disabled { opacity: 0.5; cursor: not-allowed; }
++  .err {
++    margin: 12px 0 0;
++    font-size: 12px;
++    color: #f85149;
++  }
++</style>
+diff --git a/src/dashboard/stores/session.svelte.ts b/src/dashboard/stores/session.svelte.ts
+new file mode 100644
+index 0000000..481faba
+--- /dev/null
++++ b/src/dashboard/stores/session.svelte.ts
+@@ -0,0 +1,75 @@
++// Session / auth store — the single source of truth for the access token and
++// the scopes it grants. Drives App.svelte's render gate (token screen vs
++// support-only vs full admin dashboard).
++//
++// A one-time global fetch interceptor injects the token into every /api/*
++// request and drops us back to the token screen on 401. Patching fetch here
++// (rather than threading a wrapper through ~30 call sites in api.ts + the
++// stores) guarantees no request is missed.
++
++const TOKEN_KEY = 'orch/token';
++const LEGACY_KEY = 'bb-support-web/token'; // SupportPage's old key — migrate it once
++
++function initialToken(): string {
++  if (typeof localStorage === 'undefined') return '';
++  const t = localStorage.getItem(TOKEN_KEY);
++  if (t) return t;
++  const legacy = localStorage.getItem(LEGACY_KEY);
++  if (legacy) {
++    try { localStorage.setItem(TOKEN_KEY, legacy); } catch { /* quota */ }
++    return legacy;
++  }
++  return '';
++}
++
++let token = $state<string>(initialToken());
++let scopes = $state<string[]>([]);
++let ready = $state<boolean>(false); // whoami has resolved at least once
++
++if (typeof window !== 'undefined' && !(window as { __orchFetchPatched?: boolean }).__orchFetchPatched) {
++  (window as { __orchFetchPatched?: boolean }).__orchFetchPatched = true;
++  const orig = window.fetch.bind(window);
++  window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
++    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
++    const isApi = url.startsWith('/api/') || url.includes(`//${location.host}/api/`);
++    let opts = init;
++    // Skip Request objects (none in this app) — their headers are immutable here.
++    if (isApi && token && !(input instanceof Request)) {
++      const headers = new Headers(init?.headers);
++      if (!headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`);
++      opts = { ...init, headers };
++    }
++    const res = await orig(input, opts);
++    // 401 = token absent/invalid → force re-auth. (403 = valid token missing a
++    // scope; that's an expected per-route denial, don't nuke the whole session.)
++    if (isApi && res.status === 401 && !url.includes('/api/whoami')) {
++      scopes = [];
++      ready = true;
++    }
++    return res;
++  };
++}
++
++export function getToken(): string { return token; }
++export function getScopes(): string[] { return scopes; }
++export function isReady(): boolean { return ready; }
++export function isAdmin(): boolean { return scopes.includes('admin') || scopes.includes('*'); }
++export function canSupport(): boolean { return isAdmin() || scopes.includes('support'); }
++
++export async function loadWhoami(): Promise<void> {
++  try {
++    const res = await fetch('/api/whoami');
++    const data = res.ok ? await res.json() : null;
++    scopes = data && Array.isArray(data.scopes) ? data.scopes : [];
++  } catch {
++    scopes = [];
++  } finally {
++    ready = true;
++  }
++}
++
++export function setToken(t: string): void {
++  token = t.trim();
++  try { localStorage.setItem(TOKEN_KEY, token); } catch { /* quota */ }
++  loadWhoami();
++}
+diff --git a/src/dashboard/stores/tasks.svelte.ts b/src/dashboard/stores/tasks.svelte.ts
+index defd72f..c2edf74 100644
+--- a/src/dashboard/stores/tasks.svelte.ts
++++ b/src/dashboard/stores/tasks.svelte.ts
+@@ -84,8 +84,8 @@ export async function fetchMachineId() {
+   } catch {}
+ }
+ 
+-// Fetch on module load
+-fetchMachineId();
++// Note: fetchMachineId() is invoked from App.svelte's admin bootstrap (not at
++// module load) so a support/anon session doesn't fire an admin-gated request.
+ 
+ export async function fetchTasks() {
+   try {
+diff --git a/src/dashboard/stores/websocket.svelte.ts b/src/dashboard/stores/websocket.svelte.ts
+index b3d02e1..74ad2e6 100644
+--- a/src/dashboard/stores/websocket.svelte.ts
++++ b/src/dashboard/stores/websocket.svelte.ts
+@@ -1,4 +1,5 @@
+ import type { Notification, OrchestratorState, Task } from '../lib/types';
++import { getToken } from './session.svelte';
+ 
+ // WebSocket connection state
+ let ws: WebSocket | null = $state(null);
+@@ -33,8 +34,12 @@ export function setOrchestratorHandler(handler: OrchestratorHandler) {
+ 
+ export function connect() {
+   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+-  // Use location.host - Vite proxies /ws to backend in dev
+-  ws = new WebSocket(`${protocol}//${location.host}/ws`);
++  // Use location.host - Vite proxies /ws to backend in dev. The token rides as
++  // a query param (WebSocket can't set Authorization); the server rejects the
++  // upgrade unless it carries the admin scope.
++  const token = getToken();
++  const qs = token ? `?token=${encodeURIComponent(token)}` : '';
++  ws = new WebSocket(`${protocol}//${location.host}/ws${qs}`);
+ 
+   ws.onopen = () => {
+     connected = true;
+diff --git a/src/server/auth.ts b/src/server/auth.ts
+new file mode 100644
+index 0000000..ed078e8
+--- /dev/null
++++ b/src/server/auth.ts
+@@ -0,0 +1,90 @@
++// Shared token + scope auth for orch's HTTP/WS surface.
++//
++// Tokens live in ~/.claude/bb-support-web/tokens.json (the same file bb-support
++// uses, so support tokens keep working). Each entry carries a `scopes` list:
++//   - ["support"]        → may use /api/support/* only
++//   - ["admin"] / ["*"]  → full access (admin satisfies every scope check)
++// A legacy entry with no `scopes` defaults to ["support"] (least privilege), so
++// pre-existing support tokens don't silently gain admin.
++//
++// Used by:
++//   - index.ts requireScopes middleware (gates every non-support /api/* on admin)
++//   - index.ts /ws upgrade gate (admin only)
++//   - index.ts GET /api/whoami (reports the caller's scopes to the SPA)
++//   - support.ts bearerAuth (support scope, admin allowed)
++
++import type { Request } from 'express';
++import { readFileSync } from 'node:fs';
++import { homedir } from 'node:os';
++import { join } from 'node:path';
++
++const DATA_DIR = process.env.BB_SUPPORT_DATA_DIR || join(homedir(), '.claude', 'bb-support-web');
++export const TOKENS_FILE = join(DATA_DIR, 'tokens.json');
++
++export type TokenEntry = { name?: string; createdAt?: string; scopes: string[] };
++// Record (not Map) because tokens.json deserializes as a plain object. Every
++// lookup MUST go through Object.hasOwn so prototype keys (constructor,
++// __proto__, toString) can't return a truthy entry and bypass auth.
++export type TokenMap = Record<string, TokenEntry>;
++
++export function loadTokens(path = TOKENS_FILE): TokenMap {
++  try {
++    const parsed = JSON.parse(readFileSync(path, 'utf8'));
++    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
++    const out: TokenMap = {};
++    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
++      if (v && typeof v === 'object' && !Array.isArray(v)) {
++        const entry = v as { name?: unknown; createdAt?: unknown; scopes?: unknown };
++        const scopes = Array.isArray(entry.scopes)
++          ? entry.scopes.filter((s): s is string => typeof s === 'string')
++          : [];
++        out[k] = {
++          name: typeof entry.name === 'string' ? entry.name : undefined,
++          createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : undefined,
++          // Least-privilege default: a token without explicit scopes is support-only.
++          scopes: scopes.length > 0 ? scopes : ['support'],
++        };
++      }
++    }
++    return out;
++  } catch (err) {
++    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
++    throw err;
++  }
++}
++
++// Extract a bearer token from the Authorization header, falling back to the
++// `?token=` query param (EventSource/WebSocket can't set custom headers).
++export function tokenFromRequest(req: Request): string | null {
++  const header = req.headers.authorization || '';
++  const m = header.match(/^Bearer\s+(.+)$/);
++  if (m) return m[1];
++  const q = req.query?.token;
++  if (typeof q === 'string' && q) return q;
++  return null;
++}
++
++// Extract a token from a raw query string (WS upgrade — no Express Request yet).
++export function tokenFromUrl(url: string | undefined): string | null {
++  if (!url) return null;
++  const qi = url.indexOf('?');
++  if (qi === -1) return null;
++  const t = new URLSearchParams(url.slice(qi + 1)).get('token');
++  return t || null;
++}
++
++export function lookupToken(tokens: TokenMap, token: string | null): TokenEntry | null {
++  if (!token) return null;
++  return Object.hasOwn(tokens, token) ? tokens[token] : null;
++}
++
++export function isAdminEntry(entry: TokenEntry | null): boolean {
++  return !!entry && (entry.scopes.includes('admin') || entry.scopes.includes('*'));
++}
++
++// admin/* satisfies any required scope; otherwise the scope must be listed.
++export function hasScope(entry: TokenEntry | null, required: string): boolean {
++  if (!entry) return false;
++  if (isAdminEntry(entry)) return true;
++  return entry.scopes.includes(required);
++}
+diff --git a/src/server/hubspot.ts b/src/server/hubspot.ts
+new file mode 100644
+index 0000000..55421cb
+--- /dev/null
++++ b/src/server/hubspot.ts
+@@ -0,0 +1,158 @@
++// /api/support/tickets/* — read-only HubSpot ticket endpoints backing the
++// Support → Inbox view. Ported (tickets-only) from bb-dashboard
++// scripts/server.mjs. Conversation/thread routes are intentionally omitted.
++//
++// Mounted from mountSupport() so these inherit the same bearer/anonymous auth
++// middleware and the /api/support security headers. Creds + the hubspot.mjs
++// client are dynamic-imported via ../core/support-paths.js (no static
++// dependency on bb-skills at build time).
++
++import type { Express, RequestHandler } from 'express';
++import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
++import { join } from 'node:path';
++import { asyncHandler } from '../core/error-handler.js';
++import { createLogger } from '../core/logger.js';
++import { config } from '../core/config.js';
++import { loadHubspot, loadHubspotCreds, RESULTS_DIR } from '../core/support-paths.js';
++import { getInvestigateSummary } from '../core/hubspot-poller.js';
++
++const log = createLogger('hubspot');
++
++// hsFetch (bb-support/scripts/hubspot.mjs) attaches `err.status` on every
++// non-2xx. Single source of truth — fall through to 'error' rather than
++// parsing the message string, which would rot if the format changes.
++type HsErr = { kind: 'rate-limited' | 'unauthorized' | 'error'; status: number | null; message: string };
++function classifyHsErr(err: unknown): HsErr | null {
++  if (!err) return null;
++  const e = err as { status?: number | null; message?: string };
++  const status = e.status ?? null;
++  if (status === 429) return { kind: 'rate-limited', status: 429, message: 'HubSpot rate limit hit — retry shortly.' };
++  if (status === 401) return { kind: 'unauthorized', status: 401, message: 'HubSpot token rejected (401).' };
++  return { kind: 'error', status, message: String(e.message || err).slice(0, 200) };
++}
++
++// Upstream HubSpot 4xx → 502 (we proxied a bad request); everything else
++// (5xx, network, our own caps) → 500.
++function upstreamStatus(err: unknown): number {
++  const s = (err as { status?: number }).status;
++  return s !== undefined && s >= 400 && s < 500 ? 502 : 500;
++}
++
++export function mountHubspot(app: Express, opts: { auth: RequestHandler }): void {
++  const { auth } = opts;
++
++  // Recent tickets for the inbox list. allSettled-free: tickets-only here, so a
++  // failure is reported via `ticketsError` (200 with empty list) so the UI can
++  // distinguish "no tickets" from "HubSpot down".
++  app.get('/api/support/tickets', auth, asyncHandler(async (req, res) => {
++    const limit = Math.max(1, Math.min(parseInt(String(req.query.limit)) || 20, 50));
++    const investigateProperty = config.hubspot.investigateProperty;
++    let hubId: string | null = null;
++    try {
++      const creds = await loadHubspotCreds();
++      if (!creds.token) { res.status(400).json({ error: 'No HubSpot token configured' }); return; }
++      hubId = creds.hubId;
++      // Creds/lib load + the API call are all inside the try so any failure
++      // (missing bb-skills, import error, HubSpot down) lands in ticketsError
++      // rather than a bare 500 — the UI distinguishes "no tickets" from "down".
++      const hub = await loadHubspot();
++      const tickets = await hub.listRecentTickets(creds.token, limit, [investigateProperty]);
++      const pipelineCounts: Record<string, number> = {};
++      for (const t of tickets) {
++        const stage = t.properties?.hs_pipeline_stage || '(unstaged)';
++        pipelineCounts[stage] = (pipelineCounts[stage] || 0) + 1;
++      }
++      res.json({ tickets, pipelineCounts, hubId, investigateProperty, ticketsError: null });
++    } catch (err) {
++      res.json({ tickets: [], pipelineCounts: {}, hubId, investigateProperty, ticketsError: classifyHsErr(err) });
++    }
++  }));
++
++  // Ticket + engagement timeline for the detail pane. Engagement bodies are
++  // HTML emails/notes — stripped to text and truncated to 240 chars server-side.
++  app.get('/api/support/tickets/:id', auth, asyncHandler(async (req, res) => {
++    const id = String(req.params.id);
++    if (!/^\d+$/.test(id)) { res.status(400).json({ error: 'id must be digits' }); return; }
++    const creds = await loadHubspotCreds();
++    if (!creds.token) { res.status(400).json({ error: 'No HubSpot token configured' }); return; }
++    const hub = await loadHubspot();
++    try {
++      const ticket = await hub.getTicket(creds.token, id);
++      // Pagination cap is non-fatal: show the ticket body even when its
++      // engagement history is too long to enumerate.
++      let engagements: Array<{ type: string; timestamp: number | null; ownerId: number | null; bodyPreview: string; isInvestigationNote: boolean }> = [];
++      let capped = false;
++      try {
++        const raw = await hub.getTicketEngagements(creds.token, id);
++        engagements = raw
++          .map((e) => {
++            const body = e.metadata?.body || '';
++            return {
++              type: e.engagement?.type || 'UNKNOWN',
++              timestamp: e.engagement?.timestamp ?? null,
++              ownerId: e.engagement?.ownerId ?? null,
++              bodyPreview: hub.stripHtml(body).slice(0, 240),
++              isInvestigationNote: e.engagement?.type === 'NOTE' && hub.isInvestigationNote(body),
++            };
++          })
++          .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
++      } catch (err) {
++        if ((err as NodeJS.ErrnoException).code === 'ENGAGEMENT_PAGINATION_CAP') capped = true;
++        else throw err;
++      }
++      res.json({ ticket, engagements, capped, hubId: creds.hubId });
++    } catch (err) {
++      res.status(upstreamStatus(err)).json({ error: String((err as Error).message || err) });
++    }
++  }));
++
++  // AI investigation note body (posted by the auto-investigate poller).
++  app.get('/api/support/tickets/:id/note', auth, asyncHandler(async (req, res) => {
++    const id = String(req.params.id);
++    if (!/^\d+$/.test(id)) { res.status(400).json({ error: 'id must be digits' }); return; }
++    const creds = await loadHubspotCreds();
++    if (!creds.token) { res.status(400).json({ error: 'No HubSpot token configured' }); return; }
++    const hub = await loadHubspot();
++    try {
++      const engagements = await hub.getTicketEngagements(creds.token, id);
++      const notes = engagements
++        .filter((e) => e.engagement?.type === 'NOTE' && hub.isInvestigationNote(e.metadata?.body))
++        .sort((a, b) => (b.engagement?.timestamp || 0) - (a.engagement?.timestamp || 0));
++      if (!notes.length) { res.status(404).json({ error: 'No AI investigation note found' }); return; }
++      res.json({ body: notes[0].metadata!.body });
++    } catch (err) {
++      res.status(upstreamStatus(err)).json({ error: String((err as Error).message || err) });
++    }
++  }));
++
++  // Auto-investigate scan summary + recent activity for the status hero.
++  app.get('/api/support/investigate-summary', auth, (_req, res) => {
++    res.json(getInvestigateSummary());
++  });
++
++  // Persisted manual Investigate/Draft runs for a ticket (result cache), so the
++  // inbox can re-show the last run after a reload. Written by support.ts /ask.
++  app.get('/api/support/results/:id', auth, (req, res) => {
++    const id = String(req.params.id);
++    if (!/^\d+$/.test(id)) { res.status(400).json({ error: 'id must be digits' }); return; }
++    try { mkdirSync(RESULTS_DIR, { recursive: true }); } catch { /* best effort */ }
++    if (!existsSync(RESULTS_DIR)) { res.json({ results: [] }); return; }
++    const prefix = `ticket-${id}-`;
++    const results: unknown[] = [];
++    try {
++      for (const name of readdirSync(RESULTS_DIR)) {
++        if (!name.startsWith(prefix) || !name.endsWith('.json')) continue;
++        try { results.push(JSON.parse(readFileSync(join(RESULTS_DIR, name), 'utf8'))); }
++        catch { /* drop unreadable entry */ }
++      }
++    } catch (err) {
++      log.warn('results read failed: ' + (err as Error).message);
++      res.status(500).json({ error: String((err as Error).message || err) });
++      return;
++    }
++    results.sort((a, b) => String((a as { intent?: string }).intent || '').localeCompare(String((b as { intent?: string }).intent || '')));
++    res.json({ results });
++  });
++
++  log.info('/api/support/tickets/* mounted');
++}
+diff --git a/src/server/index.ts b/src/server/index.ts
+index a305e57..05e99df 100644
+--- a/src/server/index.ts
++++ b/src/server/index.ts
+@@ -24,6 +24,7 @@ import {
+   setTerminalPreference,
+ } from '../core/settings.js';
+ import { startPoller } from '../core/poller.js';
++import { runHubspotInvestigateScan, stampCycleCrash } from '../core/hubspot-poller.js';
+ import { getEffectiveRepoMapping, getScannedRepos } from '../core/repo-scanner.js';
+ import { getAuthenticatedUser, getPull, listPullReviewComments, listOrgRepos } from '../core/github-api.js';
+ import { applyStreamingOutput, approveSuggestion, completeTask, createTask, deleteTask, dismissSuggestion, failTask, getAllTasks, getAllTasksWithOutput, getLatestVideoscanWithBatch, getTask, getTasksByIds, getTasksWithPids, pauseTask, pinTask, retryTask, updateTaskContext, updateTaskRepoPath, updateTaskStatus } from '../core/task-queue.js';
+@@ -46,9 +47,14 @@ import { asyncHandler, expressErrorMiddleware, installProcessHandlers } from '..
+ import { adoRouter } from './webhooks/ado.js';
+ import { githubRouter } from './webhooks/github.js';
+ import { mountSupport } from './support.js';
++import { hasScope, isAdminEntry, loadTokens, lookupToken, tokenFromRequest, tokenFromUrl } from './auth.js';
+ 
+ const log = createLogger('server');
+ 
++// Token map for the global API/WS gate. Loaded once at boot (same file +
++// reload-on-restart semantics as mountSupport).
++const apiTokens = loadTokens();
++
+ const __dirname = dirname(fileURLToPath(import.meta.url));
+ 
+ const app = express();
+@@ -57,7 +63,14 @@ const wss = new WebSocketServer({ server, path: '/ws' });
+ 
+ const clients = new Set<WebSocket>();
+ 
+-wss.on('connection', async (ws) => {
++wss.on('connection', async (ws, req) => {
++  // /ws streams internal task output + orchestrator state — admin only.
++  // Support-only clients never open it; reject any non-admin upgrade.
++  const wsEntry = lookupToken(apiTokens, tokenFromUrl(req.url));
++  if (!isAdminEntry(wsEntry)) {
++    ws.close(4403, 'admin scope required');
++    return;
++  }
+   clients.add(ws);
+   try {
+     // Send current tasks with streaming output on connect. Use the shared cache so
+@@ -188,6 +201,42 @@ function broadcastOutput(taskId: number, chunk: string): void {
+ app.use(cors({ origin: [/^https?:\/\/localhost(:\d+)?$/, /^https?:\/\/127\.0\.0\.1(:\d+)?$/] }));
+ app.use(express.json());
+ 
++// --- Global API auth gate ---------------------------------------------------
++// Every /api/* route requires an admin token, except:
++//   - the public allowlist below, and
++//   - /api/support/* (gated inside mountSupport with the support scope, which
++//     also honors BB_SUPPORT_ALLOW_ANONYMOUS).
++// This is what keeps a LAN / support-scoped user out of tasks, repos, terminals,
++// config/credentials, processes, and the orchestrator. Without it, exposing the
++// dashboard on the network would hand every visitor the full internal tool.
++const PUBLIC_API = new Set<string>([
++  '/api/whoami',                 // reports caller scopes to the SPA (drives the token gate)
++  '/api/notifications/incoming', // webhook-like ingestion from external notifiers (no token to present)
++]);
++app.use((req, res, next) => {
++  if (!req.path.startsWith('/api/')) return next();
++  if (PUBLIC_API.has(req.path)) return next();
++  if (req.path === '/api/support' || req.path.startsWith('/api/support/')) return next();
++  const entry = lookupToken(apiTokens, tokenFromRequest(req));
++  if (!entry) {
++    res.status(401).json({ error: 'bearer token required' });
++    return;
++  }
++  if (!hasScope(entry, 'admin')) {
++    res.status(403).json({ error: 'admin scope required' });
++    return;
++  }
++  next();
++});
++
++// Identify the caller's token scopes — drives the SPA's tab/route gating.
++// Public by design: returns { scopes: [] } for no/invalid token so the UI can
++// fall back to its token-entry screen instead of erroring.
++app.get('/api/whoami', (req, res) => {
++  const entry = lookupToken(apiTokens, tokenFromRequest(req));
++  res.json({ name: entry?.name ?? null, scopes: entry?.scopes ?? [] });
++});
++
+ // Dashboard - in dev, redirect to Vite (so a stale dist/dashboard/ from a
+ // previous `pnpm build` can't shadow live source). In prod, serve dist.
+ const distDashboard = process.env.DASHBOARD_DIR || join(__dirname, '../../dist/dashboard');
+@@ -234,8 +283,10 @@ app.get('/health', (_req, res) => {
+ app.use('/webhooks/github', githubRouter);
+ app.use('/webhooks/ado', adoRouter);
+ 
+-// bb-support Q&A flow (ported from bb-support-web).
+-mountSupport(app);
++// bb-support Q&A flow + HubSpot ticket inbox (ported from bb-support-web /
++// bb-dashboard). Pass the real bind so assertBindAuthValid enforces the
++// token/anonymous posture on a non-loopback (LAN) bind.
++mountSupport(app, { bind: config.server.host });
+ 
+ // API for dashboard
+ app.get('/api/tasks', asyncHandler(async (_req, res) => {
+@@ -2183,8 +2234,8 @@ app.use(expressErrorMiddleware);
+ 
+ // Start server
+ installProcessHandlers();
+-server.listen(config.server.port, '127.0.0.1', () => {
+-  log.info(`Orch server listening on port ${config.server.port}`);
++server.listen(config.server.port, config.server.host, () => {
++  log.info(`Orch server listening on ${config.server.host}:${config.server.port}`);
+   log.info(`Dashboard: http://localhost:${config.server.port}`);
+   log.info(`GitHub webhooks: http://localhost:${config.server.port}/webhooks/github`);
+   log.info(`ADO webhooks: http://localhost:${config.server.port}/webhooks/ado`);
+@@ -2236,5 +2287,13 @@ server.listen(config.server.port, '127.0.0.1', () => {
+     startPoller(config.polling.intervalMs).catch(err => log.error('Poller start error', err));
+   }
+ 
++  if (config.hubspot.autoInvestigate) {
++    log.info(`HubSpot auto-investigate enabled (every ${config.hubspot.scanIntervalMs}ms)`);
++    const runScan = () => runHubspotInvestigateScan(config, { log: (e) => log.info(`[hubspot-investigate] ${e.type}`) })
++      .catch((err) => { stampCycleCrash(err); log.error('HubSpot investigate scan failed', err); });
++    setTimeout(runScan, 15_000).unref(); // first scan shortly after boot
++    setInterval(runScan, config.hubspot.scanIntervalMs).unref();
++  }
++
+   startNtfyListener();
+ });
+diff --git a/src/server/support.ts b/src/server/support.ts
+index 2b403f2..3cf490b 100644
+--- a/src/server/support.ts
++++ b/src/server/support.ts
+@@ -31,25 +31,24 @@ import {
+   readFileSync,
+   statSync,
+   unlinkSync,
++  writeFileSync,
+ } from 'node:fs';
+-import { homedir } from 'node:os';
+-import { dirname, join, resolve as resolvePath } from 'node:path';
+-import { fileURLToPath, pathToFileURL } from 'node:url';
++import { dirname, join } from 'node:path';
++import { pathToFileURL } from 'node:url';
+ import { createLogger } from '../core/logger.js';
++import {
++  DATA_DIR, RESULTS_DIR, SCRIPTS_DIR, loadRunSupport,
++  type RunSupportFn,
++} from '../core/support-paths.js';
++import { mountHubspot } from './hubspot.js';
++import { hasScope, loadTokens, lookupToken, tokenFromRequest, type TokenMap } from './auth.js';
+ 
+ const log = createLogger('support');
+ 
+-// Operators can override paths via env. Defaults match the standalone
+-// bb-support-web deployment so existing tokens.json / audit.jsonl keep working.
+-const DATA_DIR = process.env.BB_SUPPORT_DATA_DIR || join(homedir(), '.claude', 'bb-support-web');
+ const KEYS_DIR = join(DATA_DIR, '.keys');
+ const TOKENS_FILE = join(DATA_DIR, 'tokens.json');
+ const AUDIT_FILE = join(DATA_DIR, 'audit.jsonl');
+ 
+-const __dirname = dirname(fileURLToPath(import.meta.url));
+-const SCRIPTS_DIR = process.env.BB_SUPPORT_SCRIPTS_DIR
+-  || resolvePath(__dirname, '..', '..', '..', 'bb-skills', 'bb-support', 'scripts');
+-
+ const ALLOW_ANONYMOUS = process.env.BB_SUPPORT_ALLOW_ANONYMOUS === '1';
+ 
+ // Timings + budgets — match bb-support-web exactly. Tweaking these in isolation
+@@ -74,35 +73,9 @@ function isPrivateOrLoopback(bind: string): boolean {
+   return isLoopback(s) || PRIVATE_IPV4_RE.test(s) || /^fe80:/i.test(s);
+ }
+ 
+-type TokenEntry = { name?: string; createdAt?: string };
+-// Record (not Map) because tokens.json deserializes as a plain object. The
+-// `Object.hasOwn` guard at lookup sites is what protects against prototype-
+-// pollution keys (constructor, __proto__, etc.) returning truthy.
+-type TokenMap = Record<string, TokenEntry>;
+-
+-function loadTokens(path = TOKENS_FILE): TokenMap {
+-  try {
+-    const raw = readFileSync(path, 'utf8');
+-    const parsed = JSON.parse(raw);
+-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+-    // Drop any entry whose value isn't a plausibly-shaped TokenEntry so a
+-    // malformed tokens.json doesn't crash bearerAuth on entry.name access.
+-    const out: TokenMap = {};
+-    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+-      if (v && typeof v === 'object' && !Array.isArray(v)) {
+-        const entry = v as { name?: unknown; createdAt?: unknown };
+-        out[k] = {
+-          name: typeof entry.name === 'string' ? entry.name : undefined,
+-          createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : undefined,
+-        };
+-      }
+-    }
+-    return out;
+-  } catch (err) {
+-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
+-    throw err;
+-  }
+-}
++// Token map + loader live in ./auth.ts (shared with the global API/WS gate).
++// Entries now carry `scopes`; support endpoints require the `support` scope,
++// which `admin`/`*` tokens also satisfy (see hasScope).
+ 
+ // Refuse to expose unauthenticated endpoints. Called once at boot; throws on
+ // misconfiguration so the operator sees the failure before any request lands.
+@@ -165,37 +138,14 @@ function rateLimiter(opts: { windowMs: number; limit: number; keyFn?: (req: Requ
+   };
+ }
+ 
+-// Dynamic-import the bb-support library so orch's TypeScript build doesn't
+-// statically depend on bb-skills. pathToFileURL keeps Windows / MSYS Git Bash
+-// paths un-mangled.
+-export type RunStage = 'ok' | 'ask' | 'claude' | 'cancelled' | 'spawn';
+-type Intent = 'investigate' | 'draft' | 'reply';
+-type Format = 'markdown' | 'html';
+-type RunSupportFn = (opts: {
+-  question: string;
+-  keyFile?: string;
+-  intent?: Intent;
+-  format?: Format;
+-  onChunk: (text: string) => void;
+-  signal?: AbortSignal;
+-}) => Promise<{ stage: RunStage; exitCode: number | null; askStderr: string; claudeStderr: string }>;
+-
++// Dynamic-import the bb-support reveal library so orch's TypeScript build
++// doesn't statically depend on bb-skills. pathToFileURL keeps Windows / MSYS
++// Git Bash paths un-mangled. (run-support + hubspot loaders live in
++// ../core/support-paths.js so the poller can share them.)
+ type ApplyMappingFn = (text: string, mappings: Record<string, string>) => string;
+ 
+-let runSupportQueryCache: RunSupportFn | null = null;
+ let applyMappingCache: ApplyMappingFn | null = null;
+ 
+-async function loadRunSupport(): Promise<RunSupportFn> {
+-  if (runSupportQueryCache) return runSupportQueryCache;
+-  const url = pathToFileURL(join(SCRIPTS_DIR, 'run-support.mjs')).href;
+-  const mod = await import(url);
+-  if (typeof mod.runSupportQuery !== 'function') {
+-    throw new Error(`runSupportQuery export missing from ${url}`);
+-  }
+-  runSupportQueryCache = mod.runSupportQuery as RunSupportFn;
+-  return runSupportQueryCache;
+-}
+-
+ async function loadApplyMapping(): Promise<ApplyMappingFn> {
+   if (applyMappingCache) return applyMappingCache;
+   const url = pathToFileURL(join(SCRIPTS_DIR, 'reveal.mjs')).href;
+@@ -220,6 +170,11 @@ type SupportTerminal =
+   | { stage: 'ok' | 'cancelled' }
+   | { stage: 'ask' | 'claude' | 'spawn'; error: string };
+ 
++// Set when /ask is called from the ticket inbox; drives the on-disk result
++// cache so reopening a ticket re-shows its last Investigate/Draft after a
++// page reload. Absent for plain Q&A asks (no persistence).
++type TicketSubject = { type: 'ticket'; id: string };
++
+ type SupportRun = {
+   controller: AbortController;
+   startedAt: number;
+@@ -230,8 +185,33 @@ type SupportRun = {
+   bufferTruncated: boolean;
+   sseRes: Response | null;
+   terminal: SupportTerminal | null;
++  // Result-cache: full answer accumulated across the run (independent of SSE
++  // attach), bounded by the same 1 MB cap. `subject` keys the cache file.
++  subject: TicketSubject | null;
++  answer: string;
++  answerBytes: number;
++  answerTruncated: boolean;
+ };
+ 
++// Persist a finished ticket Investigate/Draft so the inbox can re-show it on
++// reopen. Overwrite-per-(ticket,intent); no TTL (matches bb-dashboard). Best
++// effort — a failed write only costs the reopen convenience.
++function writeTicketResult(
++  subject: TicketSubject,
++  intent: string,
++  body: string,
++  stage: string,
++): void {
++  if (!body.trim()) return;
++  try {
++    mkdirSync(RESULTS_DIR, { recursive: true });
++    const payload = { type: subject.type, id: subject.id, intent, body, stage, finishedAt: Date.now() };
++    writeFileSync(join(RESULTS_DIR, `ticket-${subject.id}-${intent}.json`), JSON.stringify(payload, null, 2));
++  } catch (err) {
++    log.warn('failed to persist ticket result: ' + (err as Error).message);
++  }
++}
++
+ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
+   // Token file is loaded once at boot; re-issuing tokens requires a server restart.
+   const tokens = loadTokens();
+@@ -255,33 +235,34 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
+     log.info(`/api/support/* loaded with ${Object.keys(tokens).length} bearer token(s) from ${TOKENS_FILE}`);
+   }
+ 
+-  // Bearer auth — Object.hasOwn check is critical: `tokens[m[1]]` alone would
+-  // return Object.prototype members (constructor, __proto__, toString) as
+-  // truthy, bypassing auth. Same posture for anonymous mode below.
++  // Bearer auth — token resolution + prototype-pollution guard live in
++  // ./auth.ts. A valid token must carry the `support` scope (admin/* satisfies
++  // it); a token that exists but lacks the scope gets 403, not 401.
+   const bearerAuth: RequestHandler = (req, res, next) => {
+     const r = req as AuthedRequest;
+-    const header = r.headers.authorization || '';
+-    const m = header.match(/^Bearer\s+(.+)$/);
+-    if (!m) {
++    const tk = tokenFromRequest(r);
++    if (!tk) {
+       res.status(401).json({ error: 'bearer token required' });
+       return;
+     }
+-    const entry = Object.hasOwn(tokens, m[1]) ? tokens[m[1]] : null;
++    const entry = lookupToken(tokens, tk);
+     if (!entry) {
+       res.status(401).json({ error: 'invalid token' });
+       return;
+     }
+-    r.bearerToken = m[1];
++    if (!hasScope(entry, 'support')) {
++      res.status(403).json({ error: 'token lacks support scope' });
++      return;
++    }
++    r.bearerToken = tk;
+     r.tokenName = entry.name || 'unnamed';
+     next();
+   };
+ 
+   const anonymousAuth: RequestHandler = (req, _res, next) => {
+     const r = req as AuthedRequest;
+-    const header = r.headers.authorization || '';
+-    const m = header.match(/^Bearer\s+(.+)$/);
+-    const tk = m ? m[1] : null;
+-    const entry = tk && Object.hasOwn(tokens, tk) ? tokens[tk] : null;
++    const tk = tokenFromRequest(r);
++    const entry = lookupToken(tokens, tk);
+     r.bearerToken = entry ? tk : null;
+     r.tokenName = entry ? (entry.name || 'unnamed') : 'anonymous';
+     next();
+@@ -313,7 +294,7 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
+ 
+   app.post('/api/support/ask', auth, askLimiter, asyncHandler(async (req, res) => {
+     const r = req as AuthedRequest;
+-    const body = (r.body || {}) as { question?: unknown; intent?: unknown };
++    const body = (r.body || {}) as { question?: unknown; intent?: unknown; subject?: unknown };
+     const question = body.question;
+     const intent = body.intent ?? 'investigate';
+     if (!question || typeof question !== 'string') {
+@@ -324,6 +305,19 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
+       res.status(400).json({ error: 'intent must be investigate|draft|reply' });
+       return;
+     }
++    // Optional ticket subject (from the inbox) — keys the result cache. Q&A
++    // asks omit it. Validate strictly so a bad value can't escape the filename.
++    let subject: TicketSubject | null = null;
++    const rawSubject = body.subject;
++    if (rawSubject && typeof rawSubject === 'object') {
++      const s = rawSubject as { type?: unknown; id?: unknown };
++      if (s.type === 'ticket' && typeof s.id === 'string' && /^\d+$/.test(s.id)) {
++        subject = { type: 'ticket', id: s.id };
++      } else {
++        res.status(400).json({ error: 'subject must be { type:"ticket", id:"<digits>" }' });
++        return;
++      }
++    }
+ 
+     let runSupportQuery: RunSupportFn;
+     try {
+@@ -349,6 +343,10 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
+       bufferTruncated: false,
+       sseRes: null,
+       terminal: null,
++      subject,
++      answer: '',
++      answerBytes: 0,
++      answerTruncated: false,
+     };
+     supportRuns.set(runId, run);
+ 
+@@ -368,6 +366,13 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
+       format: 'markdown',
+       signal: controller.signal,
+       onChunk: (chunk: string) => {
++        // Accumulate the full answer for the result cache (independent of SSE
++        // attach), bounded by the same cap so an orphaned run can't pin RSS.
++        if (run.subject && !run.answerTruncated) {
++          const sz = Buffer.byteLength(chunk);
++          if (run.answerBytes + sz > CHUNK_BUFFER_CAP_BYTES) run.answerTruncated = true;
++          else { run.answer += chunk; run.answerBytes += sz; }
++        }
+         if (run.sseRes) {
+           try {
+             run.sseRes.write(`event: chunk\ndata: ${JSON.stringify({ chunk })}\n\n`);
+@@ -401,6 +406,9 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
+           run.sseRes.end();
+         } catch { /* client disconnected mid-write; sse will be reaped */ }
+       }
++      // Persist for inbox reopen — partial output from a non-ok stage is still
++      // useful to revisit (matches bb-dashboard).
++      if (run.subject) writeTicketResult(run.subject, intent, run.answer, terminal.stage);
+       try {
+         appendAudit(
+           'error' in terminal
+@@ -419,6 +427,7 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
+           run.sseRes.end();
+         } catch { /* client disconnected mid-write */ }
+       }
++      if (run.subject) writeTicketResult(run.subject, intent, run.answer, 'spawn');
+       try {
+         appendAudit({
+           ...auditBase, status: 'spawn',
+@@ -593,4 +602,8 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
+     }
+   }, 60_000);
+   keyReaper.unref?.();
++
++  // HubSpot ticket-inbox endpoints — share this module's auth + the
++  // /api/support securityHeaders already applied above.
++  mountHubspot(app, { auth });
+ }
+diff --git a/src/videoscan/LIGHTPANDA-EVALUATION.md b/src/videoscan/LIGHTPANDA-EVALUATION.md
+new file mode 100644
+index 0000000..e2854ee
+--- /dev/null
++++ b/src/videoscan/LIGHTPANDA-EVALUATION.md
+@@ -0,0 +1,48 @@
++# Lightpanda evaluation for videoscan
++
++**Verdict:** Evaluated [Lightpanda](https://github.com/lightpanda-io/browser) as a browser engine for videoscan — **not adopted today**. Revisit when the gating features below land.
++
++## Why we considered it
++
++Lightpanda is a from-scratch, Zig-based headless browser for AI/automation that speaks CDP (Puppeteer/Playwright-compatible) and claims **~16x less memory** (123 MB vs 2 GB for 100 pages) and **~9x faster** than Chromium.
++
++That matters because **memory is videoscan's throughput limiter**. We launch Playwright/Chromium at ~60–150 MB per page, which caps concurrency at 2–8 (`pickInitialConcurrency` / AutoTuner, [scan.mjs](scan.mjs) ~976–1074). A browser that holds pages at a fraction of the RAM could lift that ceiling dramatically. That is the real upside — *if* Lightpanda ever covers what we need.
++
++## Feature gap
++
++The overlap is almost perfectly inverse: Lightpanda supports the baseline videoscan needs, but lacks every advanced affordance videoscan was deliberately built around. Those affordances exist because real publisher targets are consent-gated and lazy-loaded — Lightpanda's exact weak spot.
++
++| Videoscan dependency | Code ref | Lightpanda status |
++|---|---|---|
++| `MutationObserver` (dynamically-injected embeds) | [scan.mjs](scan.mjs) ~760–792 | ❌ not implemented |
++| Scroll-to-trigger lazy embeds | [scan.mjs](scan.mjs) ~706–716 | ❌ not implemented |
++| Click cookie banners + play buttons | [scan.mjs](scan.mjs) ~584–609, 720–758 | ❌ no proper click events |
++| `waitUntil: "networkidle"` | [scan.mjs](scan.mjs) ~851, 915, 940 | ❌ not implemented |
++| Full iframe extraction | throughout | ❌ partial only |
++| `page.pdf()` report generation | [videoscan-runner.ts](../core/videoscan-runner.ts) ~361 | ❌ not implemented |
++| Network interception, JS exec, DOM, cookies, proxy | [scan.mjs](scan.mjs) ~845 | ✅ supported |
++
++## Why not now
++
++For a compliance/monitoring scanner, the costly error is a **false negative** — missing a video that's actually there. A swap to Lightpanda today would trade recall for speed: it would silently drop the consent-gated, scroll-, and click-activated embeds that the unsupported features above were added to catch. The speed/memory win is only realizable on "simple" pages, which are a minority of our targets.
++
++Lightpanda is also self-described **beta** ("you may still encounter errors or crashes"), and Playwright's runtime feature-detection makes its Playwright compatibility fragile across versions — a script that works today may break on a future Playwright bump.
++
++## Revisit trigger
++
++Re-evaluate when Lightpanda's coverage adds **all** of:
++
++- `MutationObserver`
++- `networkidle` wait condition
++- scroll simulation
++- real click events
++- full iframe support
++
++Track via Lightpanda's changelog/roadmap. When met, the cheapest first step is **not** a swap — add a behind-a-flag `--engine lightpanda` path plus a benchmark harness that compares detection recall against Chromium on a known URL sample, and only adopt if recall holds.
++
++## Sources
++
++- https://github.com/lightpanda-io/browser
++- https://lightpanda.io/docs/
++- https://docs.bswen.com/blog/2026-03-19-lightpanda-cdp-puppeteer-playwright/
++- https://www.scrapingbee.com/blog/lightpanda-headless-browser/

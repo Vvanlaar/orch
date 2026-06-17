@@ -31,25 +31,23 @@ import {
   readFileSync,
   statSync,
   unlinkSync,
+  writeFileSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname, join, resolve as resolvePath } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { createLogger } from '../core/logger.js';
+import {
+  DATA_DIR, RESULTS_DIR, SCRIPTS_DIR, loadRunSupport,
+  type RunSupportFn,
+} from '../core/support-paths.js';
+import { mountHubspot } from './hubspot.js';
 import { hasScope, loadTokens, lookupToken, tokenFromRequest, type TokenMap } from './auth.js';
 
 const log = createLogger('support');
 
-// Operators can override paths via env. Defaults match the standalone
-// bb-support-web deployment so existing tokens.json / audit.jsonl keep working.
-const DATA_DIR = process.env.BB_SUPPORT_DATA_DIR || join(homedir(), '.claude', 'bb-support-web');
 const KEYS_DIR = join(DATA_DIR, '.keys');
 const TOKENS_FILE = join(DATA_DIR, 'tokens.json');
 const AUDIT_FILE = join(DATA_DIR, 'audit.jsonl');
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const SCRIPTS_DIR = process.env.BB_SUPPORT_SCRIPTS_DIR
-  || resolvePath(__dirname, '..', '..', '..', 'bb-skills', 'bb-support', 'scripts');
 
 const ALLOW_ANONYMOUS = process.env.BB_SUPPORT_ALLOW_ANONYMOUS === '1';
 
@@ -140,36 +138,13 @@ function rateLimiter(opts: { windowMs: number; limit: number; keyFn?: (req: Requ
   };
 }
 
-// Dynamic-import the bb-support library so orch's TypeScript build doesn't
-// statically depend on bb-skills. pathToFileURL keeps Windows / MSYS Git Bash
-// paths un-mangled.
-export type RunStage = 'ok' | 'ask' | 'claude' | 'cancelled' | 'spawn';
-type Intent = 'investigate' | 'draft' | 'reply';
-type Format = 'markdown' | 'html';
-type RunSupportFn = (opts: {
-  question: string;
-  keyFile?: string;
-  intent?: Intent;
-  format?: Format;
-  onChunk: (text: string) => void;
-  signal?: AbortSignal;
-}) => Promise<{ stage: RunStage; exitCode: number | null; askStderr: string; claudeStderr: string }>;
-
+// Dynamic-import the bb-support reveal library so orch's TypeScript build
+// doesn't statically depend on bb-skills. pathToFileURL keeps Windows / MSYS
+// Git Bash paths un-mangled. (run-support + hubspot loaders live in
+// ../core/support-paths.js so the poller can share them.)
 type ApplyMappingFn = (text: string, mappings: Record<string, string>) => string;
 
-let runSupportQueryCache: RunSupportFn | null = null;
 let applyMappingCache: ApplyMappingFn | null = null;
-
-async function loadRunSupport(): Promise<RunSupportFn> {
-  if (runSupportQueryCache) return runSupportQueryCache;
-  const url = pathToFileURL(join(SCRIPTS_DIR, 'run-support.mjs')).href;
-  const mod = await import(url);
-  if (typeof mod.runSupportQuery !== 'function') {
-    throw new Error(`runSupportQuery export missing from ${url}`);
-  }
-  runSupportQueryCache = mod.runSupportQuery as RunSupportFn;
-  return runSupportQueryCache;
-}
 
 async function loadApplyMapping(): Promise<ApplyMappingFn> {
   if (applyMappingCache) return applyMappingCache;
@@ -195,6 +170,11 @@ type SupportTerminal =
   | { stage: 'ok' | 'cancelled' }
   | { stage: 'ask' | 'claude' | 'spawn'; error: string };
 
+// Set when /ask is called from the ticket inbox; drives the on-disk result
+// cache so reopening a ticket re-shows its last Investigate/Draft after a
+// page reload. Absent for plain Q&A asks (no persistence).
+type TicketSubject = { type: 'ticket'; id: string };
+
 type SupportRun = {
   controller: AbortController;
   startedAt: number;
@@ -205,7 +185,32 @@ type SupportRun = {
   bufferTruncated: boolean;
   sseRes: Response | null;
   terminal: SupportTerminal | null;
+  // Result-cache: full answer accumulated across the run (independent of SSE
+  // attach), bounded by the same 1 MB cap. `subject` keys the cache file.
+  subject: TicketSubject | null;
+  answer: string;
+  answerBytes: number;
+  answerTruncated: boolean;
 };
+
+// Persist a finished ticket Investigate/Draft so the inbox can re-show it on
+// reopen. Overwrite-per-(ticket,intent); no TTL (matches bb-dashboard). Best
+// effort — a failed write only costs the reopen convenience.
+function writeTicketResult(
+  subject: TicketSubject,
+  intent: string,
+  body: string,
+  stage: string,
+): void {
+  if (!body.trim()) return;
+  try {
+    mkdirSync(RESULTS_DIR, { recursive: true });
+    const payload = { type: subject.type, id: subject.id, intent, body, stage, finishedAt: Date.now() };
+    writeFileSync(join(RESULTS_DIR, `ticket-${subject.id}-${intent}.json`), JSON.stringify(payload, null, 2));
+  } catch (err) {
+    log.warn('failed to persist ticket result: ' + (err as Error).message);
+  }
+}
 
 export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
   // Token file is loaded once at boot; re-issuing tokens requires a server restart.
@@ -289,7 +294,7 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
 
   app.post('/api/support/ask', auth, askLimiter, asyncHandler(async (req, res) => {
     const r = req as AuthedRequest;
-    const body = (r.body || {}) as { question?: unknown; intent?: unknown };
+    const body = (r.body || {}) as { question?: unknown; intent?: unknown; subject?: unknown };
     const question = body.question;
     const intent = body.intent ?? 'investigate';
     if (!question || typeof question !== 'string') {
@@ -299,6 +304,19 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
     if (intent !== 'investigate' && intent !== 'draft' && intent !== 'reply') {
       res.status(400).json({ error: 'intent must be investigate|draft|reply' });
       return;
+    }
+    // Optional ticket subject (from the inbox) — keys the result cache. Q&A
+    // asks omit it. Validate strictly so a bad value can't escape the filename.
+    let subject: TicketSubject | null = null;
+    const rawSubject = body.subject;
+    if (rawSubject && typeof rawSubject === 'object') {
+      const s = rawSubject as { type?: unknown; id?: unknown };
+      if (s.type === 'ticket' && typeof s.id === 'string' && /^\d+$/.test(s.id)) {
+        subject = { type: 'ticket', id: s.id };
+      } else {
+        res.status(400).json({ error: 'subject must be { type:"ticket", id:"<digits>" }' });
+        return;
+      }
     }
 
     let runSupportQuery: RunSupportFn;
@@ -325,6 +343,10 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
       bufferTruncated: false,
       sseRes: null,
       terminal: null,
+      subject,
+      answer: '',
+      answerBytes: 0,
+      answerTruncated: false,
     };
     supportRuns.set(runId, run);
 
@@ -344,6 +366,13 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
       format: 'markdown',
       signal: controller.signal,
       onChunk: (chunk: string) => {
+        // Accumulate the full answer for the result cache (independent of SSE
+        // attach), bounded by the same cap so an orphaned run can't pin RSS.
+        if (run.subject && !run.answerTruncated) {
+          const sz = Buffer.byteLength(chunk);
+          if (run.answerBytes + sz > CHUNK_BUFFER_CAP_BYTES) run.answerTruncated = true;
+          else { run.answer += chunk; run.answerBytes += sz; }
+        }
         if (run.sseRes) {
           try {
             run.sseRes.write(`event: chunk\ndata: ${JSON.stringify({ chunk })}\n\n`);
@@ -377,6 +406,9 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
           run.sseRes.end();
         } catch { /* client disconnected mid-write; sse will be reaped */ }
       }
+      // Persist for inbox reopen — partial output from a non-ok stage is still
+      // useful to revisit (matches bb-dashboard).
+      if (run.subject) writeTicketResult(run.subject, intent, run.answer, terminal.stage);
       try {
         appendAudit(
           'error' in terminal
@@ -395,6 +427,7 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
           run.sseRes.end();
         } catch { /* client disconnected mid-write */ }
       }
+      if (run.subject) writeTicketResult(run.subject, intent, run.answer, 'spawn');
       try {
         appendAudit({
           ...auditBase, status: 'spawn',
@@ -569,4 +602,8 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
     }
   }, 60_000);
   keyReaper.unref?.();
+
+  // HubSpot ticket-inbox endpoints — share this module's auth + the
+  // /api/support securityHeaders already applied above.
+  mountHubspot(app, { auth });
 }

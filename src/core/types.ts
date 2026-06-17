@@ -79,6 +79,7 @@ export interface Config {
   server: {
     port: number;
     dashboardPort: number;
+    host: string; // listen interface; '0.0.0.0' to expose on the LAN
   };
   github: {
     webhookSecret: string;
@@ -113,6 +114,13 @@ export interface Config {
     url: string;
     serviceRoleKey: string;
     machineId: string;
+  };
+  hubspot: {
+    // Creds (token, hubId) come from the bb-skills cred cascade, not here —
+    // this block is only the auto-investigate poller knobs.
+    autoInvestigate: boolean;
+    investigateProperty: string;
+    scanIntervalMs: number;
   };
 }
 
