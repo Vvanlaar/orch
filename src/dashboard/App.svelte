@@ -7,7 +7,7 @@
   import ProcessList from './components/ProcessList.svelte';
   import { connect } from './stores/websocket.svelte';
   import { fetchPRs, fetchWorkItems, fetchResolvedByMe, fetchResolvedWithComments } from './stores/workItems.svelte';
-  import { fetchTasks } from './stores/tasks.svelte';
+  import { fetchTasks, fetchMachineId } from './stores/tasks.svelte';
   import { fetchClaudeUsage } from './stores/usage.svelte';
   import { fetchReviewedItems, fetchTeamMembers } from './stores/testing.svelte';
   import { fetchCurrentUser } from './stores/currentUser.svelte';
@@ -20,14 +20,21 @@
   import VideoscanPage from './components/VideoscanPage.svelte';
   import SupportPage from './components/SupportPage.svelte';
   import DashboardOverview from './components/DashboardOverview.svelte';
+  import TokenGate from './components/TokenGate.svelte';
   import { getRoute } from './lib/router.svelte';
+  import { isReady, isAdmin, canSupport, loadWhoami } from './stores/session.svelte';
 
   let route = $derived(getRoute());
+  let ready = $derived(isReady());
+  let admin = $derived(isAdmin());
+  let support = $derived(canSupport());
   let lastRefreshedAt = $state<string>('');
 
   // Ticket-y data is only useful on /tickets; skip elsewhere so a /videoscan
-  // session doesn't re-pull PRs / work items every refresh.
+  // session doesn't re-pull PRs / work items every refresh. All of this data is
+  // admin-only, so a support/anon session fetches nothing (avoids 401 noise).
   function refreshAll(refresh = false) {
+    if (!isAdmin()) return;
     const r = getRoute();
     fetchTasks();
     fetchClaudeUsage();
@@ -54,9 +61,20 @@
     refreshAll();
   });
 
+  // Resolve the caller's scopes first; the bootstrap effect below then wires up
+  // WS + initial data once (and only) an admin session is established.
+  let bootstrapped = false;
+  $effect(() => {
+    if (admin && !bootstrapped) {
+      bootstrapped = true;
+      fetchMachineId();
+      connect();
+      refreshAll();
+    }
+  });
+
   onMount(() => {
-    connect();
-    refreshAll();
+    loadWhoami();
 
     // Refresh when the tab regains focus after being hidden for >5min.
     // No periodic interval — WS pushes task/output updates, and ticket data
@@ -76,31 +94,43 @@
   });
 </script>
 
-<div class="container">
-  <Header {refreshAll} {lastRefreshedAt} />
-  {#if route === '/videoscan'}
-    <VideoscanPage />
-  {:else if route === '/support'}
+{#if !ready}
+  <div class="boot">Loading…</div>
+{:else if admin}
+  <div class="container">
+    <Header {refreshAll} {lastRefreshedAt} />
+    {#if route === '/videoscan'}
+      <VideoscanPage />
+    {:else if route === '/support'}
+      <SupportPage />
+    {:else if route === '/tickets'}
+      <WorkItems />
+      <OrchestratorPanel />
+      <div class="bottom-grid">
+        <div class="bottom-left">
+          <TaskList />
+          <ProcessList />
+        </div>
+        <div class="bottom-right">
+          <TestingAssignment />
+        </div>
+      </div>
+    {:else}
+      <DashboardOverview />
+    {/if}
+  </div>
+  <NotificationSidebar />
+  <OrchestratorChat />
+  <ToastContainer />
+{:else if support}
+  <!-- Support-scoped session: only the support Q&A surface, no admin chrome. -->
+  <div class="container support-only">
     <SupportPage />
-  {:else if route === '/tickets'}
-    <WorkItems />
-    <OrchestratorPanel />
-    <div class="bottom-grid">
-      <div class="bottom-left">
-        <TaskList />
-        <ProcessList />
-      </div>
-      <div class="bottom-right">
-        <TestingAssignment />
-      </div>
-    </div>
-  {:else}
-    <DashboardOverview />
-  {/if}
-</div>
-<NotificationSidebar />
-<OrchestratorChat />
-<ToastContainer />
+  </div>
+  <ToastContainer />
+{:else}
+  <TokenGate />
+{/if}
 
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
@@ -109,6 +139,15 @@
     box-sizing: border-box;
     margin: 0;
     padding: 0;
+  }
+
+  .boot {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted, #8b949e);
+    font-size: 14px;
   }
 
   :global(body) {

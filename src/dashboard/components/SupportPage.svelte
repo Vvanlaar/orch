@@ -11,6 +11,7 @@
   // streaming chunks don't pin the main thread.
   import { onMount } from 'svelte';
   import { sanitizeMarkdown } from '../lib/sanitize';
+  import { getToken, setToken } from '../stores/session.svelte';
 
   // Minimal interface for the vendored marked bundle (no .d.ts ships). Two
   // methods used; keeping the surface narrow catches drift if we ever swap the
@@ -31,7 +32,8 @@
   type RunStage = 'ok' | 'ask' | 'claude' | 'cancelled' | 'spawn';
 
   // --- state -----------------------------------------------------------------
-  const TOKEN_KEY = 'bb-support-web/token';
+  // Token is owned by the session store (localStorage 'orch/token') so it stays
+  // in sync with the app-wide auth used for /api/whoami and the SSE ?token=.
   const HISTORY_KEY = 'orch-support-history';
   const HISTORY_CAP = 50;
 
@@ -44,7 +46,7 @@
     keyId: string | null;
   };
 
-  let token = $state<string>(typeof localStorage !== 'undefined' ? (localStorage.getItem(TOKEN_KEY) || '') : '');
+  let token = $state<string>(getToken());
   let authMode = $state<'token' | 'anonymous'>('token');
   let question = $state<string>('');
   let intent = $state<Intent>('investigate');
@@ -73,7 +75,8 @@
 
   // --- localStorage helpers --------------------------------------------------
   function saveToken(): void {
-    try { localStorage.setItem(TOKEN_KEY, token.trim()); } catch { /* quota */ }
+    // Persist via the session store so scopes (and the gate) stay consistent.
+    setToken(token);
   }
 
   function loadHistory(): HistoryEntry[] {

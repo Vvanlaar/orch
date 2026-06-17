@@ -1,4 +1,5 @@
 import type { Notification, OrchestratorState, Task } from '../lib/types';
+import { getToken } from './session.svelte';
 
 // WebSocket connection state
 let ws: WebSocket | null = $state(null);
@@ -33,8 +34,12 @@ export function setOrchestratorHandler(handler: OrchestratorHandler) {
 
 export function connect() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  // Use location.host - Vite proxies /ws to backend in dev
-  ws = new WebSocket(`${protocol}//${location.host}/ws`);
+  // Use location.host - Vite proxies /ws to backend in dev. The token rides as
+  // a query param (WebSocket can't set Authorization); the server rejects the
+  // upgrade unless it carries the admin scope.
+  const token = getToken();
+  const qs = token ? `?token=${encodeURIComponent(token)}` : '';
+  ws = new WebSocket(`${protocol}//${location.host}/ws${qs}`);
 
   ws.onopen = () => {
     connected = true;
