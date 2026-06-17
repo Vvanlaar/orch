@@ -10,6 +10,7 @@ export const config: Config = {
   server: {
     port: parseInt(envOr('PORT', '3011')),
     dashboardPort: parseInt(envOr('DASHBOARD_PORT', '3010')),
+    host: envOr('HOST', '127.0.0.1'),
   },
   github: {
     webhookSecret: envOr('GITHUB_WEBHOOK_SECRET', ''),
@@ -44,6 +45,11 @@ export const config: Config = {
     url: envOr('SUPABASE_URL', ''),
     serviceRoleKey: envOr('SUPABASE_SERVICE_ROLE_KEY', ''),
     machineId: envOr('MACHINE_ID', ''),
+  },
+  hubspot: {
+    autoInvestigate: envOr('HUBSPOT_AUTO_INVESTIGATE', 'false') === 'true',
+    investigateProperty: envOr('HUBSPOT_INVESTIGATE_PROPERTY', 'ai_investigate_bbsupport'),
+    scanIntervalMs: parseInt(envOr('HUBSPOT_SCAN_INTERVAL_MS', '600000')),
   },
 };
 

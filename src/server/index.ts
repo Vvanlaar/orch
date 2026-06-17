@@ -24,6 +24,7 @@ import {
   setTerminalPreference,
 } from '../core/settings.js';
 import { startPoller } from '../core/poller.js';
+import { runHubspotInvestigateScan, stampCycleCrash } from '../core/hubspot-poller.js';
 import { getEffectiveRepoMapping, getScannedRepos } from '../core/repo-scanner.js';
 import { getAuthenticatedUser, getPull, listPullReviewComments, listOrgRepos } from '../core/github-api.js';
 import { applyStreamingOutput, approveSuggestion, completeTask, createTask, deleteTask, dismissSuggestion, failTask, getAllTasks, getAllTasksWithOutput, getLatestVideoscanWithBatch, getTask, getTasksByIds, getTasksWithPids, pauseTask, pinTask, retryTask, updateTaskContext, updateTaskRepoPath, updateTaskStatus } from '../core/task-queue.js';
@@ -234,8 +235,10 @@ app.get('/health', (_req, res) => {
 app.use('/webhooks/github', githubRouter);
 app.use('/webhooks/ado', adoRouter);
 
-// bb-support Q&A flow (ported from bb-support-web).
-mountSupport(app);
+// bb-support Q&A flow + HubSpot ticket inbox (ported from bb-support-web /
+// bb-dashboard). Pass the real bind so assertBindAuthValid enforces the
+// token/anonymous posture on a non-loopback (LAN) bind.
+mountSupport(app, { bind: config.server.host });
 
 // API for dashboard
 app.get('/api/tasks', asyncHandler(async (_req, res) => {
@@ -2183,8 +2186,8 @@ app.use(expressErrorMiddleware);
 
 // Start server
 installProcessHandlers();
-server.listen(config.server.port, '127.0.0.1', () => {
-  log.info(`Orch server listening on port ${config.server.port}`);
+server.listen(config.server.port, config.server.host, () => {
+  log.info(`Orch server listening on ${config.server.host}:${config.server.port}`);
   log.info(`Dashboard: http://localhost:${config.server.port}`);
   log.info(`GitHub webhooks: http://localhost:${config.server.port}/webhooks/github`);
   log.info(`ADO webhooks: http://localhost:${config.server.port}/webhooks/ado`);
@@ -2234,6 +2237,14 @@ server.listen(config.server.port, '127.0.0.1', () => {
 
   if (config.polling.enabled) {
     startPoller(config.polling.intervalMs).catch(err => log.error('Poller start error', err));
+  }
+
+  if (config.hubspot.autoInvestigate) {
+    log.info(`HubSpot auto-investigate enabled (every ${config.hubspot.scanIntervalMs}ms)`);
+    const runScan = () => runHubspotInvestigateScan(config, { log: (e) => log.info(`[hubspot-investigate] ${e.type}`) })
+      .catch((err) => { stampCycleCrash(err); log.error('HubSpot investigate scan failed', err); });
+    setTimeout(runScan, 15_000).unref(); // first scan shortly after boot
+    setInterval(runScan, config.hubspot.scanIntervalMs).unref();
   }
 
   startNtfyListener();
