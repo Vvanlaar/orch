@@ -513,6 +513,31 @@
     else expandedTl.add(i);
   }
 
+  // HubSpot redacts email bodies unless the app has the sales-email-read scope;
+  // it returns this sentinel as the "body". Detect it so the timeline shows a
+  // short hint instead of repeating the full redaction sentence per row.
+  const REDACTED_RE = /content of this email has been redacted/i;
+  function isRedacted(e: Engagement): boolean { return REDACTED_RE.test(e.bodyPreview); }
+
+  // Humanise HubSpot engagement type codes for the timeline.
+  function engagementLabel(type: string): string {
+    switch (type) {
+      case 'INCOMING_EMAIL': return 'Email in';
+      case 'EMAIL': return 'Email out';
+      case 'NOTE': return 'Note';
+      case 'CALL': return 'Call';
+      case 'MEETING': return 'Meeting';
+      case 'TASK': return 'Task';
+      case 'CONVERSATION_SESSION': return 'Conversation';
+      default: return type.charAt(0).toUpperCase() + type.slice(1).toLowerCase().replace(/_/g, ' ');
+    }
+  }
+
+  function tlPreview(e: Engagement): string {
+    if (isRedacted(e)) return '🔒 Email body hidden — HubSpot app needs the sales-email-read scope';
+    return e.bodyPreview || '(no text content)';
+  }
+
   async function viewNote(): Promise<void> {
     if (!selectedId) return;
     try {
@@ -862,9 +887,9 @@
         <div class="timeline">
           <div class="timeline-head">Timeline {selectedCapped ? '(truncated — too many engagements)' : `(${selectedEngagements.length})`}</div>
           {#each selectedEngagements as e, i (i)}
-            {@const expandable = e.body.length > e.bodyPreview.length}
+            {@const expandable = !isRedacted(e) && e.body.length > e.bodyPreview.length}
             {@const open = expandedTl.has(i)}
-            <div class="tl-item">
+            <div class="tl-item" class:open>
               <button
                 type="button"
                 class="tl-row"
@@ -872,10 +897,14 @@
                 aria-expanded={expandable ? open : undefined}
                 onclick={() => toggleTl(i)}
               >
-                <span class="tl-type">{e.type}{e.isInvestigationNote ? ' · AI' : ''}</span>
-                {#if e.timestamp}<span class="tl-time">{relTime(e.timestamp)}</span>{/if}
-                {#if expandable}<span class="tl-chevron" aria-hidden="true">{open ? '▾' : '▸'}</span>{/if}
-                {#if !open}<span class="tl-preview">{e.bodyPreview}</span>{/if}
+                <span class="tl-head">
+                  <span class="tl-type" class:ai={e.isInvestigationNote}>{engagementLabel(e.type)}</span>
+                  {#if e.isInvestigationNote}<span class="tl-ai">AI</span>{/if}
+                  <span class="tl-spacer"></span>
+                  {#if e.timestamp}<span class="tl-time">{relTime(e.timestamp)}</span>{/if}
+                  {#if expandable}<span class="tl-chevron" aria-hidden="true">{open ? '▾' : '▸'}</span>{/if}
+                </span>
+                {#if !open}<span class="tl-preview" class:muted={isRedacted(e)}>{tlPreview(e)}</span>{/if}
               </button>
               {#if open}<div class="tl-body">{e.body}</div>{/if}
             </div>
@@ -1043,6 +1072,7 @@
     font-family: 'IBM Plex Sans', system-ui, sans-serif;
     font-size: 14px; line-height: 1.65;
     color: var(--text-primary);
+    overflow-wrap: anywhere;
   }
   /* :global so the sanitized fragment (injected via replaceChildren) inherits
      styles even though it's outside Svelte's compiled scope. */
@@ -1310,6 +1340,10 @@
   .stat.err b, .stat.err { color: var(--danger); }
 
   .inbox-grid { display: grid; grid-template-columns: minmax(280px, 360px) 1fr; gap: 16px; align-items: start; }
+  /* min-width:0 lets each grid track shrink below its content's intrinsic width;
+     without it a long unbreakable string (URL, email body) forces the column
+     wider than the page and spawns a horizontal scrollbar. */
+  .inbox-list, .inbox-detail { min-width: 0; }
   @media (max-width: 820px) { .inbox-grid { grid-template-columns: 1fr; } }
 
   .filter-bar { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
@@ -1355,22 +1389,29 @@
   .detail-body {
     background: var(--bg-deep); border: 1px solid var(--border-primary); border-radius: 8px;
     padding: 10px 12px; font-size: 12px; color: var(--text-primary);
-    white-space: pre-wrap; max-height: 220px; overflow-y: auto; margin-bottom: 12px;
+    white-space: pre-wrap; overflow-wrap: anywhere;
+    max-height: 220px; overflow-y: auto; margin-bottom: 12px;
   }
 
   .note-box { border: 1px solid var(--support-accent-dim); border-radius: 8px; margin: 12px 0; }
   .note-head { background: var(--support-accent-soft); color: var(--support-accent); font-size: 11px; padding: 5px 10px; }
   .note-body { padding: 10px 12px; font-size: 12px; white-space: pre-wrap; color: var(--text-primary); max-height: 260px; overflow-y: auto; }
 
-  .timeline { margin-top: 14px; border-top: 1px solid var(--border-primary); padding-top: 10px; }
-  .timeline-head { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
-  .tl-item { border-bottom: 1px dashed var(--border-primary); }
-  .tl-row { display: flex; gap: 8px; align-items: baseline; width: 100%; padding: 4px 0; font-size: 11px; text-align: left; background: none; border: none; color: inherit; font: inherit; }
+  .timeline { margin-top: 14px; border-top: 1px solid var(--border-primary); padding-top: 12px; display: flex; flex-direction: column; gap: 3px; }
+  .timeline-head { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+  .tl-item { border: 1px solid transparent; border-radius: 6px; }
+  .tl-item.open { border-color: var(--border-primary); background: var(--bg-deep); }
+  .tl-row { display: flex; flex-direction: column; gap: 4px; width: 100%; padding: 7px 9px; text-align: left; background: none; border: none; color: inherit; font: inherit; border-radius: 6px; }
   .tl-row:not(:disabled) { cursor: pointer; }
-  .tl-row:not(:disabled):hover .tl-preview { color: var(--support-accent); }
-  .tl-type { flex: none; color: var(--support-accent); font-family: 'IBM Plex Mono', monospace; }
-  .tl-time { flex: none; color: var(--text-muted); }
-  .tl-chevron { flex: none; color: var(--text-muted); }
-  .tl-preview { flex: 1 1 auto; min-width: 0; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .tl-body { color: var(--text-primary); white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.5; padding: 2px 0 10px; }
+  .tl-row:not(:disabled):hover { background: var(--bg-deep); }
+  .tl-head { display: flex; align-items: center; gap: 8px; }
+  .tl-type { font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); }
+  .tl-type.ai { color: var(--support-accent); }
+  .tl-ai { font-size: 9px; font-weight: 700; color: var(--support-accent); border: 1px solid var(--support-accent-dim); border-radius: 999px; padding: 0 5px; line-height: 1.5; }
+  .tl-spacer { flex: 1 1 auto; }
+  .tl-time { flex: none; font-size: 10px; color: var(--text-muted); }
+  .tl-chevron { flex: none; font-size: 10px; color: var(--text-muted); }
+  .tl-preview { font-size: 12px; line-height: 1.4; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tl-preview.muted { color: var(--text-muted); font-style: italic; }
+  .tl-body { color: var(--text-primary); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.55; padding: 2px 9px 10px; }
 </style>
