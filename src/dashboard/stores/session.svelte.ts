@@ -40,9 +40,11 @@ if (typeof window !== 'undefined' && !(window as { __orchFetchPatched?: boolean 
       opts = { ...init, headers };
     }
     const res = await orig(input, opts);
-    // 401 = token absent/invalid → force re-auth. (403 = valid token missing a
-    // scope; that's an expected per-route denial, don't nuke the whole session.)
-    if (isApi && res.status === 401 && !url.includes('/api/whoami')) {
+    // Only drop to the token gate when OUR auth layer rejects the token
+    // (X-Orch-Auth: required). A bare 401 from a downstream handler — e.g. an
+    // upstream API returning 401/backoff on /api/claude/usage — must NOT clear
+    // the session, or a valid admin would be bounced to the gate in a loop.
+    if (isApi && res.status === 401 && res.headers.get('X-Orch-Auth') === 'required' && !url.includes('/api/whoami')) {
       scopes = [];
       ready = true;
     }

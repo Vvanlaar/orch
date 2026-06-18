@@ -242,15 +242,18 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
     const r = req as AuthedRequest;
     const tk = tokenFromRequest(r);
     if (!tk) {
+      res.setHeader('X-Orch-Auth', 'required');
       res.status(401).json({ error: 'bearer token required' });
       return;
     }
     const entry = lookupToken(tokens, tk);
     if (!entry) {
+      res.setHeader('X-Orch-Auth', 'required');
       res.status(401).json({ error: 'invalid token' });
       return;
     }
     if (!hasScope(entry, 'support')) {
+      res.setHeader('X-Orch-Auth', 'scope');
       res.status(403).json({ error: 'token lacks support scope' });
       return;
     }

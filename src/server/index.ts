@@ -219,10 +219,15 @@ app.use((req, res, next) => {
   if (req.path === '/api/support' || req.path.startsWith('/api/support/')) return next();
   const entry = lookupToken(apiTokens, tokenFromRequest(req));
   if (!entry) {
+    // Mark this as an auth-layer rejection (vs. a downstream handler's own 401,
+    // e.g. an upstream API) so the SPA only drops to the token gate on a real
+    // token failure, not on a transient downstream 401.
+    res.setHeader('X-Orch-Auth', 'required');
     res.status(401).json({ error: 'bearer token required' });
     return;
   }
   if (!hasScope(entry, 'admin')) {
+    res.setHeader('X-Orch-Auth', 'scope');
     res.status(403).json({ error: 'admin scope required' });
     return;
   }
