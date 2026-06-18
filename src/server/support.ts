@@ -304,8 +304,8 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
       res.status(400).json({ error: 'question required' });
       return;
     }
-    if (intent !== 'investigate' && intent !== 'draft' && intent !== 'reply') {
-      res.status(400).json({ error: 'intent must be investigate|draft|reply' });
+    if (intent !== 'investigate' && intent !== 'draft' && intent !== 'reply' && intent !== 'summarise') {
+      res.status(400).json({ error: 'intent must be investigate|draft|reply|summarise' });
       return;
     }
     // Optional ticket subject (from the inbox) — keys the result cache. Q&A

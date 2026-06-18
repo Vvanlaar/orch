@@ -80,19 +80,29 @@ export function mountHubspot(app: Express, opts: { auth: RequestHandler }): void
       const ticket = await hub.getTicket(creds.token, id);
       // Pagination cap is non-fatal: show the ticket body even when its
       // engagement history is too long to enumerate.
-      let engagements: Array<{ type: string; timestamp: number | null; ownerId: number | null; bodyPreview: string; isInvestigationNote: boolean }> = [];
+      let engagements: Array<{ type: string; timestamp: number | null; ownerId: number | null; bodyPreview: string; body: string; isInvestigationNote: boolean }> = [];
       let capped = false;
       try {
         const raw = await hub.getTicketEngagements(creds.token, id);
         engagements = raw
           .map((e) => {
-            const body = e.metadata?.body || '';
+            // NOTE bodies live in metadata.body; email engagements put their
+            // content in metadata.text/html instead. Fall back across all so
+            // emails aren't rendered as empty timeline rows.
+            const noteBody = e.metadata?.body || '';
+            const source = noteBody || e.metadata?.html || e.metadata?.text || '';
+            // Full stripped text drives the click-to-expand timeline; capped at
+            // 20k chars (with a visible marker) so a long email thread can't
+            // bloat the detail payload.
+            const text = hub.stripHtml(source);
+            const body = text.length > 20000 ? text.slice(0, 20000) + '…[truncated]' : text;
             return {
               type: e.engagement?.type || 'UNKNOWN',
               timestamp: e.engagement?.timestamp ?? null,
               ownerId: e.engagement?.ownerId ?? null,
-              bodyPreview: hub.stripHtml(body).slice(0, 240),
-              isInvestigationNote: e.engagement?.type === 'NOTE' && hub.isInvestigationNote(body),
+              bodyPreview: text.slice(0, 240),
+              body,
+              isInvestigationNote: e.engagement?.type === 'NOTE' && hub.isInvestigationNote(noteBody),
             };
           })
           .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));

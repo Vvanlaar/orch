@@ -52,7 +52,8 @@ export interface HubspotTicket {
 }
 export interface HubspotEngagement {
   engagement?: { type?: string; timestamp?: number | null; ownerId?: number | null };
-  metadata?: { body?: string };
+  // NOTE engagements carry `body`; EMAIL/INCOMING_EMAIL carry `text`/`html`.
+  metadata?: { body?: string; text?: string; html?: string };
 }
 export interface HubspotLib {
   listRecentTickets(token: string, limit?: number, extraProps?: string[]): Promise<HubspotTicket[]>;
@@ -100,7 +101,7 @@ export async function loadHubspotCreds(): Promise<HubspotCreds> {
 
 // --- run-support.mjs surface (shared by support.ts Q&A + the poller) -------
 export type RunStage = 'ok' | 'ask' | 'claude' | 'cancelled' | 'spawn';
-export type Intent = 'investigate' | 'draft' | 'reply';
+export type Intent = 'investigate' | 'draft' | 'reply' | 'summarise';
 export type Format = 'markdown' | 'html';
 export type RunSupportFn = (opts: {
   question: string;

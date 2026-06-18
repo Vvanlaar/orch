@@ -10,6 +10,7 @@
   // replaceChildren on a bound DOM node. requestAnimationFrame-throttled so
   // streaming chunks don't pin the main thread.
   import { onMount } from 'svelte';
+  import { SvelteSet } from 'svelte/reactivity';
   import { sanitizeMarkdown } from '../lib/sanitize';
   import { getToken, setToken } from '../stores/session.svelte';
 
@@ -28,7 +29,7 @@
 
   // Mirrors the union in src/server/support.ts (orch's server/dashboard live
   // in separate tsconfigs so a shared import would mean a deeper restructure).
-  type Intent = 'investigate' | 'draft' | 'reply';
+  type Intent = 'investigate' | 'draft' | 'reply' | 'summarise';
   type RunStage = 'ok' | 'ask' | 'claude' | 'cancelled' | 'spawn';
 
   // --- state -----------------------------------------------------------------
@@ -78,7 +79,7 @@
   let mode = $state<Mode>('ask');
 
   type Ticket = { id: string; properties?: Record<string, string | null | undefined> };
-  type Engagement = { type: string; timestamp: number | null; ownerId: number | null; bodyPreview: string; isInvestigationNote: boolean };
+  type Engagement = { type: string; timestamp: number | null; ownerId: number | null; bodyPreview: string; body: string; isInvestigationNote: boolean };
   type CachedResult = { intent: string; body: string; stage: string; finishedAt: number };
   type Summary = {
     lastScan: null | { startedAt: number; finishedAt: number | null; scanned: number; investigated: number; skipped: number; errors: number; error?: string };
@@ -97,6 +98,8 @@
   let selectedId = $state<string | null>(null);
   let selectedTicket = $state<Ticket | null>(null);
   let selectedEngagements = $state<Engagement[]>([]);
+  // Timeline rows the user has clicked open (indices into selectedEngagements).
+  let expandedTl = $state(new SvelteSet<number>());
   let selectedCapped = $state<boolean>(false);
   let detailLoading = $state<boolean>(false);
   let noteBody = $state<string | null>(null);
@@ -245,7 +248,12 @@
       if (!rawAnswer) {
         answerEl.replaceChildren();
         answerEl.classList.add('placeholder');
-        answerEl.textContent = streaming ? 'Streaming…' : 'Submit a question to see the streamed answer here.';
+        // While streaming but before the first chunk, the run is in ask.mjs's
+        // context-gather phase (no output yet). Say so explicitly — a bare
+        // "Streaming…" with nothing happening reads as broken.
+        answerEl.textContent = streaming
+          ? 'Gathering ticket context… this can take up to a minute before the answer streams.'
+          : 'Submit a question to see the streamed answer here.';
         return;
       }
       answerEl.classList.remove('placeholder');
@@ -280,6 +288,7 @@
     streaming = true;
     connState = 'streaming';
     connLabel = 'asking…';
+    scheduleRender(); // paint the gather-phase message now, not on first chunk
 
     let body: { runId?: string; keyId?: string; error?: string };
     try {
@@ -457,6 +466,7 @@
     selectedId = id;
     selectedTicket = null;
     selectedEngagements = [];
+    expandedTl.clear();
     selectedCapped = false;
     noteBody = null;
     cachedLabel = '';
@@ -496,6 +506,11 @@
     if (!selectedId) return;
     cachedLabel = '';
     await ask({ q: `${ticketUrlFor(selectedId)} ${actionIntent}`, intent: actionIntent, subject: { type: 'ticket', id: selectedId }, recordHistory: false });
+  }
+
+  function toggleTl(i: number): void {
+    if (expandedTl.has(i)) expandedTl.delete(i);
+    else expandedTl.add(i);
   }
 
   async function viewNote(): Promise<void> {
@@ -821,6 +836,7 @@
         </div>
         <div class="detail-actions">
           <button class="primary-btn" disabled={streaming} onclick={() => runTicketAction('investigate')}>Investigate</button>
+          <button class="ghost-btn" disabled={streaming} onclick={() => runTicketAction('summarise')}>Summarise</button>
           <button class="ghost-btn" disabled={streaming} onclick={() => runTicketAction('draft')}>Draft reply</button>
           <button class="ghost-btn" type="button" onclick={viewNote}>View AI note</button>
           {#if streaming}<button class="ghost-btn" type="button" onclick={cancel}>Cancel</button>{/if}
@@ -845,11 +861,23 @@
 
         <div class="timeline">
           <div class="timeline-head">Timeline {selectedCapped ? '(truncated — too many engagements)' : `(${selectedEngagements.length})`}</div>
-          {#each selectedEngagements as e}
+          {#each selectedEngagements as e, i (i)}
+            {@const expandable = e.body.length > e.bodyPreview.length}
+            {@const open = expandedTl.has(i)}
             <div class="tl-item">
-              <span class="tl-type">{e.type}{e.isInvestigationNote ? ' · AI' : ''}</span>
-              {#if e.timestamp}<span class="tl-time">{relTime(e.timestamp)}</span>{/if}
-              <span class="tl-preview">{e.bodyPreview}</span>
+              <button
+                type="button"
+                class="tl-row"
+                disabled={!expandable}
+                aria-expanded={expandable ? open : undefined}
+                onclick={() => toggleTl(i)}
+              >
+                <span class="tl-type">{e.type}{e.isInvestigationNote ? ' · AI' : ''}</span>
+                {#if e.timestamp}<span class="tl-time">{relTime(e.timestamp)}</span>{/if}
+                {#if expandable}<span class="tl-chevron" aria-hidden="true">{open ? '▾' : '▸'}</span>{/if}
+                {#if !open}<span class="tl-preview">{e.bodyPreview}</span>{/if}
+              </button>
+              {#if open}<div class="tl-body">{e.body}</div>{/if}
             </div>
           {/each}
         </div>
@@ -1336,8 +1364,13 @@
 
   .timeline { margin-top: 14px; border-top: 1px solid var(--border-primary); padding-top: 10px; }
   .timeline-head { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
-  .tl-item { display: grid; grid-template-columns: auto auto 1fr; gap: 8px; align-items: baseline; padding: 4px 0; font-size: 11px; border-bottom: 1px dashed var(--border-primary); }
-  .tl-type { color: var(--support-accent); font-family: 'IBM Plex Mono', monospace; }
-  .tl-time { color: var(--text-muted); }
-  .tl-preview { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tl-item { border-bottom: 1px dashed var(--border-primary); }
+  .tl-row { display: flex; gap: 8px; align-items: baseline; width: 100%; padding: 4px 0; font-size: 11px; text-align: left; background: none; border: none; color: inherit; font: inherit; }
+  .tl-row:not(:disabled) { cursor: pointer; }
+  .tl-row:not(:disabled):hover .tl-preview { color: var(--support-accent); }
+  .tl-type { flex: none; color: var(--support-accent); font-family: 'IBM Plex Mono', monospace; }
+  .tl-time { flex: none; color: var(--text-muted); }
+  .tl-chevron { flex: none; color: var(--text-muted); }
+  .tl-preview { flex: 1 1 auto; min-width: 0; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tl-body { color: var(--text-primary); white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.5; padding: 2px 0 10px; }
 </style>
