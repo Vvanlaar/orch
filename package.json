@@ -23,6 +23,7 @@
     "dev": "concurrently --kill-others \"pnpm:dev:server\" \"pnpm:dev:dashboard\"",
     "dev:network": "concurrently --kill-others \"pnpm:dev:server\" \"pnpm:dev:dashboard:network\"",
     "serve:network": "pnpm build:dashboard && concurrently --kill-others \"pnpm:dev:server\" \"pnpm:preview:dashboard:network\"",
+    "serve:prod": "pnpm build && concurrently --kill-others -n server,dashboard \"node dist/server/index.js\" \"pnpm:preview:dashboard:network\"",
     "postinstall": "pnpm exec playwright install chromium",
     "build:desktop": "pnpm build && cp -r dist/server dist/core dist/dashboard desktop/ && cd desktop && pnpm install && pnpm exec electron-builder --win"
   },
