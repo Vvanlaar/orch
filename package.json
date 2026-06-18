@@ -9,6 +9,7 @@
     "dev:server": "tsx watch src/server/index.ts",
     "dev:dashboard": "vite src/dashboard",
     "dev:dashboard:network": "vite src/dashboard --host",
+    "preview:dashboard:network": "vite preview src/dashboard --host",
     "clean": "rm -rf dist",
     "build": "tsc && pnpm build:dashboard",
     "rebuild": "pnpm clean && pnpm build",
@@ -21,6 +22,7 @@
     "migrate": "tsx src/core/db/migrate.ts",
     "dev": "concurrently --kill-others \"pnpm:dev:server\" \"pnpm:dev:dashboard\"",
     "dev:network": "concurrently --kill-others \"pnpm:dev:server\" \"pnpm:dev:dashboard:network\"",
+    "serve:network": "pnpm build:dashboard && concurrently --kill-others \"pnpm:dev:server\" \"pnpm:preview:dashboard:network\"",
     "postinstall": "pnpm exec playwright install chromium",
     "build:desktop": "pnpm build && cp -r dist/server dist/core dist/dashboard desktop/ && cd desktop && pnpm install && pnpm exec electron-builder --win"
   },
