@@ -8,6 +8,9 @@ import { createLogger } from './logger.js';
 import { isSupabaseConfigured } from './db/client.js';
 import { dbListScans, dbUpsertVideoscan, dbDeleteVideoscans, dbArchiveVideoscans } from './db/videoscans.js';
 import { downloadFile, uploadScanFiles, deleteScanFiles } from './db/storage.js';
+import { reportOptionsToArgs, type ReportOptions } from './report-args.js';
+
+export type { ReportOptions };
 
 const log = createLogger('videoscan-runner');
 
@@ -74,31 +77,6 @@ export interface VideoscanResult {
   htmlFile?: string;
   pdfFile?: string;
   error?: string;
-}
-
-export interface ReportOptions {
-  orgName?: string;
-  coverImageUrl?: string;
-  contactImageUrl?: string;
-  contactName?: string;
-  contactPhone?: string;
-  contactEmail?: string;
-}
-
-function reportOptionsToArgs(options?: ReportOptions): string[] {
-  if (!options) return [];
-  const args: string[] = [];
-  // Pass raw values — spawn() is called with an args array and NO shell, so each
-  // element is one argv entry (spaces preserved). Do NOT wrap in quotes: without
-  // a shell to strip them, quotes become literal chars and corrupt the value
-  // (e.g. an image URL would arrive as `"https://…"` → url('"…"') → broken).
-  if (options.orgName) args.push('--org-name', options.orgName);
-  if (options.coverImageUrl) args.push('--cover-image', options.coverImageUrl);
-  if (options.contactImageUrl) args.push('--contact-image', options.contactImageUrl);
-  if (options.contactName) args.push('--contact-name', options.contactName);
-  if (options.contactPhone) args.push('--contact-phone', options.contactPhone);
-  if (options.contactEmail) args.push('--contact-email', options.contactEmail);
-  return args;
 }
 
 export interface VideoscanOptions {
