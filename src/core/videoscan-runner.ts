@@ -88,14 +88,16 @@ export interface ReportOptions {
 function reportOptionsToArgs(options?: ReportOptions): string[] {
   if (!options) return [];
   const args: string[] = [];
-  // Quote values to handle spaces (spawn with shell: true joins args)
-  const q = (v: string) => `"${v.replace(/"/g, '\\"')}"`;
-  if (options.orgName) args.push('--org-name', q(options.orgName));
-  if (options.coverImageUrl) args.push('--cover-image', q(options.coverImageUrl));
-  if (options.contactImageUrl) args.push('--contact-image', q(options.contactImageUrl));
-  if (options.contactName) args.push('--contact-name', q(options.contactName));
-  if (options.contactPhone) args.push('--contact-phone', q(options.contactPhone));
-  if (options.contactEmail) args.push('--contact-email', q(options.contactEmail));
+  // Pass raw values — spawn() is called with an args array and NO shell, so each
+  // element is one argv entry (spaces preserved). Do NOT wrap in quotes: without
+  // a shell to strip them, quotes become literal chars and corrupt the value
+  // (e.g. an image URL would arrive as `"https://…"` → url('"…"') → broken).
+  if (options.orgName) args.push('--org-name', options.orgName);
+  if (options.coverImageUrl) args.push('--cover-image', options.coverImageUrl);
+  if (options.contactImageUrl) args.push('--contact-image', options.contactImageUrl);
+  if (options.contactName) args.push('--contact-name', options.contactName);
+  if (options.contactPhone) args.push('--contact-phone', options.contactPhone);
+  if (options.contactEmail) args.push('--contact-email', options.contactEmail);
   return args;
 }
 
