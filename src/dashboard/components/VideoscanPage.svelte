@@ -7,6 +7,19 @@
   import type { Task } from '../lib/types';
   import { readPreference, writePreference } from '../lib/preferences';
   import { parseScanProgress } from '../lib/videoscan-progress';
+  import { getToken } from '../stores/session.svelte';
+
+  // Report/PDF/JSON/audit links are plain browser navigations (new tab /
+  // download), so they bypass the fetch interceptor that injects the bearer
+  // token. Append the token as a query param — the server's auth gate honours
+  // ?token= as well.
+  function authHref(path: string): string {
+    const t = getToken();
+    return t ? `${path}?token=${encodeURIComponent(t)}` : path;
+  }
+  function fileUrl(filename: string): string {
+    return authHref(`/api/videoscans/files/${encodeURIComponent(filename)}`);
+  }
 
   let url = $state('');
   let maxPages = $state(20000);
@@ -786,7 +799,7 @@
                       {/if}
                       <div class="sc-btns">
                         {#if scan.hasReport}
-                          <a class="sb rpt" href="/api/videoscans/files/{scan.filename.replace('.json', '.html')}" target="_blank">Report</a>
+                          <a class="sb rpt" href={fileUrl(scan.filename.replace('.json', '.html'))} target="_blank">Report</a>
                         {/if}
                         {#if scan.canResume && !activeDomains.has(scan.domain)}
                           <button class="sb res" onclick={() => handleResume(scan)}>Resume</button>
@@ -806,15 +819,15 @@
                               <div class="sc-overflow-group">
                                 <span class="sc-overflow-lbl">Open</span>
                                 {#if scan.hasPdf}
-                                  <a class="sc-overflow-item" href="/api/videoscans/files/{scan.filename.replace('.json', '.pdf')}" target="_blank" download onclick={() => (openActions = null)}>PDF</a>
+                                  <a class="sc-overflow-item" href={fileUrl(scan.filename.replace('.json', '.pdf'))} target="_blank" download onclick={() => (openActions = null)}>PDF</a>
                                 {/if}
                                 {#if scan.hasPreview}
-                                  <a class="sc-overflow-item" href="/api/videoscans/files/{scan.filename.replace('.json', '-preview.html')}" target="_blank" onclick={() => (openActions = null)}>Preview</a>
+                                  <a class="sc-overflow-item" href={fileUrl(scan.filename.replace('.json', '-preview.html'))} target="_blank" onclick={() => (openActions = null)}>Preview</a>
                                 {/if}
                                 {#if scan.hasPreviewPdf}
-                                  <a class="sc-overflow-item" href="/api/videoscans/files/{scan.filename.replace('.json', '-preview.pdf')}" target="_blank" download onclick={() => (openActions = null)}>Preview PDF</a>
+                                  <a class="sc-overflow-item" href={fileUrl(scan.filename.replace('.json', '-preview.pdf'))} target="_blank" download onclick={() => (openActions = null)}>Preview PDF</a>
                                 {/if}
-                                <a class="sc-overflow-item" href="/api/videoscans/files/{scan.filename}" target="_blank" download onclick={() => (openActions = null)}>JSON</a>
+                                <a class="sc-overflow-item" href={fileUrl(scan.filename)} target="_blank" download onclick={() => (openActions = null)}>JSON</a>
                               </div>
                               <div class="sc-overflow-group">
                                 <span class="sc-overflow-lbl">Generate</span>
@@ -1027,11 +1040,11 @@
       <div class="info-body">
         <p class="info-desc">WCAG 2.2 video player accessibility audit by Proper Access — comparing Blue Billywig against other players.</p>
         <div class="info-links">
-          <a class="sb rpt" href="/api/videoscans/audit/audit-summary.html" target="_blank">
+          <a class="sb rpt" href={authHref('/api/videoscans/audit/audit-summary.html')} target="_blank">
             <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
             Audit Summary (HTML)
           </a>
-          <a class="sb pdf" href="/api/videoscans/audit/audit-summary.pdf" target="_blank" download>
+          <a class="sb pdf" href={authHref('/api/videoscans/audit/audit-summary.pdf')} target="_blank" download>
             <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
             Audit Summary (PDF)
           </a>
