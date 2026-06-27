@@ -93,3 +93,24 @@ test("Tier filter: when IProX (MediaElement.js, T5) co-occurs with YouTube (T2),
   const result = detectFromCorpus(html);
   assert.deepEqual(names(result), ["YouTube"]);
 });
+
+test("Shadow DOM <video> → HTML5 native (light DOM has no <video>)", () => {
+  // page.content() serializes only the light DOM, so the <video> inside a custom
+  // element's shadow tree is absent from `html`. extractShadowDomMarkup emits it
+  // as a blob appended to the corpus — this is what that blob looks like.
+  const html = `<html><body><ing-video></ing-video></body></html>`;
+  const shadowBlob =
+    `<video controls><source src="/clip.mp4" type="video/mp4"></video>\n` +
+    `<!-- shadow host: ing-video -->`;
+  const result = detectFromCorpus(html, shadowBlob);
+  assert.deepEqual(names(result), ["HTML5 native"]);
+});
+
+test("Shadow DOM <iframe> youtube → YouTube via existing patterns", () => {
+  const html = `<html><body><my-player></my-player></body></html>`;
+  const shadowBlob =
+    `<iframe src="https://www.youtube.com/embed/abc123">\n` +
+    `<!-- shadow host: my-player -->`;
+  const result = detectFromCorpus(html, shadowBlob);
+  assert.deepEqual(names(result), ["YouTube"]);
+});

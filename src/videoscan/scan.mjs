@@ -687,6 +687,71 @@ async function extractEncodedMarkup(page) {
   });
 }
 
+// Runs before any page script: record closed shadow roots on the host so the
+// shadow-DOM walker can reach them. We store a reference instead of forcing
+// mode:"open" — forcing open can break sites that rely on encapsulation.
+export const SHADOW_INIT_SCRIPT = `(() => {
+  const orig = Element.prototype.attachShadow;
+  Element.prototype.attachShadow = function (init) {
+    const root = orig.call(this, init);
+    if (init && init.mode === "closed") {
+      try { this.__closedShadowRoot = root; } catch {}
+    }
+    return root;
+  };
+})();`;
+
+// Walk the full element tree, descending into open shadow roots (and closed
+// roots recorded by the attachShadow init script), and emit compact HTML for
+// any media-relevant element found *inside* a shadow root. page.content() only
+// serializes the light DOM, so video/players living in custom-element shadow
+// trees (e.g. ing.nl) are otherwise invisible to detectPlayers(). Returns an
+// HTML-like blob to append to the corpus, or "". Same contract as
+// extractEncodedMarkup().
+export async function extractShadowDomMarkup(page) {
+  return page.evaluate(() => {
+    const parts = [];
+    const seenHosts = new Set();
+    const MAX = 400;        // cap a single element's serialized markup
+    const MAX_PARTS = 200;  // cap total emitted snippets (bounds corpus growth)
+    const MAX_DEPTH = 20;   // guard against pathological shadow nesting
+
+    function emit(el, hostTag) {
+      const tag = el.tagName;
+      // outerHTML keeps src + data-* lazy-load attrs that detectPlayers keys on;
+      // iframe outerHTML never includes the embedded document, so it stays small.
+      if (tag === "IFRAME" || tag === "VIDEO" || tag === "AUDIO" || tag === "SOURCE") {
+        parts.push(el.outerHTML.slice(0, MAX));
+      }
+      if (hostTag && !seenHosts.has(hostTag)) {
+        seenHosts.add(hostTag);
+        parts.push(`<!-- shadow host: ${hostTag} -->`);
+      }
+    }
+
+    function walk(root, hostTag, depth) {
+      if (depth > MAX_DEPTH || parts.length >= MAX_PARTS) return;
+      let els;
+      try {
+        els = root.querySelectorAll("*");
+      } catch {
+        return;
+      }
+      for (const el of els) {
+        if (parts.length >= MAX_PARTS) return;
+        if (hostTag) emit(el, hostTag);
+        const inner = el.shadowRoot || el.__closedShadowRoot;
+        if (inner) walk(inner, el.tagName.toLowerCase(), depth + 1);
+      }
+    }
+
+    // Start from document; hostTag is null at the light-DOM level so we only
+    // emit markup discovered beneath a shadow boundary.
+    walk(document, null, 0);
+    return parts.join("\n");
+  });
+}
+
 // Check whether navigation landed on a different domain (e.g. login redirect).
 function didRedirectOffDomain(page, originalUrl) {
   const finalHost = new URL(page.url()).hostname.replace(/^www\./, "");
@@ -892,7 +957,8 @@ async function scanOnePage(context, url, timeout) {
   // Re-grab HTML after dynamic content has loaded
   const html = await page.content();
   const encoded = await extractEncodedMarkup(page);
-  const corpus = encoded ? html + "\n" + encoded : html;
+  const shadow = await extractShadowDomMarkup(page);
+  const corpus = [html, encoded, shadow].filter(Boolean).join("\n");
   const detected = await detectWithConsent(page, corpus, networkRequests);
 
   // Extract links for further crawling
@@ -962,7 +1028,8 @@ async function scanFirstPage(context, url, timeout) {
 
   const html = await page.content();
   const encoded = await extractEncodedMarkup(page);
-  const corpus = encoded ? html + "\n" + encoded : html;
+  const shadow = await extractShadowDomMarkup(page);
+  const corpus = [html, encoded, shadow].filter(Boolean).join("\n");
   const detected = await detectWithConsent(page, corpus, networkRequests);
   const links = await page.evaluate(() =>
     Array.from(document.querySelectorAll("a[href]"), (a) => a.href)
@@ -1168,6 +1235,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     viewport: { width: 1920, height: 1080 },
   });
+  await context.addInitScript(SHADOW_INIT_SCRIPT);
 
   const baseUrl = new URL(startUrl);
   const domain = baseUrl.hostname.replace(/^www\./, "");
@@ -1447,6 +1515,7 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     viewport: { width: 1920, height: 1080 },
   });
+  await context.addInitScript(SHADOW_INIT_SCRIPT);
 
   const baseUrl = new URL(urls[0]);
   const domain = baseUrl.hostname.replace(/^www\./, "");
