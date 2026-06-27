@@ -612,11 +612,12 @@ async function acceptCookies(page) {
 // (e.g. <script type="text/plain" data-cookieconsent="marketing">) may still
 // block video embeds. This function triggers the swap so iframes load.
 async function activateCookiebotConsent(page) {
-  const hasPlaceholders = await page.evaluate(() =>
-    document.querySelectorAll(
-      'script[type="text/plain"][data-cookieconsent], .cookieconsent-optout-marketing, .cookieconsent-optout'
-    ).length > 0
-  );
+  const PLACEHOLDER = 'script[type="text/plain"][data-cookieconsent], .cookieconsent-optout-marketing, .cookieconsent-optout';
+  const hasPlaceholders = await page.evaluate((sel) => {
+    const els = window.__bbDeepElements?.() || document.querySelectorAll("*");
+    for (const el of els) if (el.matches(sel)) return true;
+    return false;
+  }, PLACEHOLDER);
   if (!hasPlaceholders) return;
 
   await page.evaluate(() => {
@@ -626,8 +627,10 @@ async function activateCookiebotConsent(page) {
     }
     // Method 2: dispatch standard Cookiebot event
     try { window.dispatchEvent(new Event("CookiebotOnAccept")); } catch {}
-    // Method 3: force-swap consent-gated scripts to execute
-    for (const s of document.querySelectorAll('script[type="text/plain"][data-cookieconsent]')) {
+    // Method 3: force-swap consent-gated scripts to execute (shadow-aware)
+    const els = window.__bbDeepElements?.() || document.querySelectorAll("*");
+    for (const s of els) {
+      if (!s.matches('script[type="text/plain"][data-cookieconsent]')) continue;
       try {
         const ns = document.createElement("script");
         ns.textContent = s.textContent;
@@ -644,17 +647,21 @@ async function activateCookiebotConsent(page) {
 async function extractConsentGatedContent(page) {
   return page.evaluate(() => {
     const parts = [];
-    // Script tags that Cookiebot hides behind consent
-    for (const s of document.querySelectorAll('script[type="text/plain"][data-cookieconsent]')) {
-      if (s.textContent) parts.push(s.textContent);
-    }
-    // Deferred src attributes on iframes/scripts only (skip images/tracking pixels)
-    for (const el of document.querySelectorAll(
+    const DEFERRED =
       "iframe[data-cmp-src], iframe[data-cookieblock-src], iframe[data-src]," +
-      "script[data-cmp-src], script[data-cookieblock-src], script[data-src]"
-    )) {
-      const src = el.getAttribute("data-cmp-src") || el.getAttribute("data-cookieblock-src") || el.getAttribute("data-src");
-      if (src) parts.push(src);
+      "script[data-cmp-src], script[data-cookieblock-src], script[data-src]";
+    // __bbDeepElements pierces shadow roots; native querySelectorAll wouldn't.
+    const els = window.__bbDeepElements?.() || document.querySelectorAll("*");
+    for (const el of els) {
+      // Script tags that Cookiebot hides behind consent
+      if (el.matches('script[type="text/plain"][data-cookieconsent]')) {
+        if (el.textContent) parts.push(el.textContent);
+      }
+      // Deferred src attributes on iframes/scripts only (skip tracking pixels)
+      if (el.matches(DEFERRED)) {
+        const src = el.getAttribute("data-cmp-src") || el.getAttribute("data-cookieblock-src") || el.getAttribute("data-src");
+        if (src) parts.push(src);
+      }
     }
     return parts.length > 0 ? parts.join("\n") : "";
   });
@@ -668,7 +675,8 @@ async function extractEncodedMarkup(page) {
   return page.evaluate(() => {
     const NEEDLES = ["&lt;video", "&lt;iframe", "&lt;source", "&lt;audio", "&lt;script"];
     const parts = [];
-    for (const el of document.querySelectorAll("*")) {
+    const els = window.__bbDeepElements?.() || document.querySelectorAll("*");
+    for (const el of els) {
       for (const attr of el.attributes) {
         if (!attr.name.startsWith("data-")) continue;
         const v = attr.value;
@@ -687,9 +695,16 @@ async function extractEncodedMarkup(page) {
   });
 }
 
-// Runs before any page script: record closed shadow roots on the host so the
-// shadow-DOM walker can reach them. We store a reference instead of forcing
-// mode:"open" — forcing open can break sites that rely on encapsulation.
+// Runs before any page script. Two jobs:
+//  1. Record closed shadow roots on the host (a reference, not forcing
+//     mode:"open" — forcing open can break sites that rely on encapsulation)
+//     so the detection helpers can reach them.
+//  2. Expose window.__bbDeepElements(root): every element in the tree, piercing
+//     open shadow roots and the closed roots recorded above. The in-page
+//     extractors route through this so player detection crosses shadow
+//     boundaries everywhere, not just in the static markup walk. Native
+//     querySelectorAll() never crosses a shadow boundary, which is why each
+//     extractor needs it. Bounded by depth/count to stay cheap on huge DOMs.
 export const SHADOW_INIT_SCRIPT = `(() => {
   const orig = Element.prototype.attachShadow;
   Element.prototype.attachShadow = function (init) {
@@ -698,6 +713,22 @@ export const SHADOW_INIT_SCRIPT = `(() => {
       try { this.__closedShadowRoot = root; } catch {}
     }
     return root;
+  };
+  window.__bbDeepElements = function (root) {
+    const out = [];
+    const MAX = 20000, MAX_DEPTH = 20;
+    (function walk(node, depth) {
+      if (depth > MAX_DEPTH || out.length >= MAX) return;
+      let els;
+      try { els = node.querySelectorAll("*"); } catch { return; }
+      for (const el of els) {
+        if (out.length >= MAX) return;
+        out.push(el);
+        const inner = el.shadowRoot || el.__closedShadowRoot;
+        if (inner) walk(inner, depth + 1);
+      }
+    })(root || document, 0);
+    return out;
   };
 })();`;
 
@@ -799,6 +830,9 @@ export const ACTIVATE_SELECTORS = [
 
 async function activatePlayButtons(page, { max = 3, settleMs = 1000 } = {}) {
   const captured = { scripts: [], iframes: [] };
+  // Playwright's selector engine already pierces open shadow DOM, so $$ finds
+  // activation placeholders nested inside web components without a deep query.
+  // (Closed shadow roots aren't reachable for clicking — a rare edge case.)
   const targets = await page.$$(ACTIVATE_SELECTORS.join(", "));
   if (targets.length === 0) return captured;
 
