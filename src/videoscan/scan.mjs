@@ -901,6 +901,11 @@ const WAF_TITLE_PATTERNS = [
 const CONNECTION_ERROR_PATTERNS = [
   'ERR_CONNECTION_REFUSED', 'ERR_CONNECTION_RESET', 'ERR_CONNECTION_CLOSED',
   'ECONNRESET', 'ECONNREFUSED',
+  // Protocol-level resets are how some edges (e.g. ing.nl) reject once an IP
+  // exceeds a request-rate threshold. Treat them as rate-limit signals so the
+  // auto-tuner backs off + retries instead of permanently failing the page.
+  'ERR_HTTP2_PROTOCOL_ERROR', 'ERR_SPDY_PROTOCOL_ERROR', 'ERR_QUIC_PROTOCOL_ERROR',
+  'ERR_HTTP2_SERVER_REFUSED_STREAM', 'ERR_CONNECTION_TIMED_OUT',
 ];
 
 function detectConnectionRateLimit(err) {
@@ -1283,16 +1288,41 @@ function setupInterruptHandler() {
 // it isn't present. Override with VIDEOSCAN_BROWSER_CHANNEL=chromium to force
 // the bundle, or =msedge etc.
 async function launchScanBrowser() {
+  // --disable-http2: crawling reuses one context = one multiplexed HTTP/2
+  // connection. After a request burst some edges (ing.nl) send an HTTP/2
+  // GOAWAY/reset that poisons that connection, so every later request fails with
+  // ERR_HTTP2_PROTOCOL_ERROR even at concurrency 1. HTTP/1.1 uses a self-healing
+  // connection pool (dead sockets are replaced), so the crawl keeps working.
+  const args = ["--disable-http2"];
   // Empty/unset env both mean "use Chrome"; set =chromium to force the bundle.
   const channel = process.env.VIDEOSCAN_BROWSER_CHANNEL || "chrome";
   if (channel !== "chromium") {
     try {
-      return await chromium.launch({ headless: true, channel });
+      return await chromium.launch({ headless: true, channel, args });
     } catch {
       // Channel not installed — fall through to the bundled Chromium.
     }
   }
-  return await chromium.launch({ headless: true });
+  return await chromium.launch({ headless: true, args });
+}
+
+// Heavy pages fire dozens of subresource requests; at scan concurrency this can
+// flood a server's per-IP HTTP/2 stream limit and trigger protocol-reset blocks
+// (ing.nl does this). Abort non-essential resource types — we only need the
+// document + scripts/XHR for player detection. The "request" event still fires
+// before the abort, so network-URL evidence (ytimg, jwplayer, .m3u8, …) is still
+// captured; this only skips downloading bytes we never inspect, which also makes
+// scans much faster.
+const BLOCKED_RESOURCE_TYPES = new Set(["image", "media", "font", "stylesheet"]);
+async function applyResourceBlocking(context) {
+  await context.route("**/*", (route) => {
+    try {
+      if (BLOCKED_RESOURCE_TYPES.has(route.request().resourceType())) return route.abort();
+      return route.continue();
+    } catch {
+      try { return route.continue(); } catch { /* route already handled */ }
+    }
+  });
 }
 
 async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile = null, concurrency = DEFAULT_CONCURRENCY, delay = 200, sitemap = true, maxSitemapUrls = 5000, controlFile = null } = {}) {
@@ -1303,6 +1333,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     viewport: { width: 1920, height: 1080 },
   });
   await context.addInitScript(SHADOW_INIT_SCRIPT);
+  await applyResourceBlocking(context);
 
   const baseUrl = new URL(startUrl);
   const domain = baseUrl.hostname.replace(/^www\./, "");
@@ -1583,6 +1614,7 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
     viewport: { width: 1920, height: 1080 },
   });
   await context.addInitScript(SHADOW_INIT_SCRIPT);
+  await applyResourceBlocking(context);
 
   const baseUrl = new URL(urls[0]);
   const domain = baseUrl.hostname.replace(/^www\./, "");
@@ -1696,8 +1728,14 @@ function generateReport({ domain, results, pagesScanned, _state, rateLimits, bat
   const playerSummary = {};
   const pagesWithPlayers = [];
   const pagesWithoutPlayers = [];
+  const errorSummary = {}; // normalized reason → count
 
-  for (const { url, players } of results) {
+  for (const { url, players, error } of results) {
+    if (error) {
+      // Collapse to the ERR_*/keyword signature so noisy URLs/suffixes group.
+      const key = (error.match(/ERR_[A-Z0-9_]+|Timeout|Rate limited|null response/i) || [error])[0];
+      errorSummary[key] = (errorSummary[key] || 0) + 1;
+    }
     if (players.length > 0) {
       pagesWithPlayers.push({ url, players });
       for (const { player } of players) {
@@ -1709,6 +1747,8 @@ function generateReport({ domain, results, pagesScanned, _state, rateLimits, bat
     }
   }
 
+  const pagesFailed = Object.values(errorSummary).reduce((a, b) => a + b, 0);
+  const failureRate = results.length > 0 ? pagesFailed / results.length : 0;
   const playerNames = Object.keys(playerSummary);
   const isBBCustomer = playerSummary["Blue Billywig"]?.length > 0;
 
@@ -1721,6 +1761,22 @@ function generateReport({ domain, results, pagesScanned, _state, rateLimits, bat
   console.log(
     chalk.bold(`  Unieke videoplayers:  ${playerNames.length}`)
   );
+  if (pagesFailed > 0) {
+    const pct = Math.round(failureRate * 100);
+    const color = failureRate >= 0.5 ? chalk.bold.red : chalk.yellow;
+    console.log(color(`  Pagina's mislukt:     ${pagesFailed} (${pct}% load errors)`));
+    for (const [reason, n] of Object.entries(errorSummary).sort((a, b) => b[1] - a[1]).slice(0, 5)) {
+      console.log(chalk.gray(`    • ${reason}: ${n}`));
+    }
+  }
+  // A scan that failed to load most pages must not read as a clean result.
+  if (failureRate >= 0.5) {
+    console.log(chalk.bold.red(
+      `\n  ⚠ ${Math.round(failureRate * 100)}% of pages failed to load — results are NOT representative.` +
+      `\n    Likely bot-blocking/rate-limiting. The auto-tuner backs off on protocol resets;` +
+      `\n    re-run (optionally --resume) so backed-off pages get retried.`
+    ));
+  }
 
   if (playerNames.length > 0) {
     console.log(chalk.bold.yellow("\n  ── Gevonden Players ──────────────────────────"));
@@ -1781,6 +1837,9 @@ function generateReport({ domain, results, pagesScanned, _state, rateLimits, bat
     pagesScanned,
     pagesWithVideo: pagesWithPlayers.length,
     uniquePlayers: playerNames.length,
+    pagesFailed,
+    failureRate: Math.round(failureRate * 1000) / 1000,
+    ...(pagesFailed > 0 ? { errorSummary } : {}),
     ...(batchId ? { batchId } : {}),
     ...(batchLabel ? { batchLabel } : {}),
     playerSummary: Object.fromEntries(
