@@ -956,7 +956,13 @@ async function gotoResilient(page, url, timeout) {
   return response;
 }
 
-async function scanOnePage(context, url, timeout) {
+async function scanOnePage(browser, url, timeout) {
+  // Fresh context per page = fresh connection. Edges like ing.nl reset a reused
+  // HTTP/2 connection after a couple of requests, which would fail every later
+  // page in a shared context; a per-page context keeps the crawl working even
+  // when the IP is being rate-limited (one page-load fits one connection).
+  const context = await createScanContext(browser);
+  try {
   const page = await context.newPage();
   const networkRequests = [];
 
@@ -1019,12 +1025,16 @@ async function scanOnePage(context, url, timeout) {
     Array.from(document.querySelectorAll("a[href]"), (a) => a.href)
   );
 
-  await page.close();
   return { detected, links };
+  } finally {
+    await context.close().catch(() => {});
+  }
 }
 
 // First page: accept cookies before scanning (re-navigates if cookies accepted)
-async function scanFirstPage(context, url, timeout) {
+async function scanFirstPage(browser, url, timeout) {
+  const context = await createScanContext(browser);
+  try {
   const page = await context.newPage();
   const networkRequests = [];
   page.on("request", (req) => networkRequests.push(req.url()));
@@ -1088,8 +1098,10 @@ async function scanFirstPage(context, url, timeout) {
     Array.from(document.querySelectorAll("a[href]"), (a) => a.href)
   );
 
-  await page.close();
   return { detected, links };
+  } finally {
+    await context.close().catch(() => {});
+  }
 }
 
 // Initial guess before AutoTuner takes over (it'll converge within ~2 batches).
@@ -1325,8 +1337,9 @@ async function applyResourceBlocking(context) {
   });
 }
 
-async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile = null, concurrency = DEFAULT_CONCURRENCY, delay = 200, sitemap = true, maxSitemapUrls = 5000, controlFile = null } = {}) {
-  const browser = await launchScanBrowser();
+// Build a scan context with our shadow init script + resource blocking wired
+// in. One per page (a fresh connection) — see scanOnePage for why.
+async function createScanContext(browser) {
   const context = await browser.newContext({
     userAgent:
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -1334,6 +1347,11 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   });
   await context.addInitScript(SHADOW_INIT_SCRIPT);
   await applyResourceBlocking(context);
+  return context;
+}
+
+async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile = null, concurrency = DEFAULT_CONCURRENCY, delay = 200, sitemap = true, maxSitemapUrls = 5000, controlFile = null } = {}) {
+  const browser = await launchScanBrowser();
 
   const baseUrl = new URL(startUrl);
   const domain = baseUrl.hostname.replace(/^www\./, "");
@@ -1393,7 +1411,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       chalk.gray(`[${visited.size}/${maxPages}] `) + chalk.white(truncate(firstUrl, 80)) + " "
     );
     try {
-      const { detected, links, skippedReason } = await scanFirstPage(context, firstUrl, timeout);
+      const { detected, links, skippedReason } = await scanFirstPage(browser, firstUrl, timeout);
       if (skippedReason) {
         console.log(chalk.yellow(`  ⤳ skipped (${skippedReason})`));
       } else if (detected.length > 0) {
@@ -1485,7 +1503,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
 
     // Scan all pages in batch concurrently
     const batchResults = await Promise.allSettled(
-      batch.map((url) => scanOnePage(context, url, timeout))
+      batch.map((url) => scanOnePage(browser, url, timeout))
     );
 
     // Process results and collect new links
@@ -1608,13 +1626,6 @@ export function detectPlayers(html, networkRequests) {
 
 async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_CONCURRENCY, delay = 200, controlFile = null } = {}) {
   const browser = await launchScanBrowser();
-  const context = await browser.newContext({
-    userAgent:
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    viewport: { width: 1920, height: 1080 },
-  });
-  await context.addInitScript(SHADOW_INIT_SCRIPT);
-  await applyResourceBlocking(context);
 
   const baseUrl = new URL(urls[0]);
   const domain = baseUrl.hostname.replace(/^www\./, "");
@@ -1634,7 +1645,7 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
   const firstUrl = urls[0];
   process.stdout.write(chalk.gray(`[1/${urls.length}] `) + chalk.white(truncate(firstUrl, 80)) + " ");
   try {
-    const { detected, skippedReason } = await scanFirstPage(context, firstUrl, timeout);
+    const { detected, skippedReason } = await scanFirstPage(browser, firstUrl, timeout);
     if (skippedReason) {
       console.log(chalk.yellow(`  ⤳ skipped (${skippedReason})`));
     } else if (detected.length > 0) {
@@ -1672,7 +1683,7 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
     }
 
     const batchResults = await Promise.allSettled(
-      batch.map((url) => scanOnePage(context, url, timeout))
+      batch.map((url) => scanOnePage(browser, url, timeout))
     );
 
     for (let i = 0; i < batch.length; i++) {
