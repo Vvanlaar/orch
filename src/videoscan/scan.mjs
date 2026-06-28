@@ -1288,12 +1288,12 @@ function setupInterruptHandler() {
 // it isn't present. Override with VIDEOSCAN_BROWSER_CHANNEL=chromium to force
 // the bundle, or =msedge etc.
 async function launchScanBrowser() {
-  // --disable-http2: crawling reuses one context = one multiplexed HTTP/2
-  // connection. After a request burst some edges (ing.nl) send an HTTP/2
-  // GOAWAY/reset that poisons that connection, so every later request fails with
-  // ERR_HTTP2_PROTOCOL_ERROR even at concurrency 1. HTTP/1.1 uses a self-healing
-  // connection pool (dead sockets are replaced), so the crawl keeps working.
-  const args = ["--disable-http2"];
+  // Opt-in HTTP/1.1. Resource blocking (applyResourceBlocking) keeps the
+  // per-page request burst small enough that HTTP/2 connections don't get
+  // GOAWAY/reset-poisoned, so HTTP/2 is the default. But some edges stall H2
+  // under sustained load; VIDEOSCAN_DISABLE_HTTP2=1 forces the self-healing
+  // HTTP/1.1 connection pool for those.
+  const args = process.env.VIDEOSCAN_DISABLE_HTTP2 ? ["--disable-http2"] : [];
   // Empty/unset env both mean "use Chrome"; set =chromium to force the bundle.
   const channel = process.env.VIDEOSCAN_BROWSER_CHANNEL || "chrome";
   if (channel !== "chromium") {
