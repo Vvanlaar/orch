@@ -937,6 +937,20 @@ function createRateLimitError(reason) {
   return err;
 }
 
+// Navigate resiliently. Tracker-heavy sites (e.g. ing.nl) keep the network busy
+// indefinitely and never reach "networkidle", so a strict networkidle goto times
+// out and the page is lost. Load on "domcontentloaded" (reliable) and then give
+// the network a bounded, best-effort chance to settle so network-based player
+// detection still benefits. Returns the navigation response (for rate-limit and
+// redirect checks); connection errors still throw from the inner goto.
+async function gotoResilient(page, url, timeout) {
+  const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout });
+  await page
+    .waitForLoadState("networkidle", { timeout: Math.min(8000, timeout) })
+    .catch(() => {});
+  return response;
+}
+
 async function scanOnePage(context, url, timeout) {
   const page = await context.newPage();
   const networkRequests = [];
@@ -947,7 +961,7 @@ async function scanOnePage(context, url, timeout) {
 
   let response;
   try {
-    response = await page.goto(url, { waitUntil: "networkidle", timeout });
+    response = await gotoResilient(page, url, timeout);
   } catch (err) {
     const rlReason = detectConnectionRateLimit(err);
     await page.close();
@@ -1012,7 +1026,7 @@ async function scanFirstPage(context, url, timeout) {
 
   let response;
   try {
-    response = await page.goto(url, { waitUntil: "networkidle", timeout });
+    response = await gotoResilient(page, url, timeout);
   } catch (err) {
     const rlReason = detectConnectionRateLimit(err);
     await page.close();
@@ -1037,7 +1051,7 @@ async function scanFirstPage(context, url, timeout) {
   } catch {}
 
   if (await acceptCookies(page)) {
-    await page.goto(url, { waitUntil: "networkidle", timeout });
+    await gotoResilient(page, url, timeout);
     // Re-check redirect after post-consent navigation
     try {
       if (didRedirectOffDomain(page, url)) {
@@ -1262,8 +1276,27 @@ function setupInterruptHandler() {
   process.on('SIGTERM', handler);
 }
 
+// Launch the scan browser. Real Chrome passes bot-fingerprint checks that block
+// Playwright's bundled Chromium outright (e.g. ing.nl returns
+// ERR_HTTP2_PROTOCOL_ERROR / connection timeouts to bundled Chromium but 200 to
+// installed Chrome). Prefer installed Chrome; fall back to bundled Chromium when
+// it isn't present. Override with VIDEOSCAN_BROWSER_CHANNEL=chromium to force
+// the bundle, or =msedge etc.
+async function launchScanBrowser() {
+  // Empty/unset env both mean "use Chrome"; set =chromium to force the bundle.
+  const channel = process.env.VIDEOSCAN_BROWSER_CHANNEL || "chrome";
+  if (channel !== "chromium") {
+    try {
+      return await chromium.launch({ headless: true, channel });
+    } catch {
+      // Channel not installed — fall through to the bundled Chromium.
+    }
+  }
+  return await chromium.launch({ headless: true });
+}
+
 async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile = null, concurrency = DEFAULT_CONCURRENCY, delay = 200, sitemap = true, maxSitemapUrls = 5000, controlFile = null } = {}) {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await launchScanBrowser();
   const context = await browser.newContext({
     userAgent:
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -1543,7 +1576,7 @@ export function detectPlayers(html, networkRequests) {
 // ── Explicit URL scanning (no crawl) ────────────────────────────────
 
 async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_CONCURRENCY, delay = 200, controlFile = null } = {}) {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await launchScanBrowser();
   const context = await browser.newContext({
     userAgent:
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
