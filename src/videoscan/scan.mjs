@@ -908,6 +908,13 @@ const CONNECTION_ERROR_PATTERNS = [
   // auto-tuner backs off + retries instead of permanently failing the page.
   'ERR_HTTP2_PROTOCOL_ERROR', 'ERR_SPDY_PROTOCOL_ERROR', 'ERR_QUIC_PROTOCOL_ERROR',
   'ERR_HTTP2_SERVER_REFUSED_STREAM', 'ERR_CONNECTION_TIMED_OUT',
+  // Transient DNS/network blips (Chrome's resolver can wobble under sustained
+  // load on a long crawl). They're not really rate-limiting, but routing them
+  // through the same back-off + retry path means a page isn't permanently
+  // dropped on a momentary miss — the retry (with a fresh per-page context) and
+  // the periodic browser recycle usually clear it.
+  'ERR_NAME_NOT_RESOLVED', 'ERR_NAME_RESOLUTION_FAILED', 'ERR_NETWORK_CHANGED',
+  'ERR_INTERNET_DISCONNECTED',
 ];
 
 function detectConnectionRateLimit(err) {
@@ -1377,7 +1384,12 @@ function writeCheckpoint(domain, results, visited, queue) {
 }
 
 async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile = null, concurrency = DEFAULT_CONCURRENCY, delay = 200, sitemap = true, maxSitemapUrls = 5000, controlFile = null } = {}) {
-  const browser = await launchScanBrowser();
+  let browser = await launchScanBrowser();
+  // Recycle the whole browser process every N pages. Over a long crawl the
+  // single browser accumulates state (and Chrome's DNS resolver can degrade,
+  // surfacing as ERR_NAME_NOT_RESOLVED) — a periodic relaunch bounds that.
+  const RECYCLE_EVERY = 400;
+  let pagesSinceRecycle = 0;
 
   const baseUrl = new URL(startUrl);
   const domain = baseUrl.hostname.replace(/^www\./, "");
@@ -1599,6 +1611,17 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
 
     // Re-prioritize remaining queue after each batch (new video-likely URLs bubble up)
     queue.splice(0, queue.length, ...prioritizeUrls(queue));
+
+    // Recycle the browser between batches once we've scanned enough pages — a
+    // fresh process resets accumulated state / a degraded DNS resolver. Safe
+    // here: the batch's pages are all done, none are in flight.
+    pagesSinceRecycle += batch.length;
+    if (pagesSinceRecycle >= RECYCLE_EVERY && queue.length > 0 && visited.size < maxPages && !interrupted) {
+      console.log(chalk.gray(`  ↻ recycling browser after ${pagesSinceRecycle} pages`));
+      try { await browser.close(); } catch { /* already gone */ }
+      browser = await launchScanBrowser();
+      pagesSinceRecycle = 0;
+    }
   }
 
   await browser.close();
