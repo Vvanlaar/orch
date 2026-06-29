@@ -749,15 +749,17 @@ export async function extractShadowDomMarkup(page) {
 
     function emit(el, hostTag) {
       const tag = el.tagName;
-      // outerHTML keeps src + data-* lazy-load attrs that detectPlayers keys on;
-      // iframe outerHTML never includes the embedded document, so it stays small.
-      if (tag === "IFRAME" || tag === "VIDEO" || tag === "AUDIO" || tag === "SOURCE") {
-        parts.push(el.outerHTML.slice(0, MAX));
-      }
+      if (tag !== "IFRAME" && tag !== "VIDEO" && tag !== "AUDIO" && tag !== "SOURCE") return;
+      // Emit the host marker only once we've actually found media under it —
+      // otherwise component-heavy pages fill the MAX_PARTS budget with host
+      // comments for media-less shadow roots and drop real evidence deeper in.
       if (hostTag && !seenHosts.has(hostTag)) {
         seenHosts.add(hostTag);
         parts.push(`<!-- shadow host: ${hostTag} -->`);
       }
+      // outerHTML keeps src + data-* lazy-load attrs that detectPlayers keys on;
+      // iframe outerHTML never includes the embedded document, so it stays small.
+      parts.push(el.outerHTML.slice(0, MAX));
     }
 
     function walk(root, hostTag, depth) {
@@ -1320,12 +1322,16 @@ async function launchScanBrowser() {
 
 // Heavy pages fire dozens of subresource requests; at scan concurrency this can
 // flood a server's per-IP HTTP/2 stream limit and trigger protocol-reset blocks
-// (ing.nl does this). Abort non-essential resource types — we only need the
-// document + scripts/XHR for player detection. The "request" event still fires
-// before the abort, so network-URL evidence (ytimg, jwplayer, .m3u8, …) is still
-// captured; this only skips downloading bytes we never inspect, which also makes
-// scans much faster.
-const BLOCKED_RESOURCE_TYPES = new Set(["image", "media", "font", "stylesheet"]);
+// (ing.nl does this). Abort the heavy, detection-irrelevant resource types — we
+// only need the document + scripts/XHR. The "request" event still fires before
+// the abort, so network-URL evidence (ytimg, jwplayer, .m3u8, …) is still
+// captured; this only skips downloading bytes we never inspect, and also speeds
+// scans up. NOTE: stylesheets are deliberately NOT blocked — acceptCookies() and
+// activatePlayButtons() gate clicks on isVisible(), and external CSS often sizes
+// those consent/play controls; dropping it can make them compute to zero-size
+// and silently skip the click (missed consent-gated video). Images dominate the
+// request count anyway, so the flood mitigation barely needs stylesheets.
+const BLOCKED_RESOURCE_TYPES = new Set(["image", "media", "font"]);
 async function applyResourceBlocking(context) {
   await context.route("**/*", (route) => {
     try {
