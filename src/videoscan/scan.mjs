@@ -1350,6 +1350,26 @@ async function createScanContext(browser) {
   return context;
 }
 
+// Periodically persist crawl state so a long crawl killed mid-run (session
+// teardown, OOM, Ctrl-C) can be continued with --resume. The shape matches what
+// the resume path reads (_state.visited/queue + details). Written to a stable
+// INPROGRESS name; deleted on clean completion (the final timestamped report
+// supersedes it).
+function checkpointPath(domain) {
+  return `videoscan-${domain}-INPROGRESS.json`;
+}
+function writeCheckpoint(domain, results, visited, queue) {
+  try {
+    const details = results
+      .filter((r) => r.players.length > 0)
+      .map((r) => ({ url: r.url, players: r.players.map((p) => ({ name: p.player, evidence: p.evidence })) }));
+    writeFileSync(
+      checkpointPath(domain),
+      JSON.stringify({ domain, checkpoint: true, scanDate: new Date().toISOString(), pagesScanned: visited.size, _state: { visited: [...visited], queue }, details }, null, 2)
+    );
+  } catch { /* checkpoint is best-effort */ }
+}
+
 async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile = null, concurrency = DEFAULT_CONCURRENCY, delay = 200, sitemap = true, maxSitemapUrls = 5000, controlFile = null } = {}) {
   const browser = await launchScanBrowser();
 
@@ -1568,6 +1588,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       const etaMin = ppm > 0 ? (remaining / ppm).toFixed(1) : "?";
       console.log(chalk.cyan(`  ── ${ppm} pages/min | queue=${queue.length} | ~${etaMin}min left | delay=${throttle.delay}ms | auto-conc=${throttle.concurrency} (base=${throttle.baseConcurrency})`));
       lastProgressAt = Date.now();
+      writeCheckpoint(domain, results, visited, queue);
     }
 
     // Re-prioritize remaining queue after each batch (new video-likely URLs bubble up)
@@ -1576,6 +1597,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
 
   await browser.close();
   autoTuner.cleanup();
+  try { unlinkSync(checkpointPath(domain)); } catch { /* no checkpoint to clean */ }
 
   return {
     domain,
