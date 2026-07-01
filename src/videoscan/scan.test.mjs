@@ -114,3 +114,25 @@ test("Shadow DOM <iframe> youtube → YouTube via existing patterns", () => {
   const result = detectFromCorpus(html, shadowBlob);
   assert.deepEqual(names(result), ["YouTube"]);
 });
+
+test("YouTube share link (youtu.be) is NOT a player — anchor href", () => {
+  // youtu.be is a share/watch domain, never an embed src. A plain link to it
+  // must not be reported as a YouTube player. stripAnchorHrefs handles anchors…
+  const html = `<p>Watch it here: <a href="https://youtu.be/abc123">on YouTube</a></p>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), []);
+});
+
+test("YouTube share link (youtu.be) is NOT a player — bare text / data attr", () => {
+  // …and even outside an anchor (plain text, data-*, JSON) it must not match,
+  // since the youtu.be pattern was removed entirely.
+  const html = `<div data-share-url="https://youtu.be/abc123">see youtu.be/abc123</div>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), []);
+});
+
+test("YouTube embed iframe still detected (guard against over-removal)", () => {
+  const html = `<iframe src="https://www.youtube.com/embed/abc123"></iframe>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), ["YouTube"]);
+});

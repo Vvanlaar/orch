@@ -96,7 +96,8 @@ function generateBarChartHTML(auditMatches) {
         <div class="bar-label">${m.auditName}</div>
       </div>`;
     }).join("\n");
-  return `    <div class="bar-chart">\n${bars}\n    </div>`;
+  return `    <div class="bar-chart">\n${bars}\n    </div>
+    <p class="text-danger chart-label">&#9632; Aantal afgekeurde WCAG-criteria per speler</p>`;
 }
 
 // ── Audit section ──
@@ -153,6 +154,45 @@ function generateAuditSection(playerSummary) {
     </table>`;
 
   return { html, matches: auditMatches };
+}
+
+/**
+ * Explains the WCAG gaps of a bare HTML5 `<video>` element ("HTML5 native").
+ * It is deliberately NOT part of the Proper Access audit table — a kale <video>
+ * is a generic element, not an audited branded player, so we do NOT attach the
+ * audit-source link to it. Returns "" when no HTML5 native player was detected.
+ */
+function generateHtml5NativeSection(playerNames) {
+  if (!playerNames.includes("HTML5 native")) return "";
+
+  const criteria = [
+    ["1.2.1", "Louter-geluid en louter-beeld (vooraf opgenomen)", "A"],
+    ["1.2.2", "Ondertitels voor doven en slechthorenden (vooraf opgenomen)", "A"],
+    ["1.2.3", "Audiodescriptie of media-alternatief (vooraf opgenomen)", "A"],
+    ["1.2.5", "Audiodescriptie (vooraf opgenomen)", "AA"],
+    ["1.4.2", "Geluidsbediening (bij autoplay met geluid)", "A"],
+  ];
+
+  const items = criteria
+    .map(([sc, name, level]) =>
+      `<li style="margin-bottom:6px"><strong>${sc}</strong> ${name} <span style="color:#888">(niveau ${level})</span></li>`
+    ).join("\n        ");
+
+  return `
+    <h2>Kale HTML5 video (&lt;video&gt;)</h2>
+    <p style="font-size:14px;color:#525659">
+      Een deel van de gevonden video's gebruikt een <strong>kaal &lt;video&gt;-element</strong>
+      met de standaard browserknoppen. Zo'n speler biedt uit zichzelf <strong>geen ondertiteling,
+      audiodescriptie of transcript</strong> en kan daardoor niet voldoen aan de WCAG 2.2-criteria
+      voor tijdgebonden media:
+    </p>
+    <ul style="font-size:14px;color:#525659;margin:12px 0 12px 20px">
+        ${items}
+    </ul>
+    <p style="font-size:13px;color:#888">
+      Dit zijn structurele beperkingen van het element zelf; per video kan het beeld anders zijn
+      als er ondertitels (&lt;track&gt;) en een transcript zijn toegevoegd.
+    </p>`;
 }
 
 // ── Utility ──
@@ -336,10 +376,12 @@ ${buildFooter(pageNum)}
   pageNum++;
   const { html: auditTable, matches: auditMatches } = generateAuditSection(playerSummary);
   const barChart = generateBarChartHTML(auditMatches);
+  const html5Section = generateHtml5NativeSection(playerNames);
 
   pages.push(fillTemplate(loadTemplate("accessibility.html"), {
     barChart: barChart || "",
     auditTable: auditTable || "",
+    html5Section: html5Section || "",
     footer: buildFooter(pageNum),
   }));
 
@@ -463,15 +505,19 @@ function generatePreviewReport(scanData, options = {}) {
       auditMatches.push({ name: auditName, ...AUDIT_DATA.players[auditName] });
     }
   }
-  const auditFail = auditMatches.filter(m => m.status === "fail").length;
+  // A kale <video> ("HTML5 native") also can't meet the time-based-media criteria
+  // on its own, so count it as a non-conform player type alongside audited players.
+  const hasHtml5Native = playerNames.includes("HTML5 native");
+  const totalConsidered = auditMatches.length + (hasHtml5Native ? 1 : 0);
+  const failCount = auditMatches.filter(m => m.status === "fail").length + (hasHtml5Native ? 1 : 0);
   let accessibilityFlags = "";
-  if (auditMatches.length > 0) {
+  if (totalConsidered > 0) {
     accessibilityFlags = `
         <h2>Toegankelijkheid</h2>
-        <div>${auditFail > 0
-          ? `<span class="flag flag-orange">&#9888; ${auditFail} van ${auditMatches.length} players niet WCAG-conform</span>`
+        <div>${failCount > 0
+          ? `<span class="flag flag-orange">&#9888; ${failCount} van ${totalConsidered} playertype${totalConsidered > 1 ? "s" : ""} niet WCAG-conform</span>`
           : `<span class="flag flag-green">&#10003; Alle players WCAG-conform</span>`}</div>
-        <p style="font-size:13px;color:#666;margin-top:8px">Bron: ${AUDIT_DATA.source} audit (${AUDIT_DATA.date})</p>`;
+        <p style="font-size:13px;color:#666;margin-top:8px">${auditMatches.length > 0 ? `Bron: ${AUDIT_DATA.source} audit (${AUDIT_DATA.date})` : "Incl. kale HTML5 &lt;video&gt;-spelers zonder ondertiteling/transcript."}</p>`;
   }
 
   const pageNum = 1;

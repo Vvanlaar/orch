@@ -133,7 +133,9 @@ export const DETECTORS = {
     patterns: [
       /youtube\.com\/embed/i,
       /youtube-nocookie\.com\/embed/i,
-      /youtu\.be\//i,
+      // NB: no bare /youtu\.be\// — that's a share/watch link domain, never an
+      // embed src. It fired on plain links (stripAnchorHrefs only strips <a href>,
+      // not data-*/text/JSON), flagging pages that merely link to YouTube.
       /ytimg\.com/i,
       /youtube\.com\/iframe_api/i,
       /yt-video/i,
