@@ -865,6 +865,9 @@
                         <input class="report-opts-input" placeholder="Contact name" bind:value={reportOpts.contactName}>
                         <input class="report-opts-input" placeholder="Contact phone" bind:value={reportOpts.contactPhone}>
                         <input class="report-opts-input span2" placeholder="Contact email" bind:value={reportOpts.contactEmail}>
+                        <input class="report-opts-input span2" placeholder="Exclude example sections (comma-separated, e.g. zakelijk, private-banking)"
+                          value={(reportOpts.excludeExampleSections ?? []).join(', ')}
+                          oninput={(e) => reportOpts.excludeExampleSections = e.currentTarget.value.split(',').map((s) => s.trim()).filter(Boolean)}>
                       </div>
                       <div class="add-urls-btns">
                         <button class="sb res" onclick={() => handleGenerateReport(scan, reportOpts)}>Generate</button>

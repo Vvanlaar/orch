@@ -30,6 +30,13 @@ describe('reportOptionsToArgs', () => {
     expect(args).not.toContain('--contact-name');
   });
 
+  it('joins excludeExampleSections into one comma-separated flag; omits when empty', () => {
+    expect(reportOptionsToArgs({ excludeExampleSections: ['zakelijk', 'private-banking'] }))
+      .toEqual(['--exclude-example-sections', 'zakelijk,private-banking']);
+    // Empty array → no flag (report.mjs treats absent flag as "exclude nothing").
+    expect(reportOptionsToArgs({ excludeExampleSections: [] })).toEqual([]);
+  });
+
   it('maps every field to its flag', () => {
     expect(
       reportOptionsToArgs({

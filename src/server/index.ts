@@ -32,7 +32,7 @@ import { initSettings } from '../core/settings.js';
 import { isSupabaseConfigured, MACHINE_ID } from '../core/db/client.js';
 import { dbGetNotifications, dbInsertNotification } from '../core/db/notifications.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
-import { getVideoscanDir, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, pauseVideoscan, findLatestScanFileForDomain, isVideoscanRunning, deleteScans, wrapUpBatch } from '../core/videoscan-runner.js';
+import { getVideoscanDir, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, pauseVideoscan, findLatestScanFileForDomain, isVideoscanRunning, deleteScans, wrapUpBatch, type ReportOptions } from '../core/videoscan-runner.js';
 import { getClosedBatches, markBatchClosed, markBatchOpen } from '../core/batch-state.js';
 import { isPidAlive, killProcessTree } from '../core/process-kill.js';
 import { createSignedUrl, downloadFile } from '../core/db/storage.js';
@@ -1979,24 +1979,41 @@ app.post('/api/videoscans/sync', asyncHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
+function reportOptionsFromBody(body: Record<string, unknown>): ReportOptions {
+  const { orgName, coverImageUrl, contactImageUrl, contactName, contactPhone, contactEmail, excludeExampleSections } = body as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
+  return {
+    orgName: str(orgName),
+    coverImageUrl: str(coverImageUrl),
+    contactImageUrl: str(contactImageUrl),
+    contactName: str(contactName),
+    contactPhone: str(contactPhone),
+    contactEmail: str(contactEmail),
+    excludeExampleSections: Array.isArray(excludeExampleSections)
+      ? excludeExampleSections.filter((s): s is string => typeof s === 'string' && s.trim() !== '')
+      : undefined,
+  };
+}
+
 app.post('/api/videoscans/generate-report', asyncHandler(async (req, res) => {
-  const { filename, orgName, coverImageUrl, contactImageUrl, contactName, contactPhone, contactEmail } = req.body;
+  const { filename } = req.body;
   if (!filename || typeof filename !== 'string') {
     res.status(400).json({ error: 'filename required' });
     return;
   }
-  const result = await generateReport(filename, { orgName, coverImageUrl, contactImageUrl, contactName, contactPhone, contactEmail });
-  await generatePreview(filename, { orgName, coverImageUrl, contactImageUrl, contactName, contactPhone, contactEmail });
+  const options = reportOptionsFromBody(req.body);
+  const result = await generateReport(filename, options);
+  await generatePreview(filename, options);
   res.json(result);
 }));
 
 app.post('/api/videoscans/generate-preview', asyncHandler(async (req, res) => {
-  const { filename, orgName, coverImageUrl, contactImageUrl, contactName, contactPhone, contactEmail } = req.body;
+  const { filename } = req.body;
   if (!filename || typeof filename !== 'string') {
     res.status(400).json({ error: 'filename required' });
     return;
   }
-  const result = await generatePreview(filename, { orgName, coverImageUrl, contactImageUrl, contactName, contactPhone, contactEmail });
+  const result = await generatePreview(filename, reportOptionsFromBody(req.body));
   res.json(result);
 }));
 

@@ -77,6 +77,8 @@ export interface ReportOptions {
   contactName?: string;
   contactPhone?: string;
   contactEmail?: string;
+  /** URL path sections to omit from the "Selectie van pagina's" examples (still counted in stats). */
+  excludeExampleSections?: string[];
 }
 
 export async function regenerateReport(filename: string, options?: ReportOptions) {
