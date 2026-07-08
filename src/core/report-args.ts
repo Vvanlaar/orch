@@ -11,6 +11,9 @@ export interface ReportOptions {
   contactName?: string;
   contactPhone?: string;
   contactEmail?: string;
+  /** URL path sections (first segment) to omit from the "Selectie van pagina's"
+   *  example table only — they still count in stats and the section overview. */
+  excludeExampleSections?: string[];
 }
 
 export function reportOptionsToArgs(options?: ReportOptions): string[] {
@@ -26,5 +29,7 @@ export function reportOptionsToArgs(options?: ReportOptions): string[] {
   if (options.contactName) args.push('--contact-name', options.contactName);
   if (options.contactPhone) args.push('--contact-phone', options.contactPhone);
   if (options.contactEmail) args.push('--contact-email', options.contactEmail);
+  if (options.excludeExampleSections?.length)
+    args.push('--exclude-example-sections', options.excludeExampleSections.join(','));
   return args;
 }

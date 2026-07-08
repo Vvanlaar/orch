@@ -282,11 +282,19 @@ function generateReport(scanData, socialData, options = {}) {
 
   // Detail table (representative pages, up to 15)
   let detailTable = "";
-  if (details && details.length > 0) {
+  // Sections to omit from the example table only (still counted in stats/overview).
+  const excludedSections = new Set(options.excludeExampleSections || []);
+  const sectionOf = (u) => {
+    try { return new URL(u).pathname.split("/").filter(Boolean)[0] || ""; } catch { return ""; }
+  };
+  const exampleDetails = excludedSections.size
+    ? (details || []).filter(d => !excludedSections.has(sectionOf(d.url)))
+    : (details || []);
+  if (exampleDetails.length > 0) {
     // Pass 1: seed with 1 page per unique player so every player gets a row
     const seen = new Set();
     const seedByPlayer = [];
-    for (const d of details) {
+    for (const d of exampleDetails) {
       for (const p of d.players) {
         if (!seen.has(p.name)) {
           seen.add(p.name);
@@ -297,7 +305,7 @@ function generateReport(scanData, socialData, options = {}) {
     }
     // Pass 2: fill with section-representative + first-5 logic, excluding seeds
     const seedSet = new Set(seedByPlayer.map(d => d.url));
-    const filler = details
+    const filler = exampleDetails
       .filter(d => !seedSet.has(d.url))
       .filter((d, i, arr) => {
         const section = new URL(d.url).pathname.split("/").filter(Boolean)[0] || "";
@@ -576,6 +584,8 @@ const options = {
   contactName: getArg("--contact-name"),
   contactPhone: getArg("--contact-phone"),
   contactEmail: getArg("--contact-email"),
+  excludeExampleSections: (getArg("--exclude-example-sections") || "")
+    .split(",").map((s) => s.trim()).filter(Boolean),
 };
 
 if (args.includes("--preview")) {
