@@ -467,11 +467,14 @@ function isSameDomain(url, domain) {
 
 function shouldSkipUrl(url) {
   const skip = [
-    /\.(pdf|zip|png|jpg|jpeg|gif|svg|webp|mp4|mp3|wav|doc|docx|xls|xlsx|ppt|pptx|css|js)(\?|$)/i,
+    /\.(pdf|zip|png|jpg|jpeg|gif|svg|webp|mp4|mp3|wav|doc|docx|xls|xlsx|ppt|pptx|css|js|xbri|xbrl|xml|csv)(\?|$)/i,
     /mailto:/i,
     /tel:/i,
     /javascript:/i,
     /#$/,
+    // Draft/preview links (CMS preview tokens) — unpublished, auth-gated, redirect
+    // to a login page. Not real public pages; they only pollute failure counts.
+    /[?&]preview[-_]token=/i,
   ];
   if (skip.some((r) => r.test(url))) return true;
 
@@ -988,6 +991,11 @@ async function scanOnePage(browser, url, timeout) {
     const rlReason = detectConnectionRateLimit(err);
     await page.close();
     if (rlReason) throw createRateLimitError(rlReason);
+    // A URL that serves a file download (e.g. .xbri report packages, some
+    // extensionless /binaries/ document paths) isn't a page — skip, don't fail.
+    if (/Download is starting/i.test(err?.message || "")) {
+      return { detected: [], links: [], skippedReason: "download" };
+    }
     throw err;
   }
 
@@ -1793,12 +1801,14 @@ function generateReport({ domain, results, pagesScanned, _state, rateLimits, bat
   const pagesWithPlayers = [];
   const pagesWithoutPlayers = [];
   const errorSummary = {}; // normalized reason → count
+  const failedUrls = []; // [{ url, error }] — so failures can be re-run precisely
 
   for (const { url, players, error } of results) {
     if (error) {
       // Collapse to the ERR_*/keyword signature so noisy URLs/suffixes group.
       const key = (error.match(/ERR_[A-Z0-9_]+|Timeout|Rate limited|null response/i) || [error])[0];
       errorSummary[key] = (errorSummary[key] || 0) + 1;
+      if (failedUrls.length < 1000) failedUrls.push({ url, error: error.slice(0, 200) });
     }
     if (players.length > 0) {
       pagesWithPlayers.push({ url, players });
@@ -1903,7 +1913,7 @@ function generateReport({ domain, results, pagesScanned, _state, rateLimits, bat
     uniquePlayers: playerNames.length,
     pagesFailed,
     failureRate: Math.round(failureRate * 1000) / 1000,
-    ...(pagesFailed > 0 ? { errorSummary } : {}),
+    ...(pagesFailed > 0 ? { errorSummary, failedUrls } : {}),
     ...(batchId ? { batchId } : {}),
     ...(batchLabel ? { batchLabel } : {}),
     playerSummary: Object.fromEntries(
