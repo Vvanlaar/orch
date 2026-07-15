@@ -61,6 +61,38 @@ test("Plain HTML5 video → HTML5 native", () => {
   assert.deepEqual(names(result), ["HTML5 native"]);
 });
 
+test("Video inside IE downlevel-hidden conditional comment → ignored", () => {
+  // asnbank.nl ships an IE ≤9 fallback <video> inside a conditional comment.
+  // It never renders in a modern browser, so it must not count as a video page.
+  const html = `
+    <div class="content">
+      <!--[if lt IE 9]>
+        <video controls><source src="/fallback.mp4" type="video/mp4"></video>
+      <![endif]-->
+    </div>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), []);
+});
+
+test("Real video alongside an IE conditional comment → still detected", () => {
+  const html = `
+    <!--[if lt IE 9]><video src="/ie.mp4"></video><![endif]-->
+    <video controls><source src="/real.mp4" type="video/mp4"></video>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), ["HTML5 native"]);
+});
+
+test("Video inside downlevel-revealed conditional (html5-boilerplate) → still detected", () => {
+  // `<!--[if gt IE 8]><!-->` closes the comment, so the inner content renders
+  // for every non-IE browser. It must NOT be stripped.
+  const html = `
+    <!--[if gt IE 8]><!-->
+      <video controls><source src="/real.mp4" type="video/mp4"></video>
+    <!--<![endif]-->`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), ["HTML5 native"]);
+});
+
 test("Empty page → no players", () => {
   const result = detectFromCorpus("<html><body></body></html>");
   assert.deepEqual(names(result), []);

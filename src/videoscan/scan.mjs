@@ -1656,8 +1656,21 @@ function stripAnchorHrefs(html) {
   );
 }
 
+// Strip IE downlevel-hidden conditional comments (`<!--[if ...]> ... <![endif]-->`).
+// Their content is only parsed by IE ≤9 and never renders in the scan's Chromium,
+// but the DOM serializer keeps the whole block as inert comment text — so a
+// `<video>`/`<source>` inside an IE fallback (e.g. asnbank.nl) would otherwise
+// falsely trigger the "HTML5 native" detector.
+//
+// The negative lookahead skips downlevel-*revealed* comments, where the opener
+// ends with `<!-->` (e.g. the html5-boilerplate `<!--[if gt IE 8]><!--> … <!--<![endif]-->`):
+// there the inner content renders for non-IE, so it must be left in the corpus.
+function stripDownlevelConditionals(html) {
+  return html.replace(/<!--\[if\b[^\]]*\]>(?!\s*<!-->)[\s\S]*?<!\[endif\]-->/gi, "");
+}
+
 export function detectPlayers(html, networkRequests) {
-  const searchable = stripAnchorHrefs(html);
+  const searchable = stripAnchorHrefs(stripDownlevelConditionals(html));
   const found = [];
 
   for (const [player, config] of Object.entries(DETECTORS)) {
