@@ -1980,7 +1980,7 @@ app.post('/api/videoscans/sync', asyncHandler(async (req, res) => {
 }));
 
 function reportOptionsFromBody(body: Record<string, unknown>): ReportOptions {
-  const { orgName, coverImageUrl, contactImageUrl, contactName, contactPhone, contactEmail, excludeExampleSections } = body as Record<string, unknown>;
+  const { orgName, coverImageUrl, contactImageUrl, contactName, contactPhone, contactEmail, excludeExampleSections, allVideoPages } = body as Record<string, unknown>;
   const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
   return {
     orgName: str(orgName),
@@ -1992,6 +1992,7 @@ function reportOptionsFromBody(body: Record<string, unknown>): ReportOptions {
     excludeExampleSections: Array.isArray(excludeExampleSections)
       ? excludeExampleSections.filter((s): s is string => typeof s === 'string' && s.trim() !== '')
       : undefined,
+    allVideoPages: typeof allVideoPages === 'boolean' ? allVideoPages : undefined,
   };
 }
 

@@ -14,6 +14,9 @@ export interface ReportOptions {
   /** URL path sections (first segment) to omit from the "Selectie van pagina's"
    *  example table only — they still count in stats and the section overview. */
   excludeExampleSections?: string[];
+  /** List EVERY page with video on a dedicated "Pagina's met video" page,
+   *  instead of the 15-row "Selectie van pagina's" sample. */
+  allVideoPages?: boolean;
 }
 
 export function reportOptionsToArgs(options?: ReportOptions): string[] {
@@ -31,5 +34,6 @@ export function reportOptionsToArgs(options?: ReportOptions): string[] {
   if (options.contactEmail) args.push('--contact-email', options.contactEmail);
   if (options.excludeExampleSections?.length)
     args.push('--exclude-example-sections', options.excludeExampleSections.join(','));
+  if (options.allVideoPages) args.push('--all-video-pages');
   return args;
 }

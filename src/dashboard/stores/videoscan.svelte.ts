@@ -79,6 +79,8 @@ export interface ReportOptions {
   contactEmail?: string;
   /** URL path sections to omit from the "Selectie van pagina's" examples (still counted in stats). */
   excludeExampleSections?: string[];
+  /** List every page with video on a dedicated page, instead of the 15-row sample. */
+  allVideoPages?: boolean;
 }
 
 export async function regenerateReport(filename: string, options?: ReportOptions) {

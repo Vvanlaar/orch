@@ -9,6 +9,7 @@ import { isSupabaseConfigured } from './db/client.js';
 import { dbListScans, dbUpsertVideoscan, dbDeleteVideoscans, dbArchiveVideoscans } from './db/videoscans.js';
 import { downloadFile, uploadScanFiles, deleteScanFiles } from './db/storage.js';
 import { reportOptionsToArgs, type ReportOptions } from './report-args.js';
+import { applyStickyReportOptions } from './report-sticky.js';
 
 export type { ReportOptions };
 
@@ -278,42 +279,11 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
   });
 }
 
-/**
- * Sticky `excludeExampleSections`: this preference must survive report
- * regenerations (dashboard, any browser, cross-machine), so we persist it inside
- * the scan JSON — which is synced to storage — rather than relying on the caller/
- * localStorage to re-supply it every time.
- *
- * - A non-empty value in `options` wins and is written back to the JSON.
- * - Otherwise the previously-persisted value (if any) is applied.
- * (Other report options — org name, images, contact — stay per-call as before.)
- * Note: an empty request value does NOT clear a persisted one; set a new value to change it.
- */
-function applyStickyReportOptions(jsonPath: string, options?: ReportOptions): ReportOptions {
-  let json: { reportOptions?: { excludeExampleSections?: string[] } };
-  try {
-    json = JSON.parse(readFileSync(jsonPath, 'utf-8'));
-  } catch {
-    return options ?? {};
-  }
-  const requested = options?.excludeExampleSections;
-  let effective: string[] | undefined;
-  if (requested?.length) {
-    effective = requested;
-    json.reportOptions = { ...(json.reportOptions ?? {}), excludeExampleSections: requested };
-    try { writeFileSync(jsonPath, JSON.stringify(json, null, 2)); } catch (err) { log.warn(`Could not persist reportOptions for ${jsonPath}: ${err}`); }
-  } else {
-    const persisted = json.reportOptions?.excludeExampleSections;
-    effective = Array.isArray(persisted) && persisted.length ? persisted : undefined;
-  }
-  return { ...options, excludeExampleSections: effective };
-}
-
 export async function generateReport(jsonFilename: string, options?: ReportOptions): Promise<{ htmlFile?: string; pdfFile?: string }> {
   const jsonPath = join(VIDEOSCAN_DIR, jsonFilename);
   if (!existsSync(jsonPath)) await downloadFile(jsonFilename, VIDEOSCAN_DIR);
   if (!existsSync(jsonPath)) throw new Error(`JSON file not found: ${jsonFilename}`);
-  const effectiveOptions = applyStickyReportOptions(jsonPath, options);
+  const effectiveOptions = applyStickyReportOptions(jsonPath, options, (msg) => log.warn(msg));
 
   // Generate HTML
   await new Promise<void>((resolve, reject) => {
@@ -342,7 +312,7 @@ export async function generatePreview(jsonFilename: string, options?: ReportOpti
   const jsonPath = join(VIDEOSCAN_DIR, jsonFilename);
   if (!existsSync(jsonPath)) await downloadFile(jsonFilename, VIDEOSCAN_DIR);
   if (!existsSync(jsonPath)) throw new Error(`JSON file not found: ${jsonFilename}`);
-  const effectiveOptions = applyStickyReportOptions(jsonPath, options);
+  const effectiveOptions = applyStickyReportOptions(jsonPath, options, (msg) => log.warn(msg));
 
   await new Promise<void>((resolve, reject) => {
     const proc = spawn(process.execPath, [REPORT_SCRIPT, jsonFilename, '--preview', ...reportOptionsToArgs(effectiveOptions)], { cwd: VIDEOSCAN_DIR });

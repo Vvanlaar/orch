@@ -37,6 +37,11 @@ describe('reportOptionsToArgs', () => {
     expect(reportOptionsToArgs({ excludeExampleSections: [] })).toEqual([]);
   });
 
+  it('emits --all-video-pages only when true (boolean flag, no value)', () => {
+    expect(reportOptionsToArgs({ allVideoPages: true })).toEqual(['--all-video-pages']);
+    expect(reportOptionsToArgs({ allVideoPages: false })).toEqual([]);
+  });
+
   it('maps every field to its flag', () => {
     expect(
       reportOptionsToArgs({

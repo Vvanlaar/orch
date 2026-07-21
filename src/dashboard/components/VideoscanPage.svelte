@@ -868,6 +868,11 @@
                         <input class="report-opts-input span2" placeholder="Exclude example sections (comma-separated, e.g. zakelijk, private-banking)"
                           value={(reportOpts.excludeExampleSections ?? []).join(', ')}
                           oninput={(e) => reportOpts.excludeExampleSections = e.currentTarget.value.split(',').map((s) => s.trim()).filter(Boolean)}>
+                        <label class="report-opts-check span2">
+                          <input type="checkbox" checked={reportOpts.allVideoPages ?? false}
+                            onchange={(e) => reportOpts.allVideoPages = e.currentTarget.checked}>
+                          Alle video-pagina's tonen (i.p.v. selectie van 15)
+                        </label>
                       </div>
                       <div class="add-urls-btns">
                         <button class="sb res" onclick={() => handleGenerateReport(scan, reportOpts)}>Generate</button>
@@ -2530,6 +2535,15 @@
   }
   .report-opts-input::placeholder { color: var(--text-muted); }
   .report-opts-input.span2 { grid-column: span 2; }
+  .report-opts-check {
+    grid-column: span 2;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text);
+    font-size: 12px;
+  }
+  .report-opts-check input { margin: 0; }
   .add-urls-btns {
     display: flex;
     gap: 6px;

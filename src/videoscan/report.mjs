@@ -290,7 +290,9 @@ function generateReport(scanData, socialData, options = {}) {
   const exampleDetails = excludedSections.size
     ? (details || []).filter(d => !excludedSections.has(sectionOf(d.url)))
     : (details || []);
-  if (exampleDetails.length > 0) {
+  // In all-video-pages mode the selection is replaced by a dedicated full-list
+  // page (built after the overview), so skip the 15-row example table here.
+  if (!options.allVideoPages && exampleDetails.length > 0) {
     // Pass 1: seed with 1 page per unique player so every player gets a row
     const seen = new Set();
     const seedByPlayer = [];
@@ -338,6 +340,31 @@ function generateReport(scanData, socialData, options = {}) {
     detailTable,
     footer: buildFooter(pageNum),
   }));
+
+  // ── Full "Pagina's met video" list page (opt-in via allVideoPages) ──
+  // Lists every page where video was found (no 15-row cap, no section filtering),
+  // so the report can serve as a complete URL inventory. Long lists flow across
+  // multiple PDF pages (see .page print rules); rows never split (page-break-inside).
+  if (options.allVideoPages && (details || []).length > 0) {
+    pageNum++;
+    const allRows = (details || [])
+      .map((d, i) =>
+        `        <tr><td style="font-size:13px;color:#525659">${i + 1}</td><td style="font-size:13px;word-break:break-all"><a href="${d.url}" target="_blank" style="color:#3578BB;text-decoration:none">${d.url}</a></td><td style="font-size:13px">${d.players.map(p => p.name).join(", ")}</td></tr>`
+      )
+      .join("\n");
+    pages.push(`
+  <div class="page">
+    <h1><span class="highlight-line">Pagina's met video</span></h1>
+    <p>Hieronder alle <strong class="text-primary">${details.length} pagina's</strong> waar video is aangetroffen op de onderzochte ${orgNameCap}-domeinen.</p>
+    <table>
+      <thead><tr><th style="width:32px">#</th><th>Pagina</th><th>Players</th></tr></thead>
+      <tbody>
+${allRows}
+      </tbody>
+    </table>
+${buildFooter(pageNum)}
+  </div>`);
+  }
 
   // ── Social page (inline, out of scope for redesign) ──
   if (socialData) {
@@ -565,7 +592,7 @@ function generatePreviewReport(scanData, options = {}) {
 
 const args = process.argv.slice(2);
 if (args.length === 0) {
-  console.log("Usage: node report.mjs <scan.json> [--preview] [--social <file>] [--org-name <name>] [--cover-image <url>] [--contact-image <url>] [--contact-name <name>] [--contact-phone <phone>] [--contact-email <email>]");
+  console.log("Usage: node report.mjs <scan.json> [--preview] [--social <file>] [--org-name <name>] [--cover-image <url>] [--contact-image <url>] [--contact-name <name>] [--contact-phone <phone>] [--contact-email <email>] [--exclude-example-sections <csv>] [--all-video-pages]");
   process.exit(0);
 }
 
@@ -586,6 +613,7 @@ const options = {
   contactEmail: getArg("--contact-email"),
   excludeExampleSections: (getArg("--exclude-example-sections") || "")
     .split(",").map((s) => s.trim()).filter(Boolean),
+  allVideoPages: args.includes("--all-video-pages"),
 };
 
 if (args.includes("--preview")) {
