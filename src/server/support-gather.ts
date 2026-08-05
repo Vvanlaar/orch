@@ -392,10 +392,17 @@ export function mountSupportGather(
     // redactor redacted something. Handing back an id for a file that was never
     // written makes /reveal 404 indistinguishably from an expired mapping, and
     // makes /note publish literal [customer:N] placeholders on a live ticket.
+    // stderr is deliberately omitted on success. All gather DATA goes to stdout;
+    // stderr carries only host-side diagnostics — absolute paths, the
+    // `# hubspot creds source:` line, stray node warnings — which under
+    // anonymous LAN mode would reach unauthenticated callers. `degraded` above
+    // covers the one thing a client genuinely needed stderr for (a source that
+    // failed rather than returned nothing), as structured data instead of prose.
+    // Error paths still return it: there it is the point. The client guards with
+    // `if (stderr && stderr.trim())`, so an absent field is a clean no-op.
     res.json({
       sections: result.stdout,
       keyId: existsSync(keyFile) ? keyId : null,
-      stderr: result.stderr,
       truncated: result.truncated,
       degraded,
     });
@@ -428,7 +435,12 @@ export function mountSupportGather(
 
     const tmpFile = join(tmpdir(), `orch-note-${randomUUID()}.html`);
     try {
-      writeFileSync(tmpFile, body.bodyHtml, 'utf8');
+      // 0600: the body is un-redacted customer ticket content, and on Linux
+      // /tmp is shared — a default umask would leave it world-readable for the
+      // life of the spawn. The name is a fresh UUID so this is always a create,
+      // which is the only point `mode` applies. Ignored on Windows, where
+      // tmpdir() is already per-user.
+      writeFileSync(tmpFile, body.bodyHtml, { encoding: 'utf8', mode: 0o600 });
 
       const args = buildNoteArgs(
         join(SCRIPTS_DIR, 'note.mjs'),
