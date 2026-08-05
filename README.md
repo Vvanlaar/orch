@@ -140,6 +140,13 @@ DHCP will change address.
   quota and posts investigation notes onto live customer tickets flagged with the
   `ai_investigate_bbsupport` property. Set it to `false` if you don't want that
   running unattended.
+
+  It is **independent of `POLLING_ENABLED`** and it scans on startup, not after
+  the first interval — so *any* `node dist/server/index.js`, including a
+  throwaway run to test something unrelated, can write to a live customer ticket
+  within seconds. It also reads from the process environment, so setting it in
+  `.env` is not enough if a machine-level env var says otherwise. Export
+  `HUBSPOT_AUTO_INVESTIGATE=false` explicitly for any test boot.
 - **The host's creds are the team's creds.** Every caller reads the host's
   HubSpot tickets and ADO project.
 - **Open mode opens more than the question box.** `/ask` spends this host's

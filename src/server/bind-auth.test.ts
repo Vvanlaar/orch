@@ -43,6 +43,20 @@ describe('firstPublicAddress', () => {
     expect(firstPublicAddress({ Wi__Fi: [nic('2001:db8::1')] })).toBe('2001:db8::1');
   });
 
+  it('accepts RFC 6598 shared address space (Tailscale)', () => {
+    // Caught by running this on a real machine: Tailscale assigns 100.64.0.0/10,
+    // which is not RFC1918 but is not globally routable either. Treating it as
+    // public refused boot on a perfectly ordinary dev laptop.
+    expect(firstPublicAddress({ Tailscale: [nic('100.83.177.7')] })).toBeNull();
+    expect(firstPublicAddress({ Tailscale: [nic('100.64.0.1'), nic('100.127.255.254')] })).toBeNull();
+  });
+
+  it('still rejects 100.x outside the /10', () => {
+    // 100.63.x and 100.128.x are ordinary routable space — the boundary matters.
+    expect(firstPublicAddress({ Eth: [nic('100.63.255.255')] })).toBe('100.63.255.255');
+    expect(firstPublicAddress({ Eth: [nic('100.128.0.1')] })).toBe('100.128.0.1');
+  });
+
   it('fails closed when no non-internal interface is found', () => {
     // "We found no evidence of a public address" is not "there is none" — an
     // empty map must not silently authorise anonymous mode.

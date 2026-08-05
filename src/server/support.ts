@@ -66,7 +66,12 @@ const CHUNK_BUFFER_CAP_BYTES = 1_000_000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
-const PRIVATE_IPV4_RE = /^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|169\.254\.)/;
+// RFC1918 + link-local, plus RFC 6598 shared address space (100.64.0.0/10).
+// 6598 is not RFC1918 but is explicitly NOT globally routable, and it is what
+// Tailscale hands every node — so without it a wildcard bind on any machine
+// running Tailscale looks publicly exposed and refuses to boot, which is both
+// wrong and the common case on a dev laptop.
+const PRIVATE_IPV4_RE = /^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|169\.254\.|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/;
 // fe80:: link-local and fc00::/7 unique-local are the IPv6 equivalents of the
 // RFC1918 range. fd.. is the half of fc00::/7 anyone actually assigns.
 const PRIVATE_IPV6_RE = /^(?:fe80:|f[cd])/i;
