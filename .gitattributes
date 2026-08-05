@@ -1,0 +1,5 @@
+# cmd.exe mis-parses an LF-only batch file — it eats the first character of
+# every line, so `setlocal` becomes `etlocal` and the script silently fails.
+# Force CRLF on checkout regardless of core.autocrlf.
+*.cmd text eol=crlf
+*.bat text eol=crlf

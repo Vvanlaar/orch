@@ -19,6 +19,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // tokens.json / audit.jsonl / results keep working across host switches.
 export const DATA_DIR = process.env.BB_SUPPORT_DATA_DIR || join(homedir(), '.claude', 'bb-support-web');
 export const RESULTS_DIR = join(DATA_DIR, 'results');
+// Per-request PII reveal mappings (UUID.json). Written by support.ts /ask and
+// support-gather.ts /gather; read by /reveal and /note; reaped at 30 min by the
+// keyReaper in support.ts. Lives here (not in support.ts) so /gather and /note
+// can't drift onto a different directory than the reaper that cleans it.
+export const KEYS_DIR = join(DATA_DIR, '.keys');
 
 // First candidate that exists on disk, else the last (so error messages point
 // at the canonical location).

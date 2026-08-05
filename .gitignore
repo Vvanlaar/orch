@@ -16,6 +16,7 @@ desktop/package-lock.json
 orch-server.log
 orch-server.*.log
 orch-dev.log
+orch-service.log
 videoscans/
 videoscan-*.json
 *.png

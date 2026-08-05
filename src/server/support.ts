@@ -37,15 +37,16 @@ import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createLogger } from '../core/logger.js';
 import {
-  DATA_DIR, RESULTS_DIR, SCRIPTS_DIR, loadRunSupport,
+  DATA_DIR, KEYS_DIR, RESULTS_DIR, SCRIPTS_DIR, loadRunSupport,
   type RunSupportFn,
 } from '../core/support-paths.js';
 import { mountHubspot } from './hubspot.js';
+import { mountSupportGather } from './support-gather.js';
+import { rateLimiter } from './rate-limit.js';
 import { hasScope, loadTokens, lookupToken, tokenFromRequest, type TokenMap } from './auth.js';
 
 const log = createLogger('support');
 
-const KEYS_DIR = join(DATA_DIR, '.keys');
 const TOKENS_FILE = join(DATA_DIR, 'tokens.json');
 const AUDIT_FILE = join(DATA_DIR, 'audit.jsonl');
 
@@ -116,26 +117,6 @@ function appendAudit(entry: AuditEntry, path = AUDIT_FILE): void {
     catch (err) { if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err; }
   }
   appendFileSync(path, JSON.stringify(entry) + '\n');
-}
-
-// Hand-rolled sliding-window rate limiter. keyFn defaults to req.ip so each
-// remote client gets its own bucket.
-function rateLimiter(opts: { windowMs: number; limit: number; keyFn?: (req: Request) => string }) {
-  const buckets = new Map<string, number[]>();
-  const { windowMs, limit, keyFn = (req) => req.ip || 'unknown' } = opts;
-  return (req: Request, res: Response, next: NextFunction): void => {
-    const key = keyFn(req);
-    const now = Date.now();
-    const cutoff = now - windowMs;
-    const hits = (buckets.get(key) || []).filter((t) => t > cutoff);
-    if (hits.length >= limit) {
-      res.status(429).json({ error: 'rate limit exceeded — try again later' });
-      return;
-    }
-    hits.push(now);
-    buckets.set(key, hits);
-    next();
-  };
 }
 
 // Dynamic-import the bb-support reveal library so orch's TypeScript build
@@ -609,4 +590,10 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
   // HubSpot ticket-inbox endpoints — share this module's auth + the
   // /api/support securityHeaders already applied above.
   mountHubspot(app, { auth });
+
+  // /gather + /note — the remote-mode surface for `ask.mjs --remote` /
+  // `note.mjs --remote`. Same auth; own rate-limit buckets (gather is far
+  // cheaper than /ask, which spawns Claude). Keyfiles land in KEYS_DIR, so the
+  // keyReaper above already covers them.
+  mountSupportGather(app, { auth });
 }
