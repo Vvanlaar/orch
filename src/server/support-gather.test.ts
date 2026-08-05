@@ -27,7 +27,7 @@ describe('buildGatherArgs', () => {
 
   it('emits no source flags when every source is defaulted', () => {
     const args = buildGatherArgs(ASK, { question: 'q' }, KEY);
-    expect(args).toEqual([ASK, '--key-file', KEY, '--no-remote', 'q']);
+    expect(args).toEqual([ASK, '--key-file', KEY, 'q']);
   });
 
   it('emits --no-* only for an explicit false, not for undefined', () => {
@@ -49,11 +49,17 @@ describe('buildGatherArgs', () => {
     }
   });
 
-  it('forces --no-remote so a spawned ask.mjs cannot call back out', () => {
-    // childEnv only clears process.env; resolveRemote also reads ~/.env, which is
-    // exactly where the docs tell people to put BB_SUPPORT_REMOTE. This flag is
-    // what actually breaks the proxy loop.
-    expect(buildGatherArgs(ASK, { question: 'q' }, KEY)).toContain('--no-remote');
+  it('does NOT push --no-remote — not every deployed ask.mjs recognises it', () => {
+    // A prior version pushed this unconditionally. Checked against the real
+    // ask.mjs on three bb-skills refs: nightly and ~/.claude/skills's checkout
+    // support it, but the sibling-of-orch checkout that SCRIPTS_DIR's
+    // firstExisting() actually resolves to on a plain checkout does not — an
+    // unrecognised flag falls into positional there and corrupts every
+    // question with a leading "--no-remote ", the same failure mode as the
+    // reverted `--` sentinel below. childEnv's process.env strip is the sole
+    // defence against the proxy loop until SCRIPTS_DIR is guaranteed to
+    // resolve to a build that understands this flag.
+    expect(buildGatherArgs(ASK, { question: 'q' }, KEY)).not.toContain('--no-remote');
   });
 
   it('does NOT itself guard against a flag-shaped question — that is the route\'s job', () => {

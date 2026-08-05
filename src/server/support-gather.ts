@@ -55,8 +55,11 @@ const OUTPUT_CAP_BYTES = 2_000_000;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// `scrub` is deliberately NOT a field — see buildGatherArgs. A client must never
-// be able to switch off the host's PII redaction.
+// `scrub` is typed `never`, not merely absent — see buildGatherArgs. A client
+// must never be able to switch off the host's PII redaction, and `never`
+// keeps that visible in the type (an `if (body.scrub)` becomes a statically
+// flagged always-false expression) instead of relying on omission alone,
+// which a later edit could silently reintroduce.
 export type GatherRequest = {
   question?: unknown;
   top?: unknown;
@@ -64,6 +67,7 @@ export type GatherRequest = {
   kb?: unknown;
   ado?: unknown;
   note?: unknown;
+  scrub?: never;
 };
 
 // --- pure helpers (unit-tested; see support-gather.test.ts) -----------------
@@ -114,13 +118,21 @@ export function buildGatherArgs(
 
   args.push('--key-file', keyFile);
 
-  // Belt to childEnv's braces. childEnv can only clear *process.env*, but
-  // remote.mjs's resolveRemote also reads ~/.env and ~/.claude/bb-support/remote.json
-  // — and ~/.env is exactly where the docs tell people to put BB_SUPPORT_REMOTE.
-  // On a host whose operator also uses remote mode, clearing the environment
-  // changes nothing and the spawned ask.mjs would call straight back out. This
-  // flag is what actually makes the loop impossible.
-  args.push('--no-remote');
+  // NOT pushing `--no-remote`, even though a spawned ask.mjs that resolves
+  // remote mode (via ~/.env or ~/.claude/bb-support/remote.json — childEnv can
+  // only clear *process.env*) would call /gather right back out. A prior
+  // version of this function pushed it unconditionally, on the assumption that
+  // ask.mjs recognises the flag — checked three bb-skills refs and got a 2-1
+  // split: nightly and ~/.claude/skills's checkout do, but the SCRIPTS_DIR
+  // candidate that actually wins on a plain sibling-of-orch checkout (see
+  // support-paths.ts's firstExisting()) does not. On that build, `--no-remote`
+  // has no case in parseArgs and falls into positional like any unrecognised
+  // token — corrupting args.question with a leading "--no-remote " on every
+  // single gather, the identical failure mode the `--` sentinel below was
+  // reverted for. Re-add this only once SCRIPTS_DIR is guaranteed to resolve to
+  // an ask.mjs build with `--no-remote` support (or once ask.mjs itself rejects
+  // unknown flags instead of absorbing them) — childEnv's process.env strip is
+  // the sole defence against the proxy loop until then.
 
   // NOT prefixed with a `--` end-of-options sentinel: ask.mjs's parseArgs has no
   // such handling (checked bb-support/scripts/ask.mjs on the local checkout,
