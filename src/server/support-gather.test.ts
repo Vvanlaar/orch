@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { join } from 'node:path';
-import { buildGatherArgs, buildNoteArgs, childEnv, noteExitToHttp } from './support-gather.js';
+import type { Express, RequestHandler } from 'express';
+import { buildGatherArgs, buildNoteArgs, childEnv, mountSupportGather, noteExitToHttp } from './support-gather.js';
 
 const ASK = '/skills/bb-support/scripts/ask.mjs';
 const KEY = '/keys/abc.json';
@@ -203,5 +204,33 @@ describe('buildNoteArgs', () => {
     // make note.mjs warn about an unreadable key file on every such post.
     expect(build({})).not.toContain('--key-file');
     expect(build({ keyId: undefined })).not.toContain('--key-file');
+  });
+});
+
+describe('mountSupportGather route wiring', () => {
+  // The auth split is the whole security property of anonymous LAN mode: /gather
+  // may go anonymous, /note must not. Nothing else asserts which handler landed
+  // on which path, and swapping them would leave every other test passing.
+  function mount() {
+    const routes = new Map<string, RequestHandler[]>();
+    const app = {
+      post: (path: string, ...handlers: RequestHandler[]) => { routes.set(path, handlers); },
+    } as unknown as Express;
+
+    const auth: RequestHandler = (_q, _s, next) => next();
+    const writeAuth: RequestHandler = (_q, _s, next) => next();
+    mountSupportGather(app, { auth, writeAuth, audit: () => {} });
+    return { routes, auth, writeAuth };
+  }
+
+  it('gates /gather with the shared auth handler', () => {
+    const { routes, auth } = mount();
+    expect(routes.get('/api/support/gather')?.[0]).toBe(auth);
+  });
+
+  it('gates /note with writeAuth, not the shared auth handler', () => {
+    const { routes, auth, writeAuth } = mount();
+    expect(routes.get('/api/support/note')?.[0]).toBe(writeAuth);
+    expect(routes.get('/api/support/note')?.[0]).not.toBe(auth);
   });
 });

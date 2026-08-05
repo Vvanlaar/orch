@@ -15,8 +15,10 @@
 //   BB_SUPPORT_DATA_DIR      — tokens/audit/keys dir (default ~/.claude/
 //                              bb-support-web).
 //   BB_SUPPORT_ALLOW_ANONYMOUS=1 — opt out of bearer auth; the LAN itself
-//                              becomes the boundary. Bind must be loopback
-//                              or RFC1918 / link-local / fe80::.
+//                              becomes the boundary. Bind must be loopback,
+//                              RFC1918 / link-local / fe80::, or a wildcard
+//                              whose host has no publicly-routable address.
+//                              POST /note is exempt — it always needs a token.
 
 import type { Express, NextFunction, Request, RequestHandler, Response } from 'express';
 import { asyncHandler } from '../core/error-handler.js';
@@ -33,6 +35,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { networkInterfaces, type NetworkInterfaceInfo } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createLogger } from '../core/logger.js';
@@ -64,15 +67,47 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
 const PRIVATE_IPV4_RE = /^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|169\.254\.)/;
+// fe80:: link-local and fc00::/7 unique-local are the IPv6 equivalents of the
+// RFC1918 range. fd.. is the half of fc00::/7 anyone actually assigns.
+const PRIVATE_IPV6_RE = /^(?:fe80:|f[cd])/i;
+// Wildcard binds don't name an interface — listen(4) with '' or undefined is
+// the same "all interfaces" request as an explicit 0.0.0.0.
+const WILDCARD = new Set(['0.0.0.0', '::', '']);
 
 function isLoopback(bind: string): boolean {
   return LOOPBACK.has(String(bind));
 }
 
-function isPrivateOrLoopback(bind: string): boolean {
-  const s = String(bind);
-  return isLoopback(s) || PRIVATE_IPV4_RE.test(s) || /^fe80:/i.test(s);
+function isPrivateAddress(addr: string): boolean {
+  const s = String(addr);
+  return isLoopback(s) || PRIVATE_IPV4_RE.test(s) || PRIVATE_IPV6_RE.test(s);
 }
+
+function isWildcard(bind: string): boolean {
+  return WILDCARD.has(String(bind));
+}
+
+// A wildcard bind covers every interface, so it can't be judged by its own
+// string the way 192.168.x.x can. Judge the host instead: anonymous mode is
+// safe on 0.0.0.0 exactly when nothing on this machine is publicly routable.
+// Returns the first offending address so the operator learns *which* NIC
+// blocked boot rather than just that one did.
+//
+// Fails closed on an empty interface map — "we found no evidence of a public
+// address" is not the same as "there is none", and the cost of being wrong
+// here is serving customer data unauthenticated. `null` means "inspected, all
+// private"; anything else is a reason to refuse.
+export function firstPublicAddress(
+  interfaces: NodeJS.Dict<NetworkInterfaceInfo[]> = networkInterfaces(),
+): string | null {
+  const external = Object.values(interfaces).flat().filter((i) => i && !i.internal);
+  if (external.length === 0) return NO_INSPECTABLE_INTERFACES;
+  return external.find((i) => !isPrivateAddress(i!.address))?.address ?? null;
+}
+
+// Distinguishable from a real address so the error message can explain the
+// right cause — "we couldn't check" reads very differently from "we found one".
+export const NO_INSPECTABLE_INTERFACES = '<none inspectable>';
 
 // Token map + loader live in ./auth.ts (shared with the global API/WS gate).
 // Entries now carry `scopes`; support endpoints require the `support` scope,
@@ -80,13 +115,38 @@ function isPrivateOrLoopback(bind: string): boolean {
 
 // Refuse to expose unauthenticated endpoints. Called once at boot; throws on
 // misconfiguration so the operator sees the failure before any request lands.
-export function assertBindAuthValid(bind: string, tokens: TokenMap, allowAnonymous: boolean): void {
+export function assertBindAuthValid(
+  bind: string,
+  tokens: TokenMap,
+  allowAnonymous: boolean,
+  interfaces?: NodeJS.Dict<NetworkInterfaceInfo[]>,
+): void {
   if (isLoopback(bind)) return;
   if (allowAnonymous) {
-    if (!isPrivateOrLoopback(bind)) {
+    // HOST=0.0.0.0 is the documented LAN setup, and it is neither loopback nor
+    // RFC1918 as a string — so judge the host's actual addresses instead of
+    // refusing outright. The safety property is unchanged: never unauthenticated
+    // on a publicly-routable address.
+    if (isWildcard(bind)) {
+      const publicAddr = firstPublicAddress(interfaces);
+      if (publicAddr) {
+        const cause = publicAddr === NO_INSPECTABLE_INTERFACES
+          ? `no non-internal network interface could be inspected, so we cannot rule out a public address`
+          : `this host has a non-private address (${publicAddr})`;
+        throw new Error(
+          `bb-support refuses BB_SUPPORT_ALLOW_ANONYMOUS=1 on wildcard bind ${bind} — ` +
+          `${cause}, and a wildcard bind would serve /api/support/* unauthenticated on it. ` +
+          `Bind to the private address explicitly, or drop BB_SUPPORT_ALLOW_ANONYMOUS ` +
+          `and use bearer tokens.`,
+        );
+      }
+      return;
+    }
+    if (!isPrivateAddress(bind)) {
       throw new Error(
-        `bb-support refuses BB_SUPPORT_ALLOW_ANONYMOUS=1 on ${bind} — only loopback ` +
-        `or private (RFC1918 / link-local / fe80::) binds may opt out of bearer auth.`,
+        `bb-support refuses BB_SUPPORT_ALLOW_ANONYMOUS=1 on ${bind} — only loopback, ` +
+        `private (RFC1918 / link-local / unique-local) or wildcard-on-a-private-host ` +
+        `binds may opt out of bearer auth.`,
       );
     }
     return;
@@ -104,7 +164,24 @@ export function assertBindAuthValid(bind: string, tokens: TokenMap, allowAnonymo
 // 'wx' flag still avoids overwriting an existing file in a TOCTOU race).
 type AuditEntry =
   | { ts: string; ip: string | undefined; tokenName: string; question: string; status: 'ok' | 'cancelled'; durationMs: number }
-  | { ts: string; ip: string | undefined; tokenName: string; question: string; status: 'ask' | 'claude' | 'spawn'; durationMs: number; error: string };
+  | { ts: string; ip: string | undefined; tokenName: string; question: string; status: 'ask' | 'claude' | 'spawn'; durationMs: number; error: string }
+  | NoteAuditEntry;
+
+// /note is the only endpoint that writes to an external system. It carries a
+// ticketId + mode instead of a question, and `ok` records whether HubSpot
+// actually took the write — a 502 from note.mjs still deserves an entry.
+// Exported so support-gather.ts can build one without also being able to write
+// audit.jsonl itself; appendAudit stays module-private (single-writer).
+export type NoteAuditEntry = {
+  ts: string;
+  ip: string | undefined;
+  tokenName: string;
+  status: 'note';
+  ticketId: string;
+  mode: 'append' | 'replace' | 'refuse-if-exists';
+  ok: boolean;
+  durationMs: number;
+};
 
 function appendAudit(entry: AuditEntry, path = AUDIT_FILE): void {
   if (!existsSync(path)) {
@@ -138,9 +215,11 @@ async function loadApplyMapping(): Promise<ApplyMappingFn> {
   return applyMappingCache;
 }
 
-// Local extension; not declared globally to avoid leaking these fields onto
-// every other Express handler in orch.
-interface AuthedRequest extends Request {
+// Module-scoped extension; not declared globally to avoid leaking these fields
+// onto every other Express handler in orch. Exported so support-gather.ts reads
+// the same shape rather than re-asserting it structurally — a rename here should
+// break that file's compile, not silently start yielding undefined.
+export interface AuthedRequest extends Request {
   bearerToken?: string | null;
   tokenName?: string;
 }
@@ -210,8 +289,17 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
   if (ALLOW_ANONYMOUS) {
     log.warn(
       'BB_SUPPORT_ALLOW_ANONYMOUS=1 — /api/support/* accepts unauthenticated requests. ' +
-      'The LAN itself is the security boundary; every request is logged as "anonymous".',
+      'The LAN itself is the security boundary; every request is logged as "anonymous". ' +
+      'POST /api/support/note is exempt and still requires a bearer token.',
     );
+    if (Object.keys(tokens).length === 0) {
+      // Fail-closed, but silently so without this: /note's bearerAuth 401s every
+      // caller and the operator has no hint that the empty token file is why.
+      log.warn(
+        `No tokens in ${TOKENS_FILE} — POST /api/support/note will reject every request. ` +
+        'Add one entry to enable posting notes back to HubSpot; reads and /ask are unaffected.',
+      );
+    }
   } else {
     log.info(`/api/support/* loaded with ${Object.keys(tokens).length} bearer token(s) from ${TOKENS_FILE}`);
   }
@@ -254,6 +342,18 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
 
   const auth: RequestHandler = ALLOW_ANONYMOUS ? anonymousAuth : bearerAuth;
 
+  // /note posts to a live customer's HubSpot ticket under the host's private-app
+  // token, and --update overwrites an existing note. That is not something a
+  // passer-by on the LAN should be able to do unattributed, so it keeps bearer
+  // auth even when everything around it goes anonymous. The property is
+  // attribution, not privilege — every existing token may post, none may post
+  // anonymously — which is why this is a second handler and not a new scope.
+  //
+  // If a SECOND route ever needs this, don't thread a third handler: mount a
+  // Router with bearerAuth applied via .use(), so the guarantee is structural
+  // rather than hand-wired per route.
+  const writeAuth: RequestHandler = bearerAuth;
+
   // Two budgets: /ask spawns claude (expensive); /reveal is a pure file read.
   // Sharing a bucket would punish the documented "ask → reveal N matches" flow.
   const askLimiter = rateLimiter({ windowMs: 5 * 60_000, limit: 10 });
@@ -272,8 +372,15 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
 
   // Liveness probe (no auth) — UI uses authMode to decide whether to show
   // the token input. Mounted before any auth middleware.
+  //
+  // noteAuthMode is always 'token': the two can differ, so a client that only
+  // reads authMode would conclude a note post needs no token and eat a 401.
   app.get('/api/support/health', (_req, res) => {
-    res.json({ status: 'ok', authMode: ALLOW_ANONYMOUS ? 'anonymous' : 'token' });
+    res.json({
+      status: 'ok',
+      authMode: ALLOW_ANONYMOUS ? 'anonymous' : 'token',
+      noteAuthMode: 'token',
+    });
   });
 
   app.post('/api/support/ask', auth, askLimiter, asyncHandler(async (req, res) => {
@@ -592,8 +699,11 @@ export function mountSupport(app: Express, opts: { bind?: string } = {}): void {
   mountHubspot(app, { auth });
 
   // /gather + /note — the remote-mode surface for `ask.mjs --remote` /
-  // `note.mjs --remote`. Same auth; own rate-limit buckets (gather is far
-  // cheaper than /ask, which spawns Claude). Keyfiles land in KEYS_DIR, so the
-  // keyReaper above already covers them.
-  mountSupportGather(app, { auth });
+  // `note.mjs --remote`. /gather shares this module's auth; /note gets
+  // writeAuth, so it stays token-gated under anonymous mode. Own rate-limit
+  // buckets (gather is far cheaper than /ask, which spawns Claude). Keyfiles
+  // land in KEYS_DIR, so the keyReaper above already covers them.
+  //
+  // appendAudit is passed rather than exported to keep audit.jsonl single-writer.
+  mountSupportGather(app, { auth, writeAuth, audit: appendAudit });
 }

@@ -17,11 +17,13 @@
 // without this endpoint remote mode could investigate a ticket but never record
 // the finding on it.
 //
-// Both mount from mountSupport() and inherit its `auth` (support scope, or
-// anonymous when BB_SUPPORT_ALLOW_ANONYMOUS=1) plus the /api/support security
-// headers.
+// Both mount from mountSupport() and share the /api/support security headers,
+// but NOT the same auth. /gather takes `auth` (support scope, or anonymous when
+// BB_SUPPORT_ALLOW_ANONYMOUS=1); /note takes `writeAuth`, which is bearer auth
+// unconditionally — it writes to a live customer's ticket under the host's
+// HubSpot token, so it stays attributable even when the LAN is the boundary.
 
-import type { Express, Request, RequestHandler } from 'express';
+import type { Express, RequestHandler } from 'express';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -31,6 +33,10 @@ import { asyncHandler } from '../core/error-handler.js';
 import { createLogger } from '../core/logger.js';
 import { KEYS_DIR, SCRIPTS_DIR } from '../core/support-paths.js';
 import { rateLimiter } from './rate-limit.js';
+// Type-only, so this erases at compile time and creates no runtime cycle with
+// support.ts (which imports mountSupportGather from here). Keep it that way —
+// a value import in this direction would be a real cycle.
+import type { AuthedRequest, NoteAuditEntry } from './support.js';
 
 const log = createLogger('support-gather');
 
@@ -40,8 +46,10 @@ const log = createLogger('support-gather');
 const GATHER_TIMEOUT_MS = 60_000;
 // note.mjs does at most a list-engagements + a POST/PATCH.
 const NOTE_TIMEOUT_MS = 30_000;
-// Matches support.ts's SSE chunk cap. A runaway --top would otherwise let one
-// request pin unbounded RSS while we buffer stdout to build the JSON response.
+// A runaway --top would otherwise let one request pin unbounded RSS while we
+// buffer stdout to build the JSON response. Deliberately looser than support.ts's
+// CHUNK_BUFFER_CAP_BYTES (1 MB): that one bounds an *unattached SSE* backlog,
+// this one bounds a single in-flight response body.
 const OUTPUT_CAP_BYTES = 2_000_000;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -212,15 +220,19 @@ function runNode(args: string[], timeoutMs: number): Promise<RunResult> {
 
 // --- routes -----------------------------------------------------------------
 
-export function mountSupportGather(app: Express, opts: { auth: RequestHandler }): void {
-  const { auth } = opts;
+export function mountSupportGather(
+  app: Express,
+  opts: { auth: RequestHandler; writeAuth: RequestHandler; audit: (entry: NoteAuditEntry) => void },
+): void {
+  const { auth, writeAuth, audit } = opts;
 
   // Its own bucket, deliberately not shared with /ask's 10-per-5-min. /ask
   // spawns Claude (expensive, rate-limited to protect the subscription);
   // /gather only spawns ask.mjs, so it can be looser — but still bounded,
   // because each call fans out to the HubSpot and ADO APIs under the host's PATs.
   const gatherLimiter = rateLimiter({ windowMs: 5 * 60_000, limit: 30 });
-  // Writes to live customer tickets. Tighter than /gather on purpose.
+  // Writes to live customer tickets. Tighter than /gather on purpose — and
+  // token-gated via writeAuth even when /gather is anonymous.
   const noteLimiter = rateLimiter({ windowMs: 5 * 60_000, limit: 10 });
 
   app.post('/api/support/gather', auth, gatherLimiter, asyncHandler(async (req, res) => {
@@ -258,7 +270,7 @@ export function mountSupportGather(app: Express, opts: { auth: RequestHandler })
       return;
     }
 
-    const tokenName = (req as Request & { tokenName?: string }).tokenName ?? 'anonymous';
+    const tokenName = (req as AuthedRequest).tokenName ?? 'anonymous';
     log.info(`gather ok for ${tokenName} (${result.stdout.length} bytes${result.truncated ? ', TRUNCATED' : ''})`);
 
     // The 30-min keyReaper in support.ts owns keyFile cleanup — same directory,
@@ -271,7 +283,8 @@ export function mountSupportGather(app: Express, opts: { auth: RequestHandler })
     });
   }));
 
-  app.post('/api/support/note', auth, noteLimiter, asyncHandler(async (req, res) => {
+  app.post('/api/support/note', writeAuth, noteLimiter, asyncHandler(async (req, res) => {
+    const startedAt = Date.now();
     const body = (req.body || {}) as {
       ticketId?: unknown; bodyHtml?: unknown; keyId?: unknown; update?: unknown; force?: unknown;
     };
@@ -291,6 +304,10 @@ export function mountSupportGather(app: Express, opts: { auth: RequestHandler })
       return;
     }
 
+    // writeAuth is bearerAuth, so tokenName is always a real name here; the
+    // fallback exists only to keep the type honest.
+    const tokenName = (req as AuthedRequest).tokenName ?? 'unknown';
+
     const tmpFile = join(tmpdir(), `orch-note-${randomUUID()}.html`);
     try {
       writeFileSync(tmpFile, body.bodyHtml, 'utf8');
@@ -303,6 +320,31 @@ export function mountSupportGather(app: Express, opts: { auth: RequestHandler })
         KEYS_DIR,
       );
 
+      // Read the mode off the argv rather than re-deriving it from the body:
+      // buildNoteArgs owns the force-beats-update precedence and is tested for
+      // it, so a second copy here could drift and make the audit log attest a
+      // write mode that never happened — on a live customer ticket.
+      const mode = args.includes('--force') ? 'append' : args.includes('--update') ? 'replace' : 'refuse-if-exists';
+      const record = (ok: boolean): void => {
+        try {
+          audit({
+            ts: new Date().toISOString(),
+            ip: req.ip,
+            tokenName,
+            status: 'note',
+            ticketId,
+            mode,
+            ok,
+            durationMs: Date.now() - startedAt,
+          });
+        } catch (err) {
+          // Never let a failed audit write turn a completed HubSpot post into a
+          // 500 — the caller would retry and hit note.mjs's dedup 409. Matches
+          // how /ask guards appendAudit.
+          log.error('note audit write failed', err);
+        }
+      };
+
       let result: RunResult;
       try {
         result = await runNode(args, NOTE_TIMEOUT_MS);
@@ -313,15 +355,26 @@ export function mountSupportGather(app: Express, opts: { auth: RequestHandler })
       }
 
       if (result.timedOut) {
-        res.status(504).json({ error: `note timed out after ${NOTE_TIMEOUT_MS / 1000}s`, stderr: result.stderr });
+        // The kill can land after note.mjs already POSTed to HubSpot, so the
+        // write may have applied. Say so rather than reporting a clean failure —
+        // a blind retry would otherwise read note.mjs's dedup 409 as someone
+        // else having posted. Audited as not-ok, but the entry pins the ticket.
+        record(false);
+        res.status(504).json({
+          error: `note timed out after ${NOTE_TIMEOUT_MS / 1000}s — the note may still have been posted to ticket ${ticketId}; check before retrying`,
+          ticketId,
+          stderr: result.stderr,
+        });
         return;
       }
 
       const mapped = noteExitToHttp(result.code);
       if (mapped.status !== 200) {
+        record(false);
         res.status(mapped.status).json({ error: mapped.error, stderr: result.stderr });
         return;
       }
+      record(true);
       // note.mjs prints "→ posted note <id> to ticket <n>" / "→ view: <url>".
       res.json({ ok: true, output: result.stdout.trim(), stderr: result.stderr });
     } finally {

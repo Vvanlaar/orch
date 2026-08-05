@@ -51,25 +51,53 @@ PORT=3011
 In production (`node dist/server/index.js`) the API *and* the built SPA are both
 served on `PORT`, so `DASHBOARD_PORT` / 3010 is dev-only.
 
-**2. Populate `~/.claude/bb-support-web/tokens.json`.** A non-loopback bind
-refuses to start without it (`src/server/support.ts` `assertBindAuthValid`).
-Entries are pre-shared bearer strings; scopes decide reach:
+**2. Choose an auth mode.** A non-loopback bind refuses to start unless one of
+the two is set up (`src/server/support.ts` `assertBindAuthValid`).
+
+#### Open mode — no token for callers (easiest)
+
+```env
+BB_SUPPORT_ALLOW_ANONYMOUS=1
+```
+
+Anyone who can reach the host uses `/support` in a browser, or points
+`ask.mjs --remote` at it, with no credential at all. The LAN is the security
+boundary.
+
+On a wildcard bind (`0.0.0.0`) this boots **only if every network interface on
+the host is on a private network** — RFC1918, link-local, or IPv6 unique-local.
+If the machine has a publicly-routable address, startup fails and names it,
+because a wildcard bind would otherwise serve customer data unauthenticated on
+that address. Bind to the private IP explicitly if you need to.
+
+**`POST /api/support/note` is the exception — it always requires a bearer
+token**, even in open mode: it posts (and with `update` overwrites) an
+investigation note on a live customer's HubSpot ticket under this host's
+private-app token, so it stays attributable. So open mode still needs a
+`tokens.json` with one entry for whoever posts notes back; reads and `/ask` are
+unaffected either way.
+
+#### Token mode — a pre-shared bearer string per person
+
+Populate `~/.claude/bb-support-web/tokens.json`. Scopes decide reach:
 
 ```json
 {
-  "<long-random>": { "name": "Alice", "scopes": ["support"] },
-  "<long-random>": { "name": "You",   "scopes": ["admin"] }
+  "<token-alice>": { "name": "Alice", "scopes": ["support"] },
+  "<token-you>":   { "name": "You",   "scopes": ["admin"] }
 }
 ```
 
 `support` reaches only `/api/support/*`; everything else (tasks, repos,
-terminals, config, the WS feed) needs `admin`. An entry with no `scopes` defaults
-to `["support"]`. Generate one with
+terminals, config, the WS feed) needs `admin` — except `/api/whoami` and
+`/api/notifications/incoming`, which are unauthenticated by design (see
+`PUBLIC_API` in `src/server/index.ts`). An entry with no `scopes` defaults to
+`["support"]`. Generate one with
 `node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"`.
 Tokens load once at boot — adding one needs a restart.
 
-Do **not** set `BB_SUPPORT_ALLOW_ANONYMOUS=1` with `HOST=0.0.0.0`: `0.0.0.0` is
-not an RFC1918 address, so that check throws at boot by design.
+> A **missing** `tokens.json` is fine — it reads as "no tokens". A **zero-byte or
+> malformed** one throws at boot. Delete the file rather than emptying it.
 
 **3. Build and register the service.**
 
@@ -112,15 +140,27 @@ DHCP will change address.
   quota and posts investigation notes onto live customer tickets flagged with the
   `ai_investigate_bbsupport` property. Set it to `false` if you don't want that
   running unattended.
-- **The host's creds are the team's creds.** Every token holder reads the host's
+- **The host's creds are the team's creds.** Every caller reads the host's
   HubSpot tickets and ADO project.
-- **HTTP only.** LAN + bearer token. Terminate TLS at a reverse proxy if you need
-  more, and don't expose this to the internet.
+- **Open mode opens more than the question box.** `/ask` spends this host's
+  Claude subscription (10 per 5 min, budgeted per client IP, so anyone behind the
+  same NAT shares it); `/reveal` un-masks the customer names in a run's PII
+  mappings; `/events/:runId` and `/cancel/:runId` are guarded only by knowing the
+  run's UUID. All coherent on a trusted LAN — just know that's the trade.
+- **HTTP only.** LAN as the boundary. Terminate TLS at a reverse proxy if you
+  need more, and don't expose this to the internet.
 
 ### Verifying
 
 ```bash
-curl http://<hostname>:3011/api/support/health          # {"status":"ok","authMode":"token"}
+# Open mode
+curl http://<hostname>:3011/api/support/health   # {"status":"ok","authMode":"anonymous","noteAuthMode":"token"}
+curl -X POST http://<hostname>:3011/api/support/gather \
+  -H 'Content-Type: application/json' -d '{"question":"how does live transcoding work"}'   # 200, no token
+curl -X POST http://<hostname>:3011/api/support/note \
+  -H 'Content-Type: application/json' -d '{"ticketId":"1","bodyHtml":"<p>x</p>"}'          # 401 — the write gate
+
+# Token mode
 curl -H "Authorization: Bearer <support-token>" http://<hostname>:3011/api/tasks   # 403 — proves the admin gate
 ```
 
@@ -171,7 +211,7 @@ POLLING_ENABLED=false
 | `ADO_PROJECT` | ADO project name (for Testing Assignment) |
 | `ADO_TEAM` | ADO team name (for Testing Assignment) |
 | `ADO_REVIEWED_BY_FIELD` | Custom field for reviewer (default: `Custom.ReviewedBy`) |
-| `HOST` | Bind address (default: `127.0.0.1`; `0.0.0.0` for LAN — needs `tokens.json`) |
+| `HOST` | Bind address (default: `127.0.0.1`; `0.0.0.0` for LAN — see [Always-on LAN service](#always-on-lan-service) for the auth it requires) |
 | `HUBSPOT_PRIVATE_APP_TOKEN` | HubSpot legacy private-app token used by `/api/support/*` |
 | `HUBSPOT_HUB_ID` | HubSpot account id (BB: `1054725`) |
 | `HUBSPOT_AUTO_INVESTIGATE` | Poll for `ai_investigate_bbsupport` tickets and post AI notes (default: `false`) |
