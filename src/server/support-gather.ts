@@ -105,6 +105,38 @@ export function childEnv(parent: NodeJS.ProcessEnv = process.env): NodeJS.Proces
   return env;
 }
 
+// Build note.mjs's argv.
+//
+// --force and --update are DISTINCT and neither is the default: force APPENDS
+// another note, update REPLACES the existing one, and passing neither makes
+// note.mjs refuse with exit 3 when a note is already there. Defaulting to
+// --update here would silently make every direct API caller overwrite rather
+// than refuse; collapsing force into update would quietly do something other
+// than what the caller asked, on a live customer ticket.
+//
+// keyId is validated as a UUID by the route before it reaches here, so it cannot
+// traverse out of KEYS_DIR.
+export function buildNoteArgs(
+  noteScript: string,
+  ticketId: string,
+  bodyFile: string,
+  opts: { update?: unknown; force?: unknown; keyId?: string },
+  keysDir: string,
+): string[] {
+  const args = [noteScript, '--ticket', ticketId, '--body-file', bodyFile];
+  if (opts.force === true) args.push('--force');
+  else if (opts.update === true) args.push('--update');
+  if (opts.keyId) {
+    // An explicit --key-file bypasses note.mjs's keyFileMatchesTicket guard
+    // ("the caller owns that path's lifecycle"). Correct here: this keyfile came
+    // from the same /gather run, so its mapping is bound to the very question
+    // that produced this body. The guard exists for the shared DEFAULT_KEY_FILE,
+    // which every ask.mjs run overwrites.
+    args.push('--key-file', join(keysDir, `${opts.keyId}.json`));
+  }
+  return args;
+}
+
 // note.mjs's documented exit codes → HTTP. 3 (note already exists) is the one
 // that isn't really an error: the caller asked to record a finding and a finding
 // is on record, so it maps to 409 and the client can retry with update:true.
@@ -240,7 +272,9 @@ export function mountSupportGather(app: Express, opts: { auth: RequestHandler })
   }));
 
   app.post('/api/support/note', auth, noteLimiter, asyncHandler(async (req, res) => {
-    const body = (req.body || {}) as { ticketId?: unknown; bodyHtml?: unknown; keyId?: unknown; update?: unknown };
+    const body = (req.body || {}) as {
+      ticketId?: unknown; bodyHtml?: unknown; keyId?: unknown; update?: unknown; force?: unknown;
+    };
     const ticketId = String(body.ticketId ?? '');
     if (!/^\d+$/.test(ticketId)) {
       res.status(400).json({ error: 'ticketId must be digits' });
@@ -261,16 +295,13 @@ export function mountSupportGather(app: Express, opts: { auth: RequestHandler })
     try {
       writeFileSync(tmpFile, body.bodyHtml, 'utf8');
 
-      const args = [join(SCRIPTS_DIR, 'note.mjs'), '--ticket', ticketId, '--body-file', tmpFile];
-      if (body.update !== false) args.push('--update');
-      if (body.keyId) {
-        // An explicit --key-file bypasses note.mjs's keyFileMatchesTicket guard
-        // ("the caller owns that path's lifecycle"). Correct here: this keyfile
-        // came from the same /gather run, so its mapping is bound to the very
-        // question that produced this body. The guard exists for the shared
-        // DEFAULT_KEY_FILE, which every ask.mjs run overwrites.
-        args.push('--key-file', join(KEYS_DIR, String(body.keyId)) + '.json');
-      }
+      const args = buildNoteArgs(
+        join(SCRIPTS_DIR, 'note.mjs'),
+        ticketId,
+        tmpFile,
+        { update: body.update, force: body.force, keyId: body.keyId as string | undefined },
+        KEYS_DIR,
+      );
 
       let result: RunResult;
       try {

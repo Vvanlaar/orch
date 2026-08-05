@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildGatherArgs, childEnv, noteExitToHttp } from './support-gather.js';
+import { join } from 'node:path';
+import { buildGatherArgs, buildNoteArgs, childEnv, noteExitToHttp } from './support-gather.js';
 
 const ASK = '/skills/bb-support/scripts/ask.mjs';
 const KEY = '/keys/abc.json';
@@ -144,5 +145,63 @@ describe('noteExitToHttp', () => {
     for (const code of [1, 2, 3, 4, 5, 6, 99, null]) {
       expect(noteExitToHttp(code).status).not.toBe(200);
     }
+  });
+});
+
+describe('buildNoteArgs', () => {
+  const NOTE = '/skills/bb-support/scripts/note.mjs';
+  const KEYS = '/keys';
+  const build = (opts: Parameters<typeof buildNoteArgs>[3]) =>
+    buildNoteArgs(NOTE, '123', '/tmp/body.html', opts, KEYS);
+
+  it('passes the ticket id and body file', () => {
+    expect(build({})).toEqual([NOTE, '--ticket', '123', '--body-file', '/tmp/body.html']);
+  });
+
+  it('defaults to NEITHER --update nor --force (note.mjs refuses with exit 3)', () => {
+    // Defaulting to --update would silently make every direct API caller
+    // overwrite an existing investigation note instead of refusing — a
+    // behaviour change invisible from the request.
+    const args = build({});
+    expect(args).not.toContain('--update');
+    expect(args).not.toContain('--force');
+  });
+
+  it('keeps --force and --update distinct', () => {
+    // force APPENDS another note, update REPLACES the existing one. Collapsing
+    // one into the other does something other than what was asked, on a live
+    // customer ticket.
+    expect(build({ update: true })).toContain('--update');
+    expect(build({ update: true })).not.toContain('--force');
+    expect(build({ force: true })).toContain('--force');
+    expect(build({ force: true })).not.toContain('--update');
+  });
+
+  it('lets --force win when both are set (matches note.mjs, where force skips the lookup)', () => {
+    const args = build({ update: true, force: true });
+    expect(args).toContain('--force');
+    expect(args).not.toContain('--update');
+  });
+
+  it('ignores non-true values rather than treating them as truthy', () => {
+    for (const v of ['true', 1, {}, [], 'yes']) {
+      const args = build({ update: v, force: v });
+      expect(args).not.toContain('--update');
+      expect(args).not.toContain('--force');
+    }
+  });
+
+  it('resolves keyId under the keys dir with a .json suffix', () => {
+    const args = build({ keyId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' });
+    expect(args).toContain('--key-file');
+    expect(args[args.indexOf('--key-file') + 1])
+      .toBe(join(KEYS, 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json'));
+  });
+
+  it('omits --key-file entirely when no keyId was supplied', () => {
+    // A query that redacted nothing has no mapping; passing a bogus path would
+    // make note.mjs warn about an unreadable key file on every such post.
+    expect(build({})).not.toContain('--key-file');
+    expect(build({ keyId: undefined })).not.toContain('--key-file');
   });
 });
