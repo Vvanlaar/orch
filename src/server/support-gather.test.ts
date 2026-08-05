@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { join } from 'node:path';
-import type { Express, RequestHandler } from 'express';
+import type { Express, Request, RequestHandler, Response } from 'express';
 import { buildGatherArgs, buildNoteArgs, childEnv, degradedSections, mountSupportGather, noteExitToHttp } from './support-gather.js';
 
 const ASK = '/skills/bb-support/scripts/ask.mjs';
@@ -268,6 +268,25 @@ describe('mountSupportGather route wiring', () => {
     const { routes, auth, writeAuth } = mount();
     expect(routes.get('/api/support/note')?.[0]).toBe(writeAuth);
     expect(routes.get('/api/support/note')?.[0]).not.toBe(auth);
+  });
+
+  it('rejects a flag-shaped question with 400 before it ever reaches buildGatherArgs', () => {
+    // This is the ONLY guard against argv injection now that buildGatherArgs
+    // deliberately trusts the caller (see its comment). If this ever moves,
+    // gets refactored, or its condition weakens, the hole this PR closes
+    // reopens silently while every buildGatherArgs unit test keeps passing.
+    const { routes } = mount();
+    const handler = routes.get('/api/support/gather')?.at(-1);
+    expect(handler).toBeDefined();
+
+    const json = vi.fn();
+    const res = { status: vi.fn(() => ({ json })) } as unknown as Response;
+    const req = { body: { question: '--code' } } as unknown as Request;
+
+    handler!(req, res, vi.fn());
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(json).toHaveBeenCalledWith({ error: 'question must not start with "-"' });
   });
 });
 
