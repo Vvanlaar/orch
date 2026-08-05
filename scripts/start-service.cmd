@@ -39,6 +39,12 @@ if not exist "dist\server\index.js" (
 echo. >> "%LOG%"
 echo ===== start-service %DATE% %TIME% ===== >> "%LOG%"
 "%NODE_EXE%" dist\server\index.js >> "%LOG%" 2>&1
-echo ===== exited with %ERRORLEVEL% at %DATE% %TIME% ===== >> "%LOG%"
+REM Capture the exit code BEFORE anything else runs - every command, `echo`
+REM included, resets ERRORLEVEL. Without this the script always exits 0, so a
+REM boot crash (assertBindAuthValid throwing, EADDRINUSE) is reported to Task
+REM Scheduler as "completed successfully" and the -RestartCount policy, which
+REM only fires for a FAILED task, never engages.
+set "RC=%ERRORLEVEL%"
+echo ===== exited with %RC% at %DATE% %TIME% ===== >> "%LOG%"
 
-endlocal
+endlocal & exit /b %RC%

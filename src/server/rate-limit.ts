@@ -9,6 +9,10 @@
 
 import type { NextFunction, Request, Response } from 'express';
 
+// Only sweep once the map is big enough to be worth an O(n) pass. Below this a
+// LAN's worth of clients fits comfortably and the scan is pure overhead.
+const SWEEP_THRESHOLD = 64;
+
 export function rateLimiter(opts: {
   windowMs: number;
   limit: number;
@@ -22,11 +26,23 @@ export function rateLimiter(opts: {
     const cutoff = now - windowMs;
     const hits = (buckets.get(key) || []).filter((t) => t > cutoff);
     if (hits.length >= limit) {
+      // Keep the pruned array so the window keeps sliding while the caller is
+      // being refused — dropping it here would reset their budget on every 429.
+      buckets.set(key, hits);
       res.status(429).json({ error: 'rate limit exceeded — try again later' });
       return;
     }
     hits.push(now);
     buckets.set(key, hits);
+    // Sweep other keys that have fully aged out. Without this the map grows one
+    // entry per distinct req.ip for the lifetime of the process — expiry is
+    // applied to an array's contents on read, never to the key itself, and this
+    // is now a long-lived always-on service.
+    if (buckets.size > SWEEP_THRESHOLD) {
+      for (const [k, v] of buckets) {
+        if (k !== key && !v.some((t) => t > cutoff)) buckets.delete(k);
+      }
+    }
     next();
   };
 }

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { join } from 'node:path';
 import type { Express, RequestHandler } from 'express';
-import { buildGatherArgs, buildNoteArgs, childEnv, mountSupportGather, noteExitToHttp } from './support-gather.js';
+import { buildGatherArgs, buildNoteArgs, childEnv, degradedSections, mountSupportGather, noteExitToHttp } from './support-gather.js';
 
 const ASK = '/skills/bb-support/scripts/ask.mjs';
 const KEY = '/keys/abc.json';
@@ -232,5 +232,48 @@ describe('mountSupportGather route wiring', () => {
     const { routes, auth, writeAuth } = mount();
     expect(routes.get('/api/support/note')?.[0]).toBe(writeAuth);
     expect(routes.get('/api/support/note')?.[0]).not.toBe(auth);
+  });
+});
+
+describe('buildGatherArgs --top narrowing', () => {
+  // Number(null) === 0 clamps to 1, so a `!== undefined` guard would turn the
+  // natural JSON encoding of "unset" into a one-hit-per-source gather and the
+  // client's Claude would answer "we have almost no history on this".
+  it('ignores non-numeric values that Number() would otherwise make finite', () => {
+    // Each of these is finite after Number() — null/''/[] → 0 → clamped to 1,
+    // true → 1 — so a `!== undefined` guard would turn "unset" into "--top 1".
+    for (const v of [null, '', '   ', [], true, false]) {
+      expect(buildGatherArgs(ASK, { question: 'q', top: v as never }, KEY)).not.toContain('--top');
+    }
+  });
+
+  it('still accepts numeric strings, so existing clients are unaffected', () => {
+    const args = buildGatherArgs(ASK, { question: 'q', top: '12' }, KEY);
+    expect(args[args.indexOf('--top') + 1]).toBe('12');
+  });
+});
+
+describe('degradedSections', () => {
+  // ask.mjs exits 0 for a hard source failure, so the only signal is in-band.
+  it('reports a section whose source failed outright', () => {
+    const out = [
+      '# section: HUBSPOT_TICKETS',
+      '# note: error: HTTP 401 from HubSpot',
+      '',
+      '# section: KB',
+      '{"title":"x"}',
+      '',
+    ].join('\n');
+    expect(degradedSections(out)).toEqual([{ section: 'HUBSPOT_TICKETS', error: 'HTTP 401 from HubSpot' }]);
+  });
+
+  it('does not treat a disabled source as degraded', () => {
+    // `skipped:` means the caller turned the source off — a legitimate empty.
+    const out = '# section: ADO_WORKITEMS\n# note: skipped: --no-ado\n\n';
+    expect(degradedSections(out)).toEqual([]);
+  });
+
+  it('returns nothing for a clean gather', () => {
+    expect(degradedSections('# section: KB\n{"title":"x"}\n\n')).toEqual([]);
   });
 });

@@ -26,9 +26,10 @@
 import type { Express, RequestHandler } from 'express';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import { asyncHandler } from '../core/error-handler.js';
 import { createLogger } from '../core/logger.js';
 import { KEYS_DIR, SCRIPTS_DIR } from '../core/support-paths.js';
@@ -78,9 +79,18 @@ export function buildGatherArgs(
 
   // Clamp rather than reject: `top` is a relevance knob, not a correctness one,
   // and a client sending 500 deserves 20 hits, not a 400.
-  if (body.top !== undefined) {
-    const n = Number(body.top);
-    if (Number.isFinite(n)) args.push('--top', String(Math.max(1, Math.min(Math.floor(n), 20))));
+  //
+  // Accept a number or a numeric string, and NOTHING else. A bare
+  // `!== undefined` + Number() would take null, '', [], true and false as 0 or 1
+  // — so a client that serialises an unset field as null silently asks for one
+  // hit per source instead of ask.mjs's default of 5, and its Claude concludes
+  // "we have almost no history on this" from a gather that was never run wide.
+  const rawTop = body.top;
+  const top = typeof rawTop === 'number' ? rawTop
+    : typeof rawTop === 'string' && rawTop.trim() !== '' ? Number(rawTop)
+    : NaN;
+  if (Number.isFinite(top)) {
+    args.push('--top', String(Math.max(1, Math.min(Math.floor(top), 20))));
   }
 
   // Each source defaults ON in ask.mjs, so only an explicit `false` emits a flag.
@@ -145,6 +155,26 @@ export function buildNoteArgs(
   return args;
 }
 
+// Find sources that failed outright rather than merely returning nothing.
+//
+// ask.mjs's emitResult writes `# section: NAME` then, for a hard failure,
+// `# note: error: <msg>` and zero hits — and still exits 0. A caller reading
+// only the hit count cannot tell "HubSpot is down" from "nothing matched", so
+// pull the distinction back out of the stream and report it as structured data.
+// `skipped:` is deliberately NOT included: that one means "source disabled",
+// which is a legitimate empty, not a failure.
+export function degradedSections(stdout: string): { section: string; error: string }[] {
+  const out: { section: string; error: string }[] = [];
+  let current = '';
+  for (const line of stdout.split('\n')) {
+    const section = /^# section: (.+)$/.exec(line);
+    if (section) { current = section[1].trim(); continue; }
+    const err = /^# note: error: (.*)$/.exec(line);
+    if (err && current) out.push({ section: current, error: err[1].trim() });
+  }
+  return out;
+}
+
 // note.mjs's documented exit codes → HTTP. 3 (note already exists) is the one
 // that isn't really an error: the caller asked to record a finding and a finding
 // is on record, so it maps to 409 and the client can retry with update:true.
@@ -164,12 +194,39 @@ export function noteExitToHttp(code: number | null): { status: number; error: st
 // Windows-safe tree kill. Same shape as bb-support/scripts/run-support.mjs:41 —
 // proc.kill() on win32 leaves grandchildren (the node wrapper's real process)
 // alive, so a timed-out gather would keep hitting HubSpot after we responded.
-function killTree(pid: number | undefined): void {
-  if (!pid) return;
+//
+// Returns whether the kill is believed to have landed. spawnSync does NOT throw
+// on ENOENT or a non-zero exit — it reports via .error / .status — so a bare
+// try/catch silently treats "taskkill isn't on PATH" as success. It isn't:
+// the child survives, 'close' never fires, and the caller's promise would hang
+// forever. runNode needs the answer to decide whether it can still wait.
+export function killTree(pid: number | undefined): boolean {
+  if (!pid) return true;
   try {
-    if (platform() === 'win32') spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'pipe' });
-    else process.kill(pid, 'SIGKILL');
-  } catch { /* already gone */ }
+    if (platform() !== 'win32') {
+      process.kill(pid, 'SIGKILL');
+      return true;
+    }
+    const res = spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'pipe' });
+    if (res.error) {
+      log.error(`taskkill could not run (${res.error.message}) — pid ${pid} may still be alive`);
+      return false;
+    }
+    if (res.status !== 0) {
+      // 128 = "process not found", i.e. it already exited. Anything else
+      // (notably 1, "Access is denied") means it is still running.
+      if (res.status === 128) return true;
+      log.error(`taskkill exited ${res.status} for pid ${pid}: ${String(res.stderr || '').trim()}`);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    // ESRCH from process.kill means it's already gone; anything else is a
+    // genuine failure to signal.
+    if ((err as NodeJS.ErrnoException).code === 'ESRCH') return true;
+    log.error(`kill failed for pid ${pid}`, err);
+    return false;
+  }
 }
 
 type RunResult = {
@@ -178,21 +235,42 @@ type RunResult = {
   stderr: string;
   truncated: boolean;
   timedOut: boolean;
+  orphaned: boolean;
 };
 
 function runNode(args: string[], timeoutMs: number): Promise<RunResult> {
   return new Promise((resolve, reject) => {
+    // Decode across chunk boundaries. A plain per-chunk c.toString() turns any
+    // multi-byte character split across a 64KB pipe read into U+FFFD — routine
+    // for Dutch ticket subjects and customer names.
+    const outDecoder = new StringDecoder('utf8');
+    const errDecoder = new StringDecoder('utf8');
     let stdout = '';
     let stderr = '';
-    let stdoutBytes = 0;
     let truncated = false;
     let timedOut = false;
+    let orphaned = false;
+    let settled = false;
 
     const child = spawn(process.argv[0], args, { shell: false, env: childEnv() });
 
+    const settle = (code: number | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ code, stdout: stdout + outDecoder.end(), stderr: stderr + errDecoder.end(), truncated, timedOut, orphaned });
+    };
+
     const timer = setTimeout(() => {
       timedOut = true;
-      killTree(child.pid);
+      if (!killTree(child.pid)) {
+        // We could not guarantee the child died, so 'close' may never arrive.
+        // Settle now rather than holding the HTTP connection open forever —
+        // the documented timeout has to be a real bound, not an advisory one.
+        orphaned = true;
+        log.error(`gather/note child ${child.pid} outlived its ${timeoutMs}ms budget and could not be killed`);
+        settle(null);
+      }
     }, timeoutMs);
     timer.unref?.();
 
@@ -200,21 +278,28 @@ function runNode(args: string[], timeoutMs: number): Promise<RunResult> {
       // Sticky truncation: a gap mid-stream would hand the reading Claude a
       // section list with a hole in it, which is worse than a clean cut.
       if (truncated) return;
-      if (stdoutBytes + c.length > OUTPUT_CAP_BYTES) { truncated = true; return; }
-      stdoutBytes += c.length;
-      stdout += c.toString();
+      const text = outDecoder.write(c);
+      if (stdout.length + text.length > OUTPUT_CAP_BYTES) {
+        truncated = true;
+        // Cut back to the last complete NDJSON record. Dropping the chunk whole
+        // (or slicing at the cap) leaves a half-written JSON object as the final
+        // line, which the reading client cannot parse.
+        const room = OUTPUT_CAP_BYTES - stdout.length;
+        const head = text.slice(0, Math.max(0, room));
+        const lastNewline = head.lastIndexOf('\n');
+        stdout += lastNewline >= 0 ? head.slice(0, lastNewline + 1) : '';
+        return;
+      }
+      stdout += text;
     });
-    // stderr carries ask.mjs's `# note:` / creds-source diagnostics. Capped
-    // hard — it's only ever surfaced for debugging.
+    // stderr carries ask.mjs's `# note:` / creds-source diagnostics, which the
+    // remote client relays. Capped hard.
     child.stderr.on('data', (c: Buffer) => {
-      if (stderr.length < 16_384) stderr += c.toString();
+      if (stderr.length < 16_384) stderr += errDecoder.write(c);
     });
 
-    child.on('error', (err) => { clearTimeout(timer); reject(err); });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolve({ code, stdout, stderr, truncated, timedOut });
-    });
+    child.on('error', (err) => { if (!settled) { settled = true; clearTimeout(timer); reject(err); } });
+    child.on('close', (code) => settle(code));
   });
 }
 
@@ -241,6 +326,20 @@ export function mountSupportGather(
       res.status(400).json({ error: 'question required' });
       return;
     }
+    // ask.mjs's parseArgs matches flags by exact token at ANY position and has
+    // no `--` end-of-options handling, so a flag-shaped question is parsed as a
+    // flag and swallows the `--key-file <path>` pair that follows it. The
+    // damage is not hypothetical: "--code" leaves keyFile unset, so ask.mjs
+    // falls back to the operator's shared ~/.claude/bb-support/.last-ask-key.json
+    // — deleting it and rewriting it with THIS request's customer mappings —
+    // while "--key-file" makes it a relative path, dropping cleartext PII into
+    // the server's cwd where the keyReaper never looks. Prefixing with `--`
+    // would not help; parseArgs would fold that into the question. Reject
+    // instead, and fix it properly upstream by teaching parseArgs about `--`.
+    if (body.question.startsWith('-')) {
+      res.status(400).json({ error: 'question must not start with "-"' });
+      return;
+    }
 
     const keyId = randomUUID();
     const keyFile = join(KEYS_DIR, `${keyId}.json`);
@@ -258,7 +357,11 @@ export function mountSupportGather(
     }
 
     if (result.timedOut) {
-      res.status(504).json({ error: `gather timed out after ${GATHER_TIMEOUT_MS / 1000}s`, stderr: result.stderr });
+      res.status(504).json({
+        error: `gather timed out after ${GATHER_TIMEOUT_MS / 1000}s`,
+        ...(result.orphaned ? { orphaned: true } : {}),
+        stderr: result.stderr,
+      });
       return;
     }
     if (result.code !== 0) {
@@ -271,15 +374,30 @@ export function mountSupportGather(
     }
 
     const tokenName = (req as AuthedRequest).tokenName ?? 'anonymous';
-    log.info(`gather ok for ${tokenName} (${result.stdout.length} bytes${result.truncated ? ', TRUNCATED' : ''})`);
+    // A source that failed hard is NOT the same as a source with no hits, but
+    // ask.mjs expresses both on stdout and exits 0 either way (emitResult turns
+    // {__error} into an empty section plus a `# note: error:` line). Without
+    // this, an expired HubSpot token makes every gather return "we have no
+    // record of this" forever, logged as success.
+    const degraded = degradedSections(result.stdout);
+    if (degraded.length > 0) {
+      log.warn(`gather degraded for ${tokenName} — ${degraded.map((d) => `${d.section} (${d.error})`).join('; ')}`);
+    }
+    log.info(`gather ok for ${tokenName} (${result.stdout.length} bytes${result.truncated ? ', TRUNCATED' : ''}${degraded.length ? `, ${degraded.length} DEGRADED` : ''})`);
 
     // The 30-min keyReaper in support.ts owns keyFile cleanup — same directory,
     // so no extra reaper needed here.
+    //
+    // keyId only when a key file actually exists: ask.mjs writes one only if the
+    // redactor redacted something. Handing back an id for a file that was never
+    // written makes /reveal 404 indistinguishably from an expired mapping, and
+    // makes /note publish literal [customer:N] placeholders on a live ticket.
     res.json({
       sections: result.stdout,
-      keyId,
+      keyId: existsSync(keyFile) ? keyId : null,
       stderr: result.stderr,
       truncated: result.truncated,
+      degraded,
     });
   }));
 
@@ -363,6 +481,7 @@ export function mountSupportGather(
         res.status(504).json({
           error: `note timed out after ${NOTE_TIMEOUT_MS / 1000}s — the note may still have been posted to ticket ${ticketId}; check before retrying`,
           ticketId,
+          ...(result.orphaned ? { orphaned: true } : {}),
           stderr: result.stderr,
         });
         return;
@@ -376,7 +495,11 @@ export function mountSupportGather(
       }
       record(true);
       // note.mjs prints "→ posted note <id> to ticket <n>" / "→ view: <url>".
-      res.json({ ok: true, output: result.stdout.trim(), stderr: result.stderr });
+      // stderr is deliberately omitted on success: it carries host paths and the
+      // creds-source diagnostic, the remote client reads only `output`, and under
+      // anonymous LAN mode this response reaches unauthenticated callers. Error
+      // paths still include it — there it is the point.
+      res.json({ ok: true, output: result.stdout.trim() });
     } finally {
       try { rmSync(tmpFile, { force: true }); } catch { /* best effort */ }
     }
