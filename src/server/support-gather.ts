@@ -122,18 +122,18 @@ export function buildGatherArgs(
   // flag is what actually makes the loop impossible.
   args.push('--no-remote');
 
-  // `--` LAST, question after it. Everything past `--` is positional, so a
-  // question that happens to equal a flag name can never be parsed as one.
-  //
-  // Without this, `question` was the single request field reaching argv
-  // unconstrained, and ask.mjs's parseArgs dispatches on exact token equality with
-  // no end-of-options handling — so it was read as a flag AND swallowed the next
-  // argv token. Verified: {"question":"--code"} consumed the `--key-file` path, so
-  // args.keyFile went undefined and resolveKeyFile wiped and rewrote the HOST
-  // OPERATOR's own ~/.claude/bb-support/.last-ask-key.json; {"question":"--remote"}
-  // set remote mode on the host's own run; {"question":"--no-scrub"} disabled the
-  // redactor. Unauthenticated in open mode.
-  args.push('--', String(body.question));
+  // NOT prefixed with a `--` end-of-options sentinel: ask.mjs's parseArgs has no
+  // such handling (checked bb-support/scripts/ask.mjs on the local checkout,
+  // nightly, and master — every one falls through `else positional.push(a)` for
+  // a literal '--' exactly like an unrecognised flag), so a sentinel here would
+  // land in args.question as a stray "-- " prefix on every gather, not just the
+  // flag-shaped ones. Splitting flags from the question is instead the route's
+  // job: the route rejects any question starting with '-' (support-gather.ts,
+  // the `startsWith('-')` check) BEFORE calling this function, and spawn uses
+  // shell:false with an args array, so `body.question` always reaches ask.mjs as
+  // ONE argv token — it can only equal a flag name if the *entire* string does,
+  // which the reject already forecloses. This function trusts that guard.
+  args.push(String(body.question));
   return args;
 }
 

@@ -10,8 +10,7 @@ describe('buildGatherArgs', () => {
   it('puts the script first and the question as one arg (no shell tokenisation)', () => {
     const args = buildGatherArgs(ASK, { question: 'how does live transcoding work' }, KEY);
     expect(args[0]).toBe(ASK);
-    // The question is LAST, immediately after the `--` end-of-options sentinel.
-    expect(args.at(-2)).toBe('--');
+    // The question is pushed last, after every flag.
     expect(args.at(-1)).toBe('how does live transcoding work');
     // spawn uses an args array with shell:false, so a multi-word question must
     // stay a single element — splitting it would make ask.mjs treat each word as
@@ -28,7 +27,7 @@ describe('buildGatherArgs', () => {
 
   it('emits no source flags when every source is defaulted', () => {
     const args = buildGatherArgs(ASK, { question: 'q' }, KEY);
-    expect(args).toEqual([ASK, '--key-file', KEY, '--no-remote', '--', 'q']);
+    expect(args).toEqual([ASK, '--key-file', KEY, '--no-remote', 'q']);
   });
 
   it('emits --no-* only for an explicit false, not for undefined', () => {
@@ -57,22 +56,19 @@ describe('buildGatherArgs', () => {
     expect(buildGatherArgs(ASK, { question: 'q' }, KEY)).toContain('--no-remote');
   });
 
-  it('puts a flag-shaped question after `--` so it cannot be parsed as a flag', () => {
-    // Verified against ask.mjs's parseArgs: {"question":"--code"} used to consume
-    // the following `--key-file` path, leaving args.keyFile undefined so
-    // resolveKeyFile wiped the HOST OPERATOR's own default key file.
-    // {"question":"--remote"} flipped the host's run into remote mode;
-    // {"question":"--no-scrub"} disabled the redactor. All unauthenticated in open mode.
-    for (const question of ['--code', '--remote', '--no-scrub', '--key-file', '--top', '-x']) {
-      const args = buildGatherArgs(ASK, { question }, KEY);
-      const sep = args.indexOf('--');
-      expect(sep).toBeGreaterThan(-1);
-      // The question sits strictly after the sentinel...
-      expect(args.slice(sep + 1)).toEqual([question]);
-      // ...and the key file is still bound before it, not swallowed as its value.
-      expect(args.slice(0, sep)).toContain('--key-file');
-      expect(args[args.indexOf('--key-file') + 1]).toBe(KEY);
-    }
+  it('does NOT itself guard against a flag-shaped question — that is the route\'s job', () => {
+    // ask.mjs's parseArgs has no `--` end-of-options handling (checked on the
+    // local bb-skills checkout, nightly, and master: an unrecognised '--' just
+    // falls into positional like any other token), so this function cannot
+    // separate a flag-shaped question from a real flag by inserting a sentinel
+    // — doing that once corrupted every question with a stray "-- " prefix. A
+    // question equal to a flag name reaches ask.mjs's argv unconstrained here;
+    // the route rejects any question starting with '-' before calling this
+    // function, and spawn's shell:false array means `body.question` can only
+    // ever equal a flag name if the whole string does. This test pins that
+    // buildGatherArgs trusts the caller rather than re-guarding.
+    const args = buildGatherArgs(ASK, { question: '--code' }, KEY);
+    expect(args.at(-1)).toBe('--code');
   });
 
   it('keeps `note` tri-state: undefined emits neither flag', () => {
