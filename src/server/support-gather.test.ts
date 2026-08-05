@@ -10,7 +10,9 @@ describe('buildGatherArgs', () => {
   it('puts the script first and the question as one arg (no shell tokenisation)', () => {
     const args = buildGatherArgs(ASK, { question: 'how does live transcoding work' }, KEY);
     expect(args[0]).toBe(ASK);
-    expect(args[1]).toBe('how does live transcoding work');
+    // The question is LAST, immediately after the `--` end-of-options sentinel.
+    expect(args.at(-2)).toBe('--');
+    expect(args.at(-1)).toBe('how does live transcoding work');
     // spawn uses an args array with shell:false, so a multi-word question must
     // stay a single element — splitting it would make ask.mjs treat each word as
     // a positional token (harmless today, but it also swallows anything that
@@ -26,7 +28,7 @@ describe('buildGatherArgs', () => {
 
   it('emits no source flags when every source is defaulted', () => {
     const args = buildGatherArgs(ASK, { question: 'q' }, KEY);
-    expect(args).toEqual([ASK, 'q', '--key-file', KEY]);
+    expect(args).toEqual([ASK, '--key-file', KEY, '--no-remote', '--', 'q']);
   });
 
   it('emits --no-* only for an explicit false, not for undefined', () => {
@@ -36,9 +38,41 @@ describe('buildGatherArgs', () => {
     expect(args).not.toContain('--no-ado');
   });
 
-  it('passes --no-scrub through (callers may opt out of redaction)', () => {
-    expect(buildGatherArgs(ASK, { question: 'q', scrub: false }, KEY)).toContain('--no-scrub');
-    expect(buildGatherArgs(ASK, { question: 'q', scrub: true }, KEY)).not.toContain('--no-scrub');
+  it('NEVER emits --no-scrub, whatever the client sends', () => {
+    // --no-scrub swaps ask.mjs's redactor for a no-op, so the response would carry
+    // raw HubSpot subjects/bodies — names, emails, phone numbers — back to the
+    // caller. Strictly more than /reveal can yield (that only decodes names), and
+    // in open mode /gather answers unauthenticated LAN requests.
+    for (const scrub of [false, true, 'false', 0, null]) {
+      const args = buildGatherArgs(ASK, { question: 'q', scrub } as never, KEY);
+      expect(args).not.toContain('--no-scrub');
+      expect(args).not.toContain('--scrub');
+    }
+  });
+
+  it('forces --no-remote so a spawned ask.mjs cannot call back out', () => {
+    // childEnv only clears process.env; resolveRemote also reads ~/.env, which is
+    // exactly where the docs tell people to put BB_SUPPORT_REMOTE. This flag is
+    // what actually breaks the proxy loop.
+    expect(buildGatherArgs(ASK, { question: 'q' }, KEY)).toContain('--no-remote');
+  });
+
+  it('puts a flag-shaped question after `--` so it cannot be parsed as a flag', () => {
+    // Verified against ask.mjs's parseArgs: {"question":"--code"} used to consume
+    // the following `--key-file` path, leaving args.keyFile undefined so
+    // resolveKeyFile wiped the HOST OPERATOR's own default key file.
+    // {"question":"--remote"} flipped the host's run into remote mode;
+    // {"question":"--no-scrub"} disabled the redactor. All unauthenticated in open mode.
+    for (const question of ['--code', '--remote', '--no-scrub', '--key-file', '--top', '-x']) {
+      const args = buildGatherArgs(ASK, { question }, KEY);
+      const sep = args.indexOf('--');
+      expect(sep).toBeGreaterThan(-1);
+      // The question sits strictly after the sentinel...
+      expect(args.slice(sep + 1)).toEqual([question]);
+      // ...and the key file is still bound before it, not swallowed as its value.
+      expect(args.slice(0, sep)).toContain('--key-file');
+      expect(args[args.indexOf('--key-file') + 1]).toBe(KEY);
+    }
   });
 
   it('keeps `note` tri-state: undefined emits neither flag', () => {

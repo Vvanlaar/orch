@@ -55,13 +55,14 @@ const OUTPUT_CAP_BYTES = 2_000_000;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// `scrub` is deliberately NOT a field — see buildGatherArgs. A client must never
+// be able to switch off the host's PII redaction.
 export type GatherRequest = {
   question?: unknown;
   top?: unknown;
   hubspot?: unknown;
   kb?: unknown;
   ado?: unknown;
-  scrub?: unknown;
   note?: unknown;
 };
 
@@ -75,7 +76,7 @@ export function buildGatherArgs(
   body: GatherRequest,
   keyFile: string,
 ): string[] {
-  const args = [askScript, String(body.question)];
+  const args = [askScript];
 
   // Clamp rather than reject: `top` is a relevance knob, not a correctness one,
   // and a client sending 500 deserves 20 hits, not a 400.
@@ -97,7 +98,14 @@ export function buildGatherArgs(
   if (body.hubspot === false) args.push('--no-hubspot');
   if (body.kb === false) args.push('--no-kb');
   if (body.ado === false) args.push('--no-ado');
-  if (body.scrub === false) args.push('--no-scrub');
+
+  // NOTE deliberately no `scrub` passthrough. `--no-scrub` swaps ask.mjs's
+  // redactor for a no-op, so the response would carry raw HubSpot subjects and
+  // bodies — customer names, emails, phone numbers — straight back to the caller.
+  // That is strictly more than /reveal can ever yield (it only decodes *names*;
+  // emails and phones get uniform placeholders with no mapping at all), and in
+  // open mode /gather takes unauthenticated LAN requests. --no-scrub stays a local
+  // debugging flag; it is not a remote capability.
 
   // Tri-state, mirroring ask.mjs: absent means "decide from context", so an
   // undefined `note` must emit neither flag.
@@ -105,6 +113,27 @@ export function buildGatherArgs(
   else if (body.note === false) args.push('--no-note');
 
   args.push('--key-file', keyFile);
+
+  // Belt to childEnv's braces. childEnv can only clear *process.env*, but
+  // remote.mjs's resolveRemote also reads ~/.env and ~/.claude/bb-support/remote.json
+  // — and ~/.env is exactly where the docs tell people to put BB_SUPPORT_REMOTE.
+  // On a host whose operator also uses remote mode, clearing the environment
+  // changes nothing and the spawned ask.mjs would call straight back out. This
+  // flag is what actually makes the loop impossible.
+  args.push('--no-remote');
+
+  // `--` LAST, question after it. Everything past `--` is positional, so a
+  // question that happens to equal a flag name can never be parsed as one.
+  //
+  // Without this, `question` was the single request field reaching argv
+  // unconstrained, and ask.mjs's parseArgs dispatches on exact token equality with
+  // no end-of-options handling — so it was read as a flag AND swallowed the next
+  // argv token. Verified: {"question":"--code"} consumed the `--key-file` path, so
+  // args.keyFile went undefined and resolveKeyFile wiped and rewrote the HOST
+  // OPERATOR's own ~/.claude/bb-support/.last-ask-key.json; {"question":"--remote"}
+  // set remote mode on the host's own run; {"question":"--no-scrub"} disabled the
+  // redactor. Unauthenticated in open mode.
+  args.push('--', String(body.question));
   return args;
 }
 
