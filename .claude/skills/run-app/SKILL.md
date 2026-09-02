@@ -7,9 +7,15 @@ description: Launch and drive the orch app (Express server + Svelte/Vite dashboa
 
 Two processes, started together by one `concurrently` script:
 
-- **Server** — Express + WebSocket, port **3011**, binds `127.0.0.1` only.
+- **Server** — Express + WebSocket, port **3011**. Binds whatever `HOST` says,
+  defaulting to `127.0.0.1`. This machine's `.env` sets `HOST=0.0.0.0` on
+  purpose: that's the "Always-on LAN service" in the README, where colleagues
+  reach bb-support at `http://<hostname>:3011` from a browser or
+  `ask.mjs --remote`. Don't "fix" it to loopback — that breaks them. The auth
+  gate, not the bind address, is the boundary there.
 - **Dashboard** — Svelte 5 + Vite SPA, port **3010**. Proxies `/api` and `/ws`
-  to `127.0.0.1:3011` server-side, so the server never needs network binding.
+  to `127.0.0.1:3011` server-side, so the dashboard path itself needs no
+  network binding on the server.
 
 Use `pnpm.cmd` (not `pnpm`) — bare `pnpm`/`npm` fail silently in Git Bash on
 this machine.
@@ -49,9 +55,11 @@ and floods the client console with `WebSocket connection to
 'ws://<host>:3010/' failed` / `[vite] failed to connect to websocket`. Use it
 only for self-testing the LAN binding on the host machine.
 
-The server stays on `127.0.0.1:3011`; the preview proxy bridges API/WS for LAN
-clients, so only the dashboard is exposed. Find the LAN IP with
-`ipconfig | grep IPv4` and open `http://<LAN-IP>:3010`.
+The preview proxy bridges API/WS to `127.0.0.1:3011`, so a LAN browser only
+needs :3010. Find the LAN IP with `ipconfig | grep IPv4` and open
+`http://<LAN-IP>:3010`. Note the server is *also* reachable on :3011 directly
+when `HOST=0.0.0.0` (see above) — that's the bb-support LAN service, gated by
+token scope rather than by the bind.
 
 After editing dashboard source, re-run `serve:network` to rebuild — preview
 serves a static bundle and will NOT pick up changes live.
