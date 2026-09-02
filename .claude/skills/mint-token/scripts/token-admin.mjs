@@ -4,12 +4,14 @@
 // The token file and its shape are owned by src/server/auth.ts — this script
 // mirrors that contract exactly so the server accepts what it writes:
 //   { "<token>": { name, createdAt, scopes: string[] } }
-// Scopes: ["support"] (may hit /api/support/* only) or ["admin"] (full access;
-// admin satisfies every scope check). A missing scopes list defaults to
-// support (least privilege) in auth.ts, but we always write it explicitly.
+// Scopes: "support" (may hit /api/support/* only), "videoscan" (may run and
+// read videoscans only) or "admin" (full access; admin satisfies every scope
+// check). support and videoscan do NOT imply each other — pass --scope twice to
+// grant both. A missing scopes list defaults to support (least privilege) in
+// auth.ts, but we always write it explicitly.
 //
 // Usage:
-//   node token-admin.mjs create "<name>" [--scope support|admin]
+//   node token-admin.mjs create "<name>" [--scope support|videoscan|admin ...]
 //   node token-admin.mjs list
 //   node token-admin.mjs revoke "<name-or-token>"
 
@@ -20,6 +22,10 @@ import { randomBytes } from 'node:crypto';
 
 const DATA_DIR = process.env.BB_SUPPORT_DATA_DIR || join(homedir(), '.claude', 'bb-support-web');
 const TOKENS_FILE = join(DATA_DIR, 'tokens.json');
+
+// Mirrors SCOPES in src/server/auth.ts. The legacy "*" alias is honored by the
+// server on read but deliberately not mintable here.
+const VALID_SCOPES = ['support', 'videoscan', 'admin'];
 
 function load() {
   if (!existsSync(TOKENS_FILE)) return {};
@@ -46,23 +52,39 @@ function mask(token) {
 const [cmd, ...rest] = process.argv.slice(2);
 
 if (cmd === 'create') {
-  const name = rest.find((a) => !a.startsWith('--'));
+  // Walk argv once, consuming each --scope's value, so the name can appear
+  // before or after the flags. Picking "the first non---arg" instead would mint
+  // a token *named* "videoscan" for `create --scope videoscan "Luuk"`.
+  const scopes = [];
+  const positional = [];
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] !== '--scope') {
+      positional.push(rest[i]);
+      continue;
+    }
+    const v = rest[++i];
+    if (!v || v.startsWith('--')) {
+      console.error('--scope needs a value.');
+      process.exit(1);
+    }
+    if (!VALID_SCOPES.includes(v)) {
+      console.error(`Invalid scope "${v}" — use ${VALID_SCOPES.join(', ')}.`);
+      process.exit(1);
+    }
+    if (!scopes.includes(v)) scopes.push(v);
+  }
+  const name = positional.find((a) => !a.startsWith('--'));
   if (!name) {
-    console.error('Usage: create "<name>" [--scope support|admin]');
+    console.error(`Usage: create "<name>" [--scope ${VALID_SCOPES.join('|')} ...]`);
     process.exit(1);
   }
-  const scopeIdx = rest.indexOf('--scope');
-  const scope = scopeIdx !== -1 ? rest[scopeIdx + 1] : 'support';
-  if (scope !== 'support' && scope !== 'admin') {
-    console.error(`Invalid scope "${scope}" — use support or admin.`);
-    process.exit(1);
-  }
+  if (scopes.length === 0) scopes.push('support');
   const tokens = load();
   const token = `${slug(name)}-${randomBytes(24).toString('base64url')}`;
-  tokens[token] = { name, createdAt: new Date().toISOString(), scopes: [scope] };
+  tokens[token] = { name, createdAt: new Date().toISOString(), scopes };
   save(tokens);
   console.log(token);
-  console.error(`✓ Created ${scope} token for "${name}". Restart the server to load it.`);
+  console.error(`✓ Created ${scopes.join('+')} token for "${name}". Restart the server to load it.`);
 } else if (cmd === 'list') {
   const tokens = load();
   const rows = Object.entries(tokens);
