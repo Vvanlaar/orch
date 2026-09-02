@@ -320,8 +320,21 @@ export const DETECTORS = {
     scripts: [/sproutvideo\.com/i],
   },
   "Video.js": {
-    patterns: [/video\.js/i, /videojs/i, /vjs-/i, /video-js/i],
-    scripts: [/videojs/i, /video\.js/i, /vjs/i],
+    // Both `vjs` spellings need a left boundary. Drupal serves aggregated JS as
+    // `js_<hash>.js?...&include=<urlsafe-base64>`, and that blob collided with bare
+    // /vjs/i — data.oss.nl flagged 29/29 dataset pages off the substring "vjS".
+    // Since the bundle URL is byte-identical site-wide, one collision flags every
+    // page, so a loose token here is a whole-site false positive.
+    // The HTML class is anchored on [\s"'/.] specifically: those four can never
+    // appear in the urlsafe-base64 alphabet (A-Za-z0-9-_), so a blob cannot match,
+    // while real markup always leads with a quote, space, dot or slash.
+    patterns: [/video\.js/i, /videojs/i, /(?:^|[\s"'\/.])vjs-/i, /video-js/i],
+    // `scripts` patterns are tested against the FULL request URL, query string
+    // included (see detectPlayers), which is why the query blob reached them.
+    // Residual: `_` and `-` are in the base64url alphabet, so `_vjs_` inside a blob
+    // can still match here — kept because real URLs use them (`player-vjs.js`,
+    // `vendors_vjs.js`), and the measured collision rate is ~0.007% per bundle URL.
+    scripts: [/videojs/i, /video\.js/i, /(?:^|[\/._-])vjs(?:[\/._-]|$)/i],
   },
   "MediaElement.js": {
     patterns: [
