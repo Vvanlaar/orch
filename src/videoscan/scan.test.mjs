@@ -168,3 +168,47 @@ test("YouTube embed iframe still detected (guard against over-removal)", () => {
   const result = detectFromCorpus(html);
   assert.deepEqual(names(result), ["YouTube"]);
 });
+
+// ── Non-video socials must not annihilate real players ───────────────
+// Regression: filterToHighestTier used to run first, so an unconfirmed tier-2
+// social embed dropped every lower-tier player, and filterNonVideoSocials then
+// removed the social too — reporting NO player on a page that has one.
+
+test("unconfirmed X (Twitter) embed does not hide a real Video.js player", () => {
+  const html = `
+    <blockquote class="twitter-tweet"><p>just text, no video</p></blockquote>
+    <video class="video-js vjs-default-skin"><source src="/a.mp4" type="video/mp4"></video>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), ["HTML5 native", "Video.js"]);
+});
+
+test("unconfirmed Instagram post embed does not hide a real Video.js player", () => {
+  const html = `
+    <blockquote data-instgrm-permalink="https://www.instagram.com/p/ABC123/"></blockquote>
+    <video class="video-js vjs-default-skin"><source src="/a.mp4" type="video/mp4"></video>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), ["HTML5 native", "Video.js"]);
+});
+
+test("unconfirmed social embed alone still yields nothing", () => {
+  const html = `<blockquote class="twitter-tweet"><p>just text</p></blockquote>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), []);
+});
+
+test("CONFIRMED social still wins the tier over a lower-tier player", () => {
+  // twitter-video confirms real video, so tier 2 legitimately outranks tier 5.
+  const html = `
+    <blockquote class="twitter-tweet twitter-video"><p>clip</p></blockquote>
+    <video class="video-js vjs-default-skin"><source src="/a.mp4" type="video/mp4"></video>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), ["X (Twitter)"]);
+});
+
+test("unconfirmed social does not hide a higher-tier OVP player either", () => {
+  const html = `
+    <blockquote data-instgrm-permalink="https://www.instagram.com/p/ABC123/"></blockquote>
+    <iframe src="https://demo.bbvms.com/p/default/c/1234.json"></iframe>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), ["Blue Billywig"]);
+});

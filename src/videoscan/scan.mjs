@@ -1693,7 +1693,10 @@ export function detectPlayers(html, networkRequests) {
     }
   }
 
-  return filterNonVideoSocials(filterToHighestTier(found), searchable, networkRequests);
+  // Confirm/strip unconfirmed social embeds BEFORE tier-filtering: a tier-2
+  // social that later fails confirmation would otherwise have already
+  // annihilated the lower-tier real player, leaving an empty result.
+  return filterToHighestTier(filterNonVideoSocials(found, searchable, networkRequests));
 }
 
 // ── Explicit URL scanning (no crawl) ────────────────────────────────
