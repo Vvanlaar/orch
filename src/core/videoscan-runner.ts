@@ -407,6 +407,9 @@ interface ScanData {
   playerSummary: Record<string, { count: number; pages: string[] }>;
   details: ScanDetail[];
   _state: { visited: string[]; queue: string[] };
+  batchId?: string;
+  batchLabel?: string;
+  isSummary?: boolean;
 }
 
 export function mergeScansData(scansData: ScanData[]): ScanData {
@@ -518,6 +521,28 @@ export function finalizeScan(filename: string): boolean {
   return true;
 }
 
+/**
+ * True when a scan JSON is itself a batch summary.
+ *
+ * summarizeBatch stamps the batch's `batchId` on the summary it writes, so
+ * listScans()/dbListScans() report the summary as a member of the very batch it
+ * describes. Wrap-up must exclude it: re-merging last run's summary alongside
+ * the per-domain scans resurrects pages that were pruned from (or dropped by a
+ * rescan of) a source scan, since mergeScansData dedupes by URL and keeps the
+ * entry with more players. `isSummary` on the data is the authoritative signal;
+ * the filename suffix only covers files not yet fetched from storage.
+ */
+function isSummaryScan(filename: string): boolean {
+  if (filename.endsWith('-summary.json')) return true;
+  const path = join(VIDEOSCAN_DIR, filename);
+  if (!existsSync(path)) return false;
+  try {
+    return (JSON.parse(readFileSync(path, 'utf-8')) as ScanData).isSummary === true;
+  } catch {
+    return false;
+  }
+}
+
 function slug(label: string): string {
   return label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'batch';
 }
@@ -535,10 +560,15 @@ export function summarizeBatch(filenames: string[], batchId: string, batchLabel:
   const scansData = filenames.map(f => {
     const path = join(VIDEOSCAN_DIR, f);
     if (!existsSync(path)) throw new Error(`File not found: ${f}`);
-    return JSON.parse(readFileSync(path, 'utf-8')) as ScanData;
+    const data = JSON.parse(readFileSync(path, 'utf-8')) as ScanData;
+    // A summary is already a merge of the batch's scans. Folding one back in
+    // would re-introduce details that were since pruned from a source scan,
+    // because mergeScansData's dedupe keeps whichever entry has more players.
+    if (data.isSummary) throw new Error(`Refusing to summarize an existing summary: ${f}`);
+    return data;
   });
 
-  const merged = mergeScansData(scansData) as ScanData & { batchId?: string; batchLabel?: string; isSummary?: boolean };
+  const merged = mergeScansData(scansData);
   merged.domain = batchLabel;
   merged.batchId = batchId;
   merged.batchLabel = batchLabel;
@@ -559,14 +589,6 @@ export interface WrapUpResult {
   mergedDomains: string[];
 }
 
-/**
- * One-click batch finalization:
- *   1. Clear queues on every resumable scan in the batch.
- *   2. Consolidate any same-domain duplicates via mergeScans (archives sources).
- *   3. Produce a cross-domain summary JSON + HTML/PDF report.
- *
- * Caller is responsible for marking the batch closed in batch-state.
- */
 async function ensureLocal(filenames: string[]): Promise<void> {
   for (const f of filenames) {
     if (existsSync(join(VIDEOSCAN_DIR, f))) continue;
@@ -577,6 +599,18 @@ async function ensureLocal(filenames: string[]): Promise<void> {
 
 const wrapUpInFlight = new Set<string>();
 
+/**
+ * One-click batch finalization:
+ *   1. Clear queues on every resumable scan in the batch.
+ *   2. Consolidate any same-domain duplicates via mergeScans (archives sources).
+ *   3. Produce a cross-domain summary JSON + HTML/PDF report.
+ *
+ * Safe to re-run: summaries written by earlier wrap-ups are skipped as inputs
+ * (see isSummaryScan), so the new summary always reflects the current state of
+ * the per-domain scans. Rejects a batch that has nothing but summaries left.
+ *
+ * Caller is responsible for marking the batch closed in batch-state.
+ */
 export async function wrapUpBatch(batchId: string): Promise<WrapUpResult> {
   if (wrapUpInFlight.has(batchId)) throw new Error(`Wrap-up already in progress for batch ${batchId}`);
   wrapUpInFlight.add(batchId);
@@ -589,14 +623,20 @@ export async function wrapUpBatch(batchId: string): Promise<WrapUpResult> {
 
 async function wrapUpBatchInner(batchId: string): Promise<WrapUpResult> {
   const all = await listScans();
-  const initial = all.filter(s => s.batchId === batchId);
-  if (initial.length === 0) throw new Error(`No scans found for batch ${batchId}`);
+  const inBatch = all.filter(s => s.batchId === batchId);
+  if (inBatch.length === 0) throw new Error(`No scans found for batch ${batchId}`);
 
-  const batchLabel = initial.find(s => s.batchLabel)?.batchLabel || batchId;
+  const batchLabel = inBatch.find(s => s.batchLabel)?.batchLabel || batchId;
 
   // mergeScans / summarizeBatch read files synchronously — make sure every
-  // candidate is on disk before we hand it to them.
-  await ensureLocal(initial.map(s => s.filename));
+  // candidate is on disk before we hand it to them (and before isSummaryScan
+  // inspects their contents).
+  await ensureLocal(inBatch.map(s => s.filename));
+
+  // A re-run of wrap-up sees the previous run's summary as a batch member; it is
+  // an output, never an input. See isSummaryScan.
+  const initial = inBatch.filter(s => !isSummaryScan(s.filename));
+  if (initial.length === 0) throw new Error(`Batch ${batchId} has no source scans, only summaries`);
 
   const finalized: string[] = [];
   for (const s of initial) {
@@ -625,9 +665,10 @@ async function wrapUpBatchInner(batchId: string): Promise<WrapUpResult> {
     mergedDomains.push(domain);
   }
 
-  const after = (await listScans()).filter(s => s.batchId === batchId);
+  const afterAll = (await listScans()).filter(s => s.batchId === batchId);
+  await ensureLocal(afterAll.map(s => s.filename));
+  const after = afterAll.filter(s => !isSummaryScan(s.filename));
   if (after.length === 0) throw new Error(`No scans left in batch ${batchId} after merge step`);
-  await ensureLocal(after.map(s => s.filename));
 
   const { filename: summaryFilename } = summarizeBatch(after.map(s => s.filename), batchId, batchLabel);
 
