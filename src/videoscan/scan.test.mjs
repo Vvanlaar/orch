@@ -264,3 +264,60 @@ test("Network evidence: a match straddling the 80-char cut still gets a window",
     `expected a context window spanning the cut, got ${JSON.stringify(evidence)}`
   );
 });
+
+
+test("Generic data-video-id wrapper is NOT Brightcove (tier-1 suppression)", () => {
+  // data-video-id is a generic attribute used by many CMSes and embed wrappers.
+  // Brightcove is tier 1, so matching it bare suppressed the real YouTube hit
+  // at tier 2 and misattributed the page.
+  const html = `
+    <div class="video-embed" data-video-id="dQw4w9WgXcQ"></div>
+    <iframe src="https://www.youtube.com/embed/dQw4w9WgXcQ"></iframe>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), ["YouTube"]);
+});
+
+test("Generic data-account + data-video-id wrapper is NOT Brightcove", () => {
+  // data-account is generic too (analytics/CMS wrappers carry one), so pairing
+  // it with data-video-id would reproduce the same tier-1 suppression. Only
+  // data-account + data-player is Brightcove-specific.
+  const html = `
+    <div data-account="GA-123" data-video-id="abc"></div>
+    <iframe src="https://www.youtube.com/embed/abc"></iframe>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), ["YouTube"]);
+});
+
+test("Bare data-video-id with no other player evidence → no players", () => {
+  const html = `<div class="embed" data-video-id="12345"></div>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), []);
+});
+
+test("Brightcove attrs split across sibling elements → not Brightcove", () => {
+  // The pattern uses [^>]*, not .*, so the pair must live inside one tag.
+  const html = `<div data-account="ga-123"></div><div data-player="x"></div>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), []);
+});
+
+test("Real Brightcove in-page embed still detected (data-account + data-player)", () => {
+  const html = `
+    <video-js data-account="1234567890" data-player="default" data-embed="default"
+      data-video-id="6301234567001" controls></video-js>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), ["Brightcove"]);
+});
+
+test("Brightcove attrs in reverse order still detected", () => {
+  const html = `<video-js data-player="default" data-account="1234567890"></video-js>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), ["Brightcove"]);
+});
+
+test("Brightcove script alone still detected (no data attrs)", () => {
+  const html = `<video-js controls></video-js>
+    <script src="https://players.brightcove.net/1234567890/default_default/index.min.js"></script>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), ["Brightcove"]);
+});

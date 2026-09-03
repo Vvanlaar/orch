@@ -29,8 +29,18 @@ export const DETECTORS = {
       /brightcove\.com/i,
       /bcove\.video/i,
       /brightcove-player/i,
-      /data-account.*data-player/i,
-      /data-video-id/i,
+      // Brightcove in-page embed: <video-js data-account data-player ...>.
+      // Only the data-account + data-player pair is Brightcove-specific — it maps
+      // to the mandatory players.brightcove.net/<account>/<player>_default script.
+      // Neither attribute qualifies alone: data-video-id is generic (see the
+      // TikTok detector below, which pairs it with a vendor token for the same
+      // reason) and data-account is generic (analytics/CMS wrappers carry one).
+      // Bare-attribute matches are especially costly here because Brightcove is
+      // tier 1, so one false hit suppresses every real lower-tier player found.
+      // [^>]* (not .*) keeps the pair inside one tag — the old `.*` variant
+      // matched a data-account on one element and a data-player on the next.
+      /<[^>]*\bdata-account=[^>]*\bdata-player=/i,
+      /<[^>]*\bdata-player=[^>]*\bdata-account=/i,
     ],
     scripts: [/players\.brightcove\.net/i, /brightcove\.com/i],
   },
