@@ -21,20 +21,35 @@
   import SupportPage from './components/SupportPage.svelte';
   import DashboardOverview from './components/DashboardOverview.svelte';
   import TokenGate from './components/TokenGate.svelte';
-  import { getRoute } from './lib/router.svelte';
-  import { isReady, isAdmin, canSupport, loadWhoami } from './stores/session.svelte';
+  import { getRoute, navigate } from './lib/router.svelte';
+  import { isReady, isAdmin, canSupport, canVideoscan, loadWhoami } from './stores/session.svelte';
 
   let route = $derived(getRoute());
   let ready = $derived(isReady());
   let admin = $derived(isAdmin());
   let support = $derived(canSupport());
+  let videoscan = $derived(canVideoscan());
   let lastRefreshedAt = $state<string>('');
+
+  // Which surface a non-admin session shows. The URL decides when the scope
+  // allows it; otherwise fall back to the one scope the token does carry, so a
+  // support-only user landing on /videoscan doesn't get an empty page.
+  let scopedRoute = $derived<'/videoscan' | '/support'>(
+    !videoscan ? '/support' : !support ? '/videoscan' : route === '/support' ? '/support' : '/videoscan',
+  );
 
   // Ticket-y data is only useful on /tickets; skip elsewhere so a /videoscan
   // session doesn't re-pull PRs / work items every refresh. All of this data is
   // admin-only, so a support/anon session fetches nothing (avoids 401 noise).
   function refreshAll(refresh = false) {
-    if (!isAdmin()) return;
+    if (!isAdmin()) {
+      // Videoscan-scoped session: the task list is the only non-support data it
+      // may read, and the server filters it to videoscan tasks. Everything else
+      // below would 403. lastRefreshedAt stays untouched — only the admin
+      // Header displays it.
+      if (canVideoscan()) fetchTasks();
+      return;
+    }
     const r = getRoute();
     fetchTasks();
     fetchClaudeUsage();
@@ -62,10 +77,12 @@
   });
 
   // Resolve the caller's scopes first; the bootstrap effect below then wires up
-  // WS + initial data once (and only) an admin session is established.
+  // WS + initial data once a session that can use them is established. A
+  // videoscan session needs both too — the scan UI is driven by task rows and
+  // live output over WS — and the server scopes each to videoscan tasks.
   let bootstrapped = false;
   $effect(() => {
-    if (admin && !bootstrapped) {
+    if ((admin || videoscan) && !bootstrapped) {
       bootstrapped = true;
       fetchMachineId();
       connect();
@@ -122,10 +139,23 @@
   <NotificationSidebar />
   <OrchestratorChat />
   <ToastContainer />
-{:else if support}
-  <!-- Support-scoped session: only the support Q&A surface, no admin chrome. -->
-  <div class="container support-only">
-    <SupportPage />
+{:else if videoscan || support}
+  <!-- Non-admin session: only the surfaces its scopes allow, no admin chrome
+       (every other tab's data is admin-only and would 403). A token may carry
+       both scopes, so pick by route and show a switcher only when there are
+       genuinely two to choose from. -->
+  <div class="container scoped-only">
+    {#if videoscan && support}
+      <nav class="scoped-nav">
+        <button class:active={scopedRoute === '/videoscan'} onclick={() => navigate('/videoscan')}>Videoscan</button>
+        <button class:active={scopedRoute === '/support'} onclick={() => navigate('/support')}>Support</button>
+      </nav>
+    {/if}
+    {#if scopedRoute === '/support'}
+      <SupportPage />
+    {:else}
+      <VideoscanPage />
+    {/if}
   </div>
   <ToastContainer />
 {:else}
@@ -194,6 +224,35 @@
     max-width: 1600px;
     margin: 0 auto;
     padding: 20px 24px;
+  }
+
+  /* Only rendered for a token carrying both non-admin scopes — the admin
+     session has the full Header instead. */
+  .scoped-nav {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+
+  .scoped-nav button {
+    background: #161b22;
+    color: #8b949e;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  .scoped-nav button:hover {
+    color: #c9d1d9;
+  }
+
+  .scoped-nav button.active {
+    background: #21262d;
+    color: #e6edf3;
+    border-color: #8b949e;
   }
 
   .bottom-grid {

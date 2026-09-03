@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { join } from 'node:path';
-import type { Express, RequestHandler } from 'express';
+import type { Express, Request, RequestHandler, Response } from 'express';
 import { buildGatherArgs, buildNoteArgs, childEnv, degradedSections, mountSupportGather, noteExitToHttp } from './support-gather.js';
 
 const ASK = '/skills/bb-support/scripts/ask.mjs';
@@ -10,7 +10,8 @@ describe('buildGatherArgs', () => {
   it('puts the script first and the question as one arg (no shell tokenisation)', () => {
     const args = buildGatherArgs(ASK, { question: 'how does live transcoding work' }, KEY);
     expect(args[0]).toBe(ASK);
-    expect(args[1]).toBe('how does live transcoding work');
+    // The question is pushed last, after every flag.
+    expect(args.at(-1)).toBe('how does live transcoding work');
     // spawn uses an args array with shell:false, so a multi-word question must
     // stay a single element — splitting it would make ask.mjs treat each word as
     // a positional token (harmless today, but it also swallows anything that
@@ -26,7 +27,7 @@ describe('buildGatherArgs', () => {
 
   it('emits no source flags when every source is defaulted', () => {
     const args = buildGatherArgs(ASK, { question: 'q' }, KEY);
-    expect(args).toEqual([ASK, 'q', '--key-file', KEY]);
+    expect(args).toEqual([ASK, '--key-file', KEY, 'q']);
   });
 
   it('emits --no-* only for an explicit false, not for undefined', () => {
@@ -36,9 +37,44 @@ describe('buildGatherArgs', () => {
     expect(args).not.toContain('--no-ado');
   });
 
-  it('passes --no-scrub through (callers may opt out of redaction)', () => {
-    expect(buildGatherArgs(ASK, { question: 'q', scrub: false }, KEY)).toContain('--no-scrub');
-    expect(buildGatherArgs(ASK, { question: 'q', scrub: true }, KEY)).not.toContain('--no-scrub');
+  it('NEVER emits --no-scrub, whatever the client sends', () => {
+    // --no-scrub swaps ask.mjs's redactor for a no-op, so the response would carry
+    // raw HubSpot subjects/bodies — names, emails, phone numbers — back to the
+    // caller. Strictly more than /reveal can yield (that only decodes names), and
+    // in open mode /gather answers unauthenticated LAN requests.
+    for (const scrub of [false, true, 'false', 0, null]) {
+      const args = buildGatherArgs(ASK, { question: 'q', scrub } as never, KEY);
+      expect(args).not.toContain('--no-scrub');
+      expect(args).not.toContain('--scrub');
+    }
+  });
+
+  it('does NOT push --no-remote — not every deployed ask.mjs recognises it', () => {
+    // A prior version pushed this unconditionally. Checked against the real
+    // ask.mjs on three bb-skills refs: nightly and ~/.claude/skills's checkout
+    // support it, but the sibling-of-orch checkout that SCRIPTS_DIR's
+    // firstExisting() actually resolves to on a plain checkout does not — an
+    // unrecognised flag falls into positional there and corrupts every
+    // question with a leading "--no-remote ", the same failure mode as the
+    // reverted `--` sentinel below. childEnv's process.env strip is the sole
+    // defence against the proxy loop until SCRIPTS_DIR is guaranteed to
+    // resolve to a build that understands this flag.
+    expect(buildGatherArgs(ASK, { question: 'q' }, KEY)).not.toContain('--no-remote');
+  });
+
+  it('does NOT itself guard against a flag-shaped question — that is the route\'s job', () => {
+    // ask.mjs's parseArgs has no `--` end-of-options handling (checked on the
+    // local bb-skills checkout, nightly, and master: an unrecognised '--' just
+    // falls into positional like any other token), so this function cannot
+    // separate a flag-shaped question from a real flag by inserting a sentinel
+    // — doing that once corrupted every question with a stray "-- " prefix. A
+    // question equal to a flag name reaches ask.mjs's argv unconstrained here;
+    // the route rejects any question starting with '-' before calling this
+    // function, and spawn's shell:false array means `body.question` can only
+    // ever equal a flag name if the whole string does. This test pins that
+    // buildGatherArgs trusts the caller rather than re-guarding.
+    const args = buildGatherArgs(ASK, { question: '--code' }, KEY);
+    expect(args.at(-1)).toBe('--code');
   });
 
   it('keeps `note` tri-state: undefined emits neither flag', () => {
@@ -232,6 +268,25 @@ describe('mountSupportGather route wiring', () => {
     const { routes, auth, writeAuth } = mount();
     expect(routes.get('/api/support/note')?.[0]).toBe(writeAuth);
     expect(routes.get('/api/support/note')?.[0]).not.toBe(auth);
+  });
+
+  it('rejects a flag-shaped question with 400 before it ever reaches buildGatherArgs', () => {
+    // This is the ONLY guard against argv injection now that buildGatherArgs
+    // deliberately trusts the caller (see its comment). If this ever moves,
+    // gets refactored, or its condition weakens, the hole this PR closes
+    // reopens silently while every buildGatherArgs unit test keeps passing.
+    const { routes } = mount();
+    const handler = routes.get('/api/support/gather')?.at(-1);
+    expect(handler).toBeDefined();
+
+    const json = vi.fn();
+    const res = { status: vi.fn(() => ({ json })) } as unknown as Response;
+    const req = { body: { question: '--code' } } as unknown as Request;
+
+    handler!(req, res, vi.fn());
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(json).toHaveBeenCalledWith({ error: 'question must not start with "-"' });
   });
 });
 
