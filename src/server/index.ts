@@ -33,6 +33,7 @@ import { isSupabaseConfigured, MACHINE_ID } from '../core/db/client.js';
 import { dbGetNotifications, dbInsertNotification } from '../core/db/notifications.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
 import { getVideoscanDir, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, pauseVideoscan, findLatestScanFileForDomain, isVideoscanRunning, deleteScans, wrapUpBatch, type ReportOptions } from '../core/videoscan-runner.js';
+import { csvFilename, scanToCsv, type ScanCsvInput } from '../core/videoscan-csv.js';
 import { getClosedBatches, markBatchClosed, markBatchOpen } from '../core/batch-state.js';
 import { isPidAlive, killProcessTree } from '../core/process-kill.js';
 import { createSignedUrl, downloadFile } from '../core/db/storage.js';
@@ -1943,6 +1944,45 @@ app.get('/api/videoscans/files/:filename', asyncHandler(async (req, res) => {
   } else {
     res.status(400).json({ error: 'Unsupported file type' });
   }
+}));
+
+// Spreadsheet-friendly view of a scan's `details`: one row per (page, player).
+// Derived on the fly rather than stored — the JSON stays the source of truth.
+app.get('/api/videoscans/csv/:filename', asyncHandler(async (req, res) => {
+  const filename = validateScanFilename(req.params.filename);
+  if (!filename || !filename.endsWith('.json')) {
+    res.status(400).json({ error: 'Invalid filename' });
+    return;
+  }
+  const dir = getVideoscanDir();
+  const filePath = join(dir, filename);
+  if (!existsSync(filePath) && !await downloadFile(filename, dir)) {
+    res.status(404).json({ error: 'File not found' });
+    return;
+  }
+
+  let raw: string;
+  try {
+    raw = await readFile(filePath, 'utf-8');
+  } catch (err) {
+    // Fixed message — err.message carries the absolute server path.
+    log.error(`CSV export: could not read ${filename}`, err);
+    res.status(500).json({ error: 'Could not read scan file' });
+    return;
+  }
+
+  let data: ScanCsvInput;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    // Same wording/status as the resume route's parse failure.
+    res.status(400).json({ error: 'Invalid JSON file' });
+    return;
+  }
+
+  res.type('text/csv; charset=utf-8')
+    .set('Content-Disposition', `attachment; filename="${csvFilename(filename)}"`)
+    .send(scanToCsv(data));
 }));
 
 app.get('/api/videoscans/audit/:filename', (req, res) => {

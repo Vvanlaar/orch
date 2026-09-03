@@ -20,6 +20,10 @@
   function fileUrl(filename: string): string {
     return authHref(`/api/videoscans/files/${encodeURIComponent(filename)}`);
   }
+  // Server derives the CSV from the scan JSON — pass the .json name as-is.
+  function csvUrl(filename: string): string {
+    return authHref(`/api/videoscans/csv/${encodeURIComponent(filename)}`);
+  }
 
   let url = $state('');
   let maxPages = $state(20000);
@@ -828,6 +832,7 @@
                                   <a class="sc-overflow-item" href={fileUrl(scan.filename.replace('.json', '-preview.pdf'))} target="_blank" download onclick={() => (openActions = null)}>Preview PDF</a>
                                 {/if}
                                 <a class="sc-overflow-item" href={fileUrl(scan.filename)} target="_blank" download onclick={() => (openActions = null)}>JSON</a>
+                                <a class="sc-overflow-item" href={csvUrl(scan.filename)} target="_blank" download onclick={() => (openActions = null)}>CSV</a>
                               </div>
                               <div class="sc-overflow-group">
                                 <span class="sc-overflow-lbl">Generate</span>
