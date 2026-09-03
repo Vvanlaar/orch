@@ -217,6 +217,8 @@ test("Network evidence keeps the matched token when the URL is truncated", () =>
   // Long URL: the region that fires sits past the 80-char cut, so the URL alone
   // carries no trace of it (this is what made the data.oss.nl Video.js false
   // positive undiagnosable from the stored report).
+  // The filler length is tuned so "vjs" lands past the 80-char URL cut; if
+  // that cut ever changes, lengthen it or this stops testing truncation.
   const url =
     "https://example.nl/sites/default/files/js/js_" +
     "A".repeat(43) +
@@ -224,6 +226,10 @@ test("Network evidence keeps the matched token when the URL is truncated", () =>
   const result = detectPlayers("<p>x</p>", [url]);
   const evidence = result.flatMap((r) => r.evidence);
   assert.deepEqual(names(result), ["Video.js"]);
+  assert.ok(
+    evidence.some((e) => e.startsWith(`Network: ${url.slice(0, 80)}…`)),
+    `expected the URL capped at 80 chars and marked as cut, got ${JSON.stringify(evidence)}`
+  );
   assert.ok(
     evidence.some((e) => e.includes('matched: "vjs"')),
     `expected the matched token in evidence, got ${JSON.stringify(evidence)}`
@@ -235,11 +241,26 @@ test("Network evidence keeps the matched token when the URL is truncated", () =>
 });
 
 test("Network evidence: short URL shows the match, no context window needed", () => {
+  // URL fits inside the cut, so no ellipsis anywhere and no redundant window.
   const result = detectPlayers("<p>x</p>", ["https://players.brightcove.net/1/x_default/index.min.js"]);
   const evidence = result.flatMap((r) => r.evidence);
   assert.deepEqual(names(result), ["Brightcove"]);
   assert.ok(
     evidence.some((e) => e === 'Network: https://players.brightcove.net/1/x_default/index.min.js [matched: "players.brightcove.net"]'),
     `unexpected evidence: ${JSON.stringify(evidence)}`
+  );
+});
+
+test("Network evidence: a match straddling the 80-char cut still gets a window", () => {
+  // Starts before the cut, ends after it — the branch keys off the match END
+  // for exactly this case; keying off match.index would drop the window and
+  // leave the evidence showing only the first half of what fired.
+  const url = "https://example.com/" + "b".repeat(56) + "video.js?x=1";
+  const result = detectPlayers("<p>x</p>", [url]);
+  const evidence = result.flatMap((r) => r.evidence);
+  assert.deepEqual(names(result), ["Video.js"]);
+  assert.ok(
+    evidence.some((e) => e.includes('matched: "video.js" in "…') && e.includes("video.js?x=1")),
+    `expected a context window spanning the cut, got ${JSON.stringify(evidence)}`
   );
 });

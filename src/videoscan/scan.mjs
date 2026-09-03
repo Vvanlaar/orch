@@ -1676,18 +1676,23 @@ function stripDownlevelConditionals(html) {
 // the match sits past the truncation point, also show a window around it.
 const EVIDENCE_URL_LEN = 80;
 const EVIDENCE_CONTEXT = 20;
+// Patterns like /connect\.facebook\.net\/.+\/sdk\.js/ can match a long span.
+const EVIDENCE_MATCH_LEN = 60;
+
+function elide(str, from, to) {
+  return `${from > 0 ? "…" : ""}${str.slice(from, to)}${to < str.length ? "…" : ""}`;
+}
 
 function networkEvidence(url, match) {
-  const shown = url.slice(0, EVIDENCE_URL_LEN);
+  const shown = elide(url, 0, EVIDENCE_URL_LEN);
   const end = match.index + match[0].length;
-  let out = `${shown} [matched: "${match[0].slice(0, 60)}"`;
-  if (end > shown.length) {
-    const from = Math.max(0, match.index - EVIDENCE_CONTEXT);
-    const to = Math.min(url.length, end + EVIDENCE_CONTEXT);
-    const window = `${from > 0 ? "…" : ""}${url.slice(from, to)}${to < url.length ? "…" : ""}`;
-    out += ` in "${window}"`;
-  }
-  return out + "]";
+  // Only worth a context window when the match lies past the truncation point:
+  // for a URL shown in full, the window would just repeat what's already there.
+  const context =
+    end > Math.min(url.length, EVIDENCE_URL_LEN)
+      ? ` in "${elide(url, Math.max(0, match.index - EVIDENCE_CONTEXT), Math.min(url.length, end + EVIDENCE_CONTEXT))}"`
+      : "";
+  return `${shown} [matched: "${match[0].slice(0, EVIDENCE_MATCH_LEN)}"${context}]`;
 }
 
 export function detectPlayers(html, networkRequests) {
@@ -1706,6 +1711,9 @@ export function detectPlayers(html, networkRequests) {
     // Check network requests
     for (const scriptPattern of config.scripts) {
       for (const r of networkRequests) {
+        // No scripts pattern is /g today, but a stateful lastIndex would hand
+        // networkEvidence a wrong match.index and it would slice the wrong region.
+        scriptPattern.lastIndex = 0;
         const match = scriptPattern.exec(r);
         if (!match) continue;
         matches.push(`Network: ${networkEvidence(r, match)}`);
