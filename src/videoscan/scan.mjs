@@ -1669,6 +1669,27 @@ function stripDownlevelConditionals(html) {
   return html.replace(/<!--\[if\b[^\]]*\]>(?!\s*<!-->)[\s\S]*?<!\[endif\]-->/gi, "");
 }
 
+// Network evidence = the request URL (truncated) plus the substring that
+// actually fired. Long URLs get cut well before the matching region, so the
+// URL alone can carry no trace of why the detector hit (the data.oss.nl
+// Video.js false positive stored evidence with no "vjs" in it at all). When
+// the match sits past the truncation point, also show a window around it.
+const EVIDENCE_URL_LEN = 80;
+const EVIDENCE_CONTEXT = 20;
+
+function networkEvidence(url, match) {
+  const shown = url.slice(0, EVIDENCE_URL_LEN);
+  const end = match.index + match[0].length;
+  let out = `${shown} [matched: "${match[0].slice(0, 60)}"`;
+  if (end > shown.length) {
+    const from = Math.max(0, match.index - EVIDENCE_CONTEXT);
+    const to = Math.min(url.length, end + EVIDENCE_CONTEXT);
+    const window = `${from > 0 ? "…" : ""}${url.slice(from, to)}${to < url.length ? "…" : ""}`;
+    out += ` in "${window}"`;
+  }
+  return out + "]";
+}
+
 export function detectPlayers(html, networkRequests) {
   const searchable = stripAnchorHrefs(stripDownlevelConditionals(html));
   const found = [];
@@ -1684,8 +1705,12 @@ export function detectPlayers(html, networkRequests) {
 
     // Check network requests
     for (const scriptPattern of config.scripts) {
-      const match = networkRequests.find((r) => scriptPattern.test(r));
-      if (match) matches.push(`Network: ${match.slice(0, 80)}`);
+      for (const r of networkRequests) {
+        const match = scriptPattern.exec(r);
+        if (!match) continue;
+        matches.push(`Network: ${networkEvidence(r, match)}`);
+        break;
+      }
     }
 
     if (matches.length > 0) {

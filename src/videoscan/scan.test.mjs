@@ -212,3 +212,34 @@ test("unconfirmed social does not hide a higher-tier OVP player either", () => {
   const result = detectFromCorpus(html);
   assert.deepEqual(names(result), ["Blue Billywig"]);
 });
+
+test("Network evidence keeps the matched token when the URL is truncated", () => {
+  // Long URL: the region that fires sits past the 80-char cut, so the URL alone
+  // carries no trace of it (this is what made the data.oss.nl Video.js false
+  // positive undiagnosable from the stored report).
+  const url =
+    "https://example.nl/sites/default/files/js/js_" +
+    "A".repeat(43) +
+    ".js?include=xx_vjs-yy";
+  const result = detectPlayers("<p>x</p>", [url]);
+  const evidence = result.flatMap((r) => r.evidence);
+  assert.deepEqual(names(result), ["Video.js"]);
+  assert.ok(
+    evidence.some((e) => e.includes('matched: "vjs"')),
+    `expected the matched token in evidence, got ${JSON.stringify(evidence)}`
+  );
+  assert.ok(
+    evidence.some((e) => e.includes("xx_vjs-yy")),
+    `expected a context window around the match, got ${JSON.stringify(evidence)}`
+  );
+});
+
+test("Network evidence: short URL shows the match, no context window needed", () => {
+  const result = detectPlayers("<p>x</p>", ["https://players.brightcove.net/1/x_default/index.min.js"]);
+  const evidence = result.flatMap((r) => r.evidence);
+  assert.deepEqual(names(result), ["Brightcove"]);
+  assert.ok(
+    evidence.some((e) => e === 'Network: https://players.brightcove.net/1/x_default/index.min.js [matched: "players.brightcove.net"]'),
+    `unexpected evidence: ${JSON.stringify(evidence)}`
+  );
+});
