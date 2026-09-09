@@ -335,9 +335,10 @@ export const DETECTORS = {
     // /vjs/i — data.oss.nl flagged 29/29 dataset pages off the substring "vjS".
     // Since the bundle URL is byte-identical site-wide, one collision flags every
     // page, so a loose token here is a whole-site false positive.
-    // The HTML class is anchored on [\s"'/.] specifically: those four can never
-    // appear in the urlsafe-base64 alphabet (A-Za-z0-9-_), so a blob cannot match,
-    // while real markup always leads with a quote, space, dot or slash.
+    // The HTML class is anchored on [\s"'/.] specifically: none of whitespace,
+    // quote, apostrophe, slash, or dot can appear in the urlsafe-base64 alphabet
+    // (A-Za-z0-9-_), so a blob cannot match, while real markup always leads with
+    // a quote, space, dot or slash.
     patterns: [/video\.js/i, /videojs/i, /(?:^|[\s"'\/.])vjs-/i, /video-js/i],
     // `scripts` patterns are tested against the FULL request URL, query string
     // included (see detectPlayers), which is why the query blob reached them.
