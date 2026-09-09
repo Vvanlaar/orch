@@ -231,7 +231,9 @@ test("Network evidence keeps the matched token when the URL is truncated", () =>
     `expected the URL capped at 80 chars and marked as cut, got ${JSON.stringify(evidence)}`
   );
   assert.ok(
-    evidence.some((e) => e.includes('matched: "vjs"')),
+    // The anchored `scripts` pattern requires a boundary char around "vjs"
+    // (see DETECTORS["Video.js"]), so the reported token is "_vjs-", not bare "vjs".
+    evidence.some((e) => e.includes('matched: "_vjs-"')),
     `expected the matched token in evidence, got ${JSON.stringify(evidence)}`
   );
   assert.ok(
