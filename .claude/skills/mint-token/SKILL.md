@@ -22,8 +22,14 @@ Shape is owned by [`src/server/auth.ts`](../../../src/server/auth.ts):
 
 **Scopes** — pick the least privilege that does the job:
 - `support` — may hit `/api/support/*` only. This is the default for colleagues.
+- `videoscan` — may run and read videoscans: `/api/videoscans/*`, the videoscan
+  actions, and stop/pause/resume on a videoscan task. Sees only videoscan tasks
+  over HTTP and WebSocket, and lands on a videoscan-only dashboard.
 - `admin` — full API + WebSocket + dashboard access. `admin` satisfies every
   scope check, so only grant it to people who administer orch itself.
+
+`support` and `videoscan` do not imply each other. To grant both, pass
+`--scope` twice: `create "Name" --scope support --scope videoscan`.
 
 ## Do this
 
@@ -32,8 +38,9 @@ machine per the npm/node Windows notes):
 
 ```bash
 # Create — prints the token to stdout, status to stderr
-node scripts/token-admin.mjs create "Koert"                 # support (default)
-node scripts/token-admin.mjs create "Vince" --scope admin   # admin
+node scripts/token-admin.mjs create "Koert"                     # support (default)
+node scripts/token-admin.mjs create "Luuk" --scope videoscan    # videoscans only
+node scripts/token-admin.mjs create "Vince" --scope admin       # admin
 
 # List — masked tokens + name + scope + createdAt
 node scripts/token-admin.mjs list

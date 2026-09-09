@@ -47,7 +47,7 @@ import { asyncHandler, expressErrorMiddleware, installProcessHandlers } from '..
 import { adoRouter } from './webhooks/ado.js';
 import { githubRouter } from './webhooks/github.js';
 import { mountSupport } from './support.js';
-import { hasScope, isAdminEntry, loadTokens, lookupToken, tokenFromRequest, tokenFromUrl } from './auth.js';
+import { createApiAuthGate, hasScope, hideTaskFrom, isAdminEntry, isAdminReq, loadTokens, lookupToken, tokenFromRequest, tokenFromUrl, visibleTasks } from './auth.js';
 
 const log = createLogger('server');
 
@@ -55,30 +55,48 @@ const log = createLogger('server');
 // reload-on-restart semantics as mountSupport).
 const apiTokens = loadTokens();
 
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 
-const clients = new Set<WebSocket>();
+// Sockets carry their scope so every broadcast can be filtered: an admin sees
+// the whole task stream, a videoscan client sees only videoscan tasks and their
+// output, and nothing else (no orchestrator state, no notifications).
+const clients = new Map<WebSocket, { admin: boolean }>();
+
+// Send a payload to the sockets whose metadata passes `wants`.
+function sendToClients(wants: (meta: { admin: boolean }) => boolean, payload: string): void {
+  clients.forEach((meta, client) => {
+    if (client.readyState === WebSocket.OPEN && wants(meta)) client.send(payload);
+  });
+}
 
 wss.on('connection', async (ws, req) => {
-  // /ws streams internal task output + orchestrator state — admin only.
-  // Support-only clients never open it; reject any non-admin upgrade.
+  // /ws streams internal task output + orchestrator state. Admin gets all of it;
+  // a videoscan token gets the videoscan slice. Support-only clients never open
+  // it — reject any upgrade that satisfies neither scope.
   const wsEntry = lookupToken(apiTokens, tokenFromUrl(req.url));
-  if (!isAdminEntry(wsEntry)) {
-    ws.close(4403, 'admin scope required');
+  const admin = isAdminEntry(wsEntry);
+  if (!admin && !hasScope(wsEntry, 'videoscan')) {
+    ws.close(4403, 'admin or videoscan scope required');
     return;
   }
-  clients.add(ws);
+  clients.set(ws, { admin });
+  // A new subscriber has seen none of the deduped payloads, so clear the
+  // last-sent marker for its audience — otherwise a payload identical to one
+  // sent before this socket existed would be suppressed and it would sit on a
+  // stale task list until the next unrelated change.
+  if (admin) lastAdminPayload = null; else lastVideoscanPayload = null;
   try {
     // Send current tasks with streaming output on connect. Use the shared cache so
     // multiple reconnecting tabs don't each trigger a fresh 100-row SELECT.
     const tasks = await refreshTaskCache();
-    ws.send(JSON.stringify({ type: 'tasks', tasks: applyStreamingOutput(tasks) }));
-    // Send current orchestrator state
-    ws.send(JSON.stringify({ type: 'orchestrator', state: getOrchestratorState() }));
+    ws.send(JSON.stringify({ type: 'tasks', tasks: visibleTasks(applyStreamingOutput(tasks), admin) }));
+    // Orchestrator state is admin-only — a videoscan client has no UI for it.
+    if (admin) ws.send(JSON.stringify({ type: 'orchestrator', state: getOrchestratorState() }));
   } catch (err) {
     log.error('Error sending initial WS data', err);
   }
@@ -87,6 +105,12 @@ wss.on('connection', async (ws, req) => {
     try {
       const msg = JSON.parse(data.toString());
       if (msg.type === 'steer' && typeof msg.taskId === 'number' && typeof msg.input === 'string') {
+        // Steering pipes arbitrary input into a running Claude subprocess —
+        // admin only, regardless of the task's type.
+        if (!admin) {
+          ws.send(JSON.stringify({ type: 'steerResult', taskId: msg.taskId, success: false, error: 'admin scope required' }));
+          return;
+        }
         const success = steerTask(msg.taskId, msg.input);
         ws.send(JSON.stringify({ type: 'steerResult', taskId: msg.taskId, success }));
       }
@@ -116,7 +140,10 @@ let taskCache: import('../core/types.js').Task[] | null = null;
 const dirtyTaskIds = new Set<number>();
 let fullRefreshPending = false;
 let broadcastTimer: NodeJS.Timeout | null = null;
-let lastBroadcastPayload: string | null = null;
+// One last-sent marker per audience: the two payloads differ, so they have to
+// dedupe independently (see flushBroadcast).
+let lastAdminPayload: string | null = null;
+let lastVideoscanPayload: string | null = null;
 
 async function refreshTaskCache(): Promise<import('../core/types.js').Task[]> {
   if (taskCache === null || fullRefreshPending) {
@@ -153,13 +180,31 @@ async function refreshTaskCache(): Promise<import('../core/types.js').Task[]> {
 async function flushBroadcast(): Promise<void> {
   broadcastTimer = null;
   try {
-    const tasks = await refreshTaskCache();
-    const payload = JSON.stringify({ type: 'tasks', tasks: applyStreamingOutput(tasks) });
-    if (payload === lastBroadcastPayload) return;
-    lastBroadcastPayload = payload;
-    clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) client.send(payload);
-    });
+    const tasks = applyStreamingOutput(await refreshTaskCache());
+    // Two audiences, two payloads, deduped separately — a change confined to a
+    // non-videoscan task leaves the videoscan payload byte-identical, so those
+    // clients correctly get nothing.
+    // Serializing costs real time here (task rows carry up to 100KB of
+    // streaming output each), so skip the audience that has no sockets. Safe
+    // because a connecting socket clears its audience's marker.
+    let hasAdmin = false;
+    let hasVideoscan = false;
+    clients.forEach((m) => { if (m.admin) hasAdmin = true; else hasVideoscan = true; });
+
+    if (hasAdmin) {
+      const adminPayload = JSON.stringify({ type: 'tasks', tasks });
+      if (adminPayload !== lastAdminPayload) {
+        lastAdminPayload = adminPayload;
+        sendToClients((m) => m.admin, adminPayload);
+      }
+    }
+    if (hasVideoscan) {
+      const videoscanPayload = JSON.stringify({ type: 'tasks', tasks: visibleTasks(tasks, false) });
+      if (videoscanPayload !== lastVideoscanPayload) {
+        lastVideoscanPayload = videoscanPayload;
+        sendToClients((m) => !m.admin, videoscanPayload);
+      }
+    }
   } catch (err) {
     log.error('broadcast flush error', err);
     // Dirty ids were preserved (refreshTaskCache only clears them after a successful
@@ -191,48 +236,33 @@ function broadcastOutput(taskId: number, chunk: string): void {
     chunk,
     timestamp: new Date().toISOString(),
   });
-  clients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(message);
-    }
-  });
+  // Output is the task's raw subprocess stream — route it by the task's type.
+  // A task missing from the cache is treated as non-videoscan (admin only):
+  // fail closed, since guessing wrong leaks another task's output.
+  const isVideoscan = taskCache?.find((t) => t.id === taskId)?.type === 'videoscan';
+  sendToClients((m) => m.admin || isVideoscan, message);
 }
 
 app.use(cors({ origin: [/^https?:\/\/localhost(:\d+)?$/, /^https?:\/\/127\.0\.0\.1(:\d+)?$/] }));
 app.use(express.json());
 
+// Express matches routes case-insensitively by default, so `/API/config/...`
+// reaches the same handler as `/api/config/...`. The gate below decides on the
+// path string, so without this a request that varies the case would sail past
+// it and still be served — unauthenticated access to the whole admin API.
+// Making routing case-sensitive means only the literal path resolves; the gate
+// additionally lower-cases before matching, so neither is load-bearing alone.
+app.set('case sensitive routing', true);
+
 // --- Global API auth gate ---------------------------------------------------
-// Every /api/* route requires an admin token, except:
-//   - the public allowlist below, and
-//   - /api/support/* (gated inside mountSupport with the support scope, which
-//     also honors BB_SUPPORT_ALLOW_ANONYMOUS).
-// This is what keeps a LAN / support-scoped user out of tasks, repos, terminals,
-// config/credentials, processes, and the orchestrator. Without it, exposing the
-// dashboard on the network would hand every visitor the full internal tool.
-const PUBLIC_API = new Set<string>([
-  '/api/whoami',                 // reports caller scopes to the SPA (drives the token gate)
-  '/api/notifications/incoming', // webhook-like ingestion from external notifiers (no token to present)
-]);
-app.use((req, res, next) => {
-  if (!req.path.startsWith('/api/')) return next();
-  if (PUBLIC_API.has(req.path)) return next();
-  if (req.path === '/api/support' || req.path.startsWith('/api/support/')) return next();
-  const entry = lookupToken(apiTokens, tokenFromRequest(req));
-  if (!entry) {
-    // Mark this as an auth-layer rejection (vs. a downstream handler's own 401,
-    // e.g. an upstream API) so the SPA only drops to the token gate on a real
-    // token failure, not on a transient downstream 401.
-    res.setHeader('X-Orch-Auth', 'required');
-    res.status(401).json({ error: 'bearer token required' });
-    return;
-  }
-  if (!hasScope(entry, 'admin')) {
-    res.setHeader('X-Orch-Auth', 'scope');
-    res.status(403).json({ error: 'admin scope required' });
-    return;
-  }
-  next();
-});
+// Each /api/* route requires the scope requiredScope() assigns it — admin for
+// everything except the videoscan slice — bar a small public allowlist and
+// /api/support/* (gated inside mountSupport). This is what keeps a LAN /
+// support-scoped user out of tasks, repos, terminals, config/credentials,
+// processes, and the orchestrator. Without it, exposing the dashboard on the
+// network would hand every visitor the full internal tool. Implementation and
+// its tests live in ./auth.ts.
+app.use(createApiAuthGate(apiTokens));
 
 // Identify the caller's token scopes — drives the SPA's tab/route gating.
 // Public by design: returns { scopes: [] } for no/invalid token so the UI can
@@ -294,9 +324,11 @@ app.use('/webhooks/ado', adoRouter);
 mountSupport(app, { bind: config.server.host });
 
 // API for dashboard
-app.get('/api/tasks', asyncHandler(async (_req, res) => {
+app.get('/api/tasks', asyncHandler(async (req, res) => {
   const tasks = await getAllTasks(100);
-  res.json(tasks);
+  // A videoscan-scoped caller sees only videoscan tasks — same filter the WS
+  // broadcast applies, so the two views can't disagree.
+  res.json(visibleTasks(tasks, isAdminReq(req)));
 }));
 
 app.get('/api/tasks/:id', asyncHandler(async (req, res) => {
@@ -313,6 +345,13 @@ app.post('/api/tasks/:id/stop', asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id as string);
   const task = await getTask(id);
   if (!task) {
+    res.status(404).json({ error: 'Task not found' });
+    return;
+  }
+  // Path-level scope only proved the caller may stop *a* task; a videoscan
+  // token may stop only videoscans. Checked before any status reply so the
+  // responses can't be used to enumerate admin task ids.
+  if (hideTaskFrom(req, task)) {
     res.status(404).json({ error: 'Task not found' });
     return;
   }
@@ -348,6 +387,10 @@ app.post('/api/tasks/:id/pause', asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id as string);
   const task = await getTask(id);
   if (!task) {
+    res.status(404).json({ error: 'Task not found' });
+    return;
+  }
+  if (hideTaskFrom(req, task)) {
     res.status(404).json({ error: 'Task not found' });
     return;
   }
@@ -387,6 +430,10 @@ app.post('/api/tasks/:id/resume', asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id as string);
   const task = await getTask(id);
   if (!task) {
+    res.status(404).json({ error: 'Task not found' });
+    return;
+  }
+  if (hideTaskFrom(req, task)) {
     res.status(404).json({ error: 'Task not found' });
     return;
   }
@@ -1861,7 +1908,14 @@ app.post('/api/videoscans/merge', asyncHandler(async (req, res) => {
     res.status(400).json({ error: 'Need at least 2 filenames to merge' });
     return;
   }
-  const result = mergeScans(filenames, label);
+  // mergeScans renames each source into the archive dir — validate every entry,
+  // or a traversing name turns the merge into an arbitrary file move.
+  const validated = filenames.map(validateScanFilename);
+  if (validated.some((f) => f === null)) {
+    res.status(400).json({ error: 'filenames must be plain scan filenames' });
+    return;
+  }
+  const result = mergeScans(validated as string[], label);
   const sync = await syncScanToSupabase(result.filename);
   if (!sync.ok) {
     res.status(500).json({ success: false, error: `Merge OK but Supabase sync failed: ${sync.error}`, filename: result.filename });
@@ -1997,9 +2051,11 @@ function reportOptionsFromBody(body: Record<string, unknown>): ReportOptions {
 }
 
 app.post('/api/videoscans/generate-report', asyncHandler(async (req, res) => {
-  const { filename } = req.body;
-  if (!filename || typeof filename !== 'string') {
-    res.status(400).json({ error: 'filename required' });
+  // generateReport joins this onto VIDEOSCAN_DIR to read the scan AND to write
+  // the .html/.pdf beside it, so an unvalidated name is an arbitrary file write.
+  const filename = validateScanFilename(req.body?.filename);
+  if (!filename) {
+    res.status(400).json({ error: 'valid filename required' });
     return;
   }
   const options = reportOptionsFromBody(req.body);
@@ -2009,9 +2065,9 @@ app.post('/api/videoscans/generate-report', asyncHandler(async (req, res) => {
 }));
 
 app.post('/api/videoscans/generate-preview', asyncHandler(async (req, res) => {
-  const { filename } = req.body;
-  if (!filename || typeof filename !== 'string') {
-    res.status(400).json({ error: 'filename required' });
+  const filename = validateScanFilename(req.body?.filename);
+  if (!filename) {
+    res.status(400).json({ error: 'valid filename required' });
     return;
   }
   const result = await generatePreview(filename, reportOptionsFromBody(req.body));
@@ -2236,11 +2292,10 @@ app.post('/api/notifications/incoming', asyncHandler(async (req, res) => {
   } else {
     try { appendFileSync(notificationLogPath, JSON.stringify(notification) + '\n'); } catch {}
   }
-  // Broadcast to WebSocket clients
+  // Broadcast to WebSocket clients — notifications are internal orchestrator
+  // chatter (ticket/PR activity), so admin only.
   const message = JSON.stringify({ type: 'notification', notification });
-  clients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) client.send(message);
-  });
+  sendToClients((m) => m.admin, message);
   res.json({ ok: true });
 }));
 
@@ -2286,10 +2341,9 @@ server.listen(config.server.port, config.server.host, () => {
 
   // Wire orchestrator broadcasts
   setOrchestratorUpdateCallback((orchState) => {
+    // Orchestrator state names PRs, work items and repos — admin only.
     const message = JSON.stringify({ type: 'orchestrator', state: orchState });
-    clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) client.send(message);
-    });
+    sendToClients((m) => m.admin, message);
   });
 
   // Wire notification getter for orchestrator context

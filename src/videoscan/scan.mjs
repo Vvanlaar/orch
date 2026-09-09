@@ -29,8 +29,18 @@ export const DETECTORS = {
       /brightcove\.com/i,
       /bcove\.video/i,
       /brightcove-player/i,
-      /data-account.*data-player/i,
-      /data-video-id/i,
+      // Brightcove in-page embed: <video-js data-account data-player ...>.
+      // Only the data-account + data-player pair is Brightcove-specific — it maps
+      // to the mandatory players.brightcove.net/<account>/<player>_default script.
+      // Neither attribute qualifies alone: data-video-id is generic (see the
+      // TikTok detector below, which pairs it with a vendor token for the same
+      // reason) and data-account is generic (analytics/CMS wrappers carry one).
+      // Bare-attribute matches are especially costly here because Brightcove is
+      // tier 1, so one false hit suppresses every real lower-tier player found.
+      // [^>]* (not .*) keeps the pair inside one tag — the old `.*` variant
+      // matched a data-account on one element and a data-player on the next.
+      /<[^>]*\bdata-account=[^>]*\bdata-player=/i,
+      /<[^>]*\bdata-player=[^>]*\bdata-account=/i,
     ],
     scripts: [/players\.brightcove\.net/i, /brightcove\.com/i],
   },
@@ -1682,6 +1692,32 @@ function stripDownlevelConditionals(html) {
   return html.replace(/<!--\[if\b[^\]]*\]>(?!\s*<!-->)[\s\S]*?<!\[endif\]-->/gi, "");
 }
 
+// Network evidence = the request URL (truncated) plus the substring that
+// actually fired. Long URLs get cut well before the matching region, so the
+// URL alone can carry no trace of why the detector hit (the data.oss.nl
+// Video.js false positive stored evidence with no "vjs" in it at all). When
+// the match sits past the truncation point, also show a window around it.
+const EVIDENCE_URL_LEN = 80;
+const EVIDENCE_CONTEXT = 20;
+// Patterns like /connect\.facebook\.net\/.+\/sdk\.js/ can match a long span.
+const EVIDENCE_MATCH_LEN = 60;
+
+function elide(str, from, to) {
+  return `${from > 0 ? "…" : ""}${str.slice(from, to)}${to < str.length ? "…" : ""}`;
+}
+
+function networkEvidence(url, match) {
+  const shown = elide(url, 0, EVIDENCE_URL_LEN);
+  const end = match.index + match[0].length;
+  // Only worth a context window when the match lies past the truncation point:
+  // for a URL shown in full, the window would just repeat what's already there.
+  const context =
+    end > Math.min(url.length, EVIDENCE_URL_LEN)
+      ? ` in "${elide(url, Math.max(0, match.index - EVIDENCE_CONTEXT), Math.min(url.length, end + EVIDENCE_CONTEXT))}"`
+      : "";
+  return `${shown} [matched: "${match[0].slice(0, EVIDENCE_MATCH_LEN)}"${context}]`;
+}
+
 export function detectPlayers(html, networkRequests) {
   const searchable = stripAnchorHrefs(stripDownlevelConditionals(html));
   const found = [];
@@ -1697,8 +1733,15 @@ export function detectPlayers(html, networkRequests) {
 
     // Check network requests
     for (const scriptPattern of config.scripts) {
-      const match = networkRequests.find((r) => scriptPattern.test(r));
-      if (match) matches.push(`Network: ${match.slice(0, 80)}`);
+      for (const r of networkRequests) {
+        // No scripts pattern is /g today, but a stateful lastIndex would hand
+        // networkEvidence a wrong match.index and it would slice the wrong region.
+        scriptPattern.lastIndex = 0;
+        const match = scriptPattern.exec(r);
+        if (!match) continue;
+        matches.push(`Network: ${networkEvidence(r, match)}`);
+        break;
+      }
     }
 
     if (matches.length > 0) {
@@ -1706,7 +1749,10 @@ export function detectPlayers(html, networkRequests) {
     }
   }
 
-  return filterNonVideoSocials(filterToHighestTier(found), searchable, networkRequests);
+  // Confirm/strip unconfirmed social embeds BEFORE tier-filtering: a tier-2
+  // social that later fails confirmation would otherwise have already
+  // annihilated the lower-tier real player, leaving an empty result.
+  return filterToHighestTier(filterNonVideoSocials(found, searchable, networkRequests));
 }
 
 // ── Explicit URL scanning (no crawl) ────────────────────────────────

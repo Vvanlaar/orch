@@ -1,6 +1,6 @@
 // Session / auth store — the single source of truth for the access token and
 // the scopes it grants. Drives App.svelte's render gate (token screen vs
-// support-only vs full admin dashboard).
+// support-only vs videoscan-only vs full admin dashboard).
 //
 // A one-time global fetch interceptor injects the token into every /api/*
 // request and drops us back to the token screen on 401. Patching fetch here
@@ -57,6 +57,7 @@ export function getScopes(): string[] { return scopes; }
 export function isReady(): boolean { return ready; }
 export function isAdmin(): boolean { return scopes.includes('admin') || scopes.includes('*'); }
 export function canSupport(): boolean { return isAdmin() || scopes.includes('support'); }
+export function canVideoscan(): boolean { return isAdmin() || scopes.includes('videoscan'); }
 
 export async function loadWhoami(): Promise<void> {
   try {
