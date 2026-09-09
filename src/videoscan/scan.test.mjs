@@ -231,7 +231,9 @@ test("Network evidence keeps the matched token when the URL is truncated", () =>
     `expected the URL capped at 80 chars and marked as cut, got ${JSON.stringify(evidence)}`
   );
   assert.ok(
-    evidence.some((e) => e.includes('matched: "vjs"')),
+    // The anchored `scripts` pattern requires a boundary char around "vjs"
+    // (see DETECTORS["Video.js"]), so the reported token is "_vjs-", not bare "vjs".
+    evidence.some((e) => e.includes('matched: "_vjs-"')),
     `expected the matched token in evidence, got ${JSON.stringify(evidence)}`
   );
   assert.ok(
@@ -320,4 +322,55 @@ test("Brightcove script alone still detected (no data attrs)", () => {
     <script src="https://players.brightcove.net/1234567890/default_default/index.min.js"></script>`;
   const result = detectFromCorpus(html);
   assert.deepEqual(names(result), ["Brightcove"]);
+});
+
+// --- Video.js: Drupal aggregated-JS false positive (data.oss.nl, 29/29 pages) ---
+// The real bundle URL that produced the false positive. Drupal appends an
+// urlsafe-base64 `include=` blob listing the aggregated libraries; the blob
+// happens to contain "vjS", which bare /vjs/i matched.
+const DRUPAL_AGG_URL =
+  "https://data.oss.nl/sites/default/files/js/js_YZ5G-oqjDb8uFMrQh1rQ3-MOiDZUsYPqPbnGqosXgaU.js" +
+  "?scope=footer&delta=0&language=nl&theme=portals&include=eJxNjmEKwzAIhS80CexCxSSyhToNaqG9_WrHoL_U" +
+  "9z2f7pMsnJhalKkWyA7ebMzwx35jv_IEHtXQDkB3SosvHQPPvjSdB_ThYaNuMVQuqMJLU5HMyAFYdd1mshcJGXLB_hkCpylM" +
+  "-Yp0QmtvrEy5GyR5PyWorG39P_gFl7ZKeg";
+
+test("Drupal aggregated-JS bundle is NOT Video.js — network evidence", () => {
+  // The bundle URL is byte-identical on every page of the site, so a collision
+  // here flags 100% of pages, not a stray one.
+  const result = detectFromCorpus("<p>Dataset page, no video.</p>", "", [DRUPAL_AGG_URL]);
+  assert.deepEqual(names(result), []);
+});
+
+test("Drupal aggregated-JS bundle is NOT Video.js — same URL in HTML markup", () => {
+  // Same blob reached the `patterns` array too, via the <script src> in the HTML
+  // corpus. `_vjs-` / `-vjs-` can occur in urlsafe-base64, so the HTML anchor
+  // excludes `_` and `-`.
+  const html = `<script src="${DRUPAL_AGG_URL}"></script>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), []);
+});
+
+test("Synthetic urlsafe-base64 blobs with vjs- inside do not match", () => {
+  for (const blob of ["aa_vjs-bb", "aa-vjs-bb", "XvjS-Y"]) {
+    const html = `<script src="/sites/default/files/js/js_a.js?include=${blob}"></script>`;
+    assert.deepEqual(names(detectFromCorpus(html)), [], `blob ${blob} should not match`);
+  }
+});
+
+test("Real Video.js CDN script still detected (guard against over-narrowing)", () => {
+  // vjs.zencdn.net is the only shape the `vjs` pattern is load-bearing for.
+  const result = detectFromCorpus("<p>x</p>", "", ["https://vjs.zencdn.net/8.10.0/video.min.js"]);
+  assert.deepEqual(names(result), ["Video.js"]);
+});
+
+test("Real Video.js markup still detected — vjs- skin classes", () => {
+  const html = `<video class="video-js vjs-default-skin" controls><source src="/a.mp4"></video>`;
+  // HTML5 native rides along: a real <video> tag matches it too, and both sit in
+  // tier 5 so filterToHighestTier keeps the pair.
+  assert.deepEqual(names(detectFromCorpus(html)), ["HTML5 native", "Video.js"]);
+});
+
+test("Real Video.js markup still detected — quoted vjs- class alone", () => {
+  const html = `<div class="vjs-poster"></div>`;
+  assert.deepEqual(names(detectFromCorpus(html)), ["Video.js"]);
 });
