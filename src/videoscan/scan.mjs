@@ -137,6 +137,49 @@ export const DETECTORS = {
     ],
     scripts: [/vixyvideo\.com/i],
   },
+  // Company Webcast and iBabs both arrive through the iBabs meeting portal
+  // (bestuurlijkeinformatie.nl and siblings), which marks an embed slot with
+  // data-video-type and lets /scripts/agendavideo fill it in client-side. That
+  // script recognises exactly four values: Cwc, iBabsStream, ConnectedViews and
+  // IframeUrl. The last two only build an iframe from data-video-url, so they
+  // are covered when that URL points at a vendor already in DETECTORS and are a
+  // silent miss otherwise - not something these two detectors handle.
+  //
+  // Both vendors are anchored to a host *path*, never a bare domain: an iBabs
+  // player pulls its poster from sdk.companywebcast.com/customers/<org>/poster/,
+  // so a loose companywebcast host match would tag every iBabs stream as
+  // Company Webcast as well. Both are tier 1, so filterToHighestTier would not
+  // resolve that - the page would just report two players where one exists.
+  "Company Webcast": {
+    // The marker has to stand on its own: on a Cwc embed data-video-url is
+    // empty and the SDK builds the iframe, so before render the marker is the
+    // only in-page signal. \b after it rejects suffixed variants (CwcLive),
+    // which the portal does not emit.
+    patterns: [
+      /data-video-type=["']?Cwc\b/i,
+      /sdk\.companywebcast\.com\/sdk\//i,
+      /player\.companywebcast\.com/i,
+    ],
+    scripts: [/sdk\.companywebcast\.com\/sdk\//i, /player\.companywebcast\.com/i],
+  },
+  iBabs: {
+    patterns: [
+      /data-video-type=["']?iBabsStream\b/i,
+      /player\.ibabs\.eu/i,
+    ],
+    // Only the player host and the embed marker count. bestuurlijkeinformatie.nl
+    // is built by iBabs, so every page - video or not - carries
+    // /Images/icons/ibabs/ favicons plus footer links to ibabs.com and
+    // portal.ibabs.eu. A bare /ibabs/i token would flag all 3253 pages of the
+    // site: the same whole-site false positive the Video.js vjs- anchor exists
+    // to prevent, and iBabs is tier 1, so it would suppress every real player.
+    //
+    // babscast.com is iBabs' own delivery domain - vod. for recordings,
+    // signalr. and babscast-gateway. for live - so it is matched as a whole
+    // host to cover a live stream too. It is the backstop; player.ibabs.eu in
+    // the embedding markup is the primary signal.
+    scripts: [/player\.ibabs\.eu/i, /\bbabscast\.com/i],
+  },
 
   // ── Major platforms ─────────────────────────────────────────────
   YouTube: {
@@ -411,6 +454,7 @@ const DETECTOR_TIER = {
   "Blue Billywig": 1, Brightcove: 1, "JW Player": 1, Kaltura: 1,
   Wistia: 1, Vidyard: 1, Flowplayer: 1, Panopto: 1, PingVP: 1,
   Hihaho: 1, "Ivory Media Player": 1, OpenGemeenten: 1, Rijksoverheidsplayer: 1, "Vixy Video": 1,
+  "Company Webcast": 1, iBabs: 1,
   // Tier 2: Major platforms
   YouTube: 2, Vimeo: 2, DailyMotion: 2, TikTok: 2, Instagram: 2,
   "Facebook Video": 2, "X (Twitter)": 2, LinkedIn: 2, Twitch: 2,

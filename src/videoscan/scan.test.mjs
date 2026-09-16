@@ -486,3 +486,80 @@ test("resume restore: trap URLs are filtered, real pagination survives", () => {
     "https://waardwijzer.krimpenerwaard.nl/is/organisaties?size=12&from=372",
   ]);
 });
+
+// ── Company Webcast / iBabs (bestuurlijkeinformatie.nl meeting portals) ──
+
+test("iBabs stream embed detected from the markup marker alone", () => {
+  // No data-video-url here on purpose: with the player host present the host
+  // pattern carries the test and the marker regex could be deleted unnoticed.
+  const html = `
+    <div class="cwc" data-video-type="iBabsStream" data-video-id="b49a8b6d"
+      data-language="nl"></div>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), ["iBabs"]);
+});
+
+test("iBabs stream embed detected from the player URL alone", () => {
+  const html = `<div class="cwc" data-video-url="https://player.ibabs.eu/0efe653a"></div>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), ["iBabs"]);
+});
+
+test("iBabs detected from the player host in network traffic", () => {
+  const result = detectPlayers("<p>x</p>", [
+    "https://player.ibabs.eu/0efe653a-55f4-4db3-a26f-d2b7a0968c18",
+    "https://vod.babscast.com/hls/2026/9/9/0efe653a/video.mp4/master.m3u8",
+  ]);
+  assert.deepEqual(names(result), ["iBabs"]);
+});
+
+test("iBabs branding alone is NOT a video (whole-site false positive)", () => {
+  // bestuurlijkeinformatie.nl is iBabs-built: every page carries these, video
+  // or not. A bare /ibabs/i token flagged all 3253 pages of the Krimpenerwaard
+  // site, and at tier 1 it would suppress every real player found alongside.
+  const html = `
+    <link rel="icon" href="/Images/icons/ibabs/favicon-32x32.png">
+    <footer><a href="//www.ibabs.com">iBabs</a>
+      <a href="//portal.ibabs.eu/">Portal</a></footer>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), []);
+});
+
+test("Company Webcast embed detected from the marker alone", () => {
+  // The SDK <script> is omitted on purpose: were it present it would satisfy
+  // the host pattern by itself, and the marker regex could be deleted without
+  // failing a test. A Cwc slot carries an empty data-video-url, so if the SDK
+  // ever moves into a bundle the marker is the only in-page signal left.
+  const html = `<div class="cwc" data-video-type="Cwc" data-video-id="gemeente/20260303_3"
+      data-video-url=""></div>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), ["Company Webcast"]);
+});
+
+test("Company Webcast detected from the SDK script alone", () => {
+  const html = `<div class="cwc"></div>
+    <script src="//sdk.companywebcast.com/sdk/player/client.js"></script>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), ["Company Webcast"]);
+});
+
+test("Company Webcast poster on an iBabs page is NOT a second player", () => {
+  // The iBabs player pulls its poster from sdk.companywebcast.com/customers/…,
+  // so a bare host match would report both providers for one video. Only the
+  // /sdk/ path and player.companywebcast.com count.
+  const result = detectPlayers(
+    `<div class="cwc" data-video-type="iBabsStream" data-video-url="https://player.ibabs.eu/x"></div>`,
+    [
+      "https://player.ibabs.eu/x",
+      "https://sdk.companywebcast.com/customers/gemeente/poster/poster-original.jpg",
+    ]
+  );
+  assert.deepEqual(names(result), ["iBabs"]);
+});
+
+test("Empty meeting page with no data-video-type → no players", () => {
+  // The 2 of 49 pages whose agenda item carries no video slot at all.
+  const html = `<div class="box-content"><h2>Agendapunten</h2><ol><li>Opening</li></ol></div>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), []);
+});
