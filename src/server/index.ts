@@ -32,7 +32,7 @@ import { initSettings } from '../core/settings.js';
 import { isSupabaseConfigured, MACHINE_ID } from '../core/db/client.js';
 import { dbGetNotifications, dbInsertNotification } from '../core/db/notifications.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
-import { getVideoscanDir, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, pauseVideoscan, findLatestScanFileForDomain, isVideoscanRunning, deleteScans, wrapUpBatch, type ReportOptions } from '../core/videoscan-runner.js';
+import { getVideoscanDir, isDerivedScan, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, pauseVideoscan, findLatestScanFileForDomain, isVideoscanRunning, deleteScans, wrapUpBatch, type ReportOptions } from '../core/videoscan-runner.js';
 import { getClosedBatches, markBatchClosed, markBatchOpen } from '../core/batch-state.js';
 import { isPidAlive, killProcessTree } from '../core/process-kill.js';
 import { createSignedUrl, downloadFile } from '../core/db/storage.js';
@@ -1794,6 +1794,17 @@ app.post('/api/actions/resume-videoscan', asyncHandler(async (req, res) => {
     res.status(400).json({ error: 'valid filename required' });
     return;
   }
+  // A merge or batch summary is not resumable, and the dashboard already hides
+  // the button (canResume is false for them) — but the guard has to live here
+  // too, because a stale SPA, a script or a curl reaches this endpoint directly.
+  // Resuming one is actively destructive: its _state.queue is a union no single
+  // run ever owned, and for a cross-domain merge `domain` holds the batch label,
+  // so the scan would be pointed at `https://www.<batch label>` and the report
+  // written back in place over the consolidated artifact.
+  if (isDerivedScan(filename)) {
+    res.status(400).json({ error: 'Merged and summary scans cannot be resumed' });
+    return;
+  }
   const resumePath = join(getVideoscanDir(), filename);
   if (!existsSync(resumePath)) {
     res.status(404).json({ error: 'Scan file not found' });
@@ -2130,6 +2141,13 @@ app.post('/api/videoscans/import-digitoegankelijk', asyncHandler(async (req, res
 
   const headers = parseCsvLine(lines[0]);
   const nameIdx = headers.findIndex(h => /^naam/i.test(h));
+  // Some exports carry the organisation itself as a column. Prefer it over any
+  // guess we make from the rows — but never confuse it with "Naam", which names
+  // the *website* on that row, not its owner.
+  // Anchored at both ends: a prefix match also hits "Organisatietype" and
+  // "Organisatiecode", which would name every batch after a category ("Gemeente")
+  // rather than an organisation.
+  const orgIdx = headers.findIndex(h => /^(organisatie|organization|instantie|bedrijf)$/i.test(h.trim()));
   let urlIdx = headers.findIndex(h => /^url$/i.test(h));
   const typeIdx = headers.findIndex(h => /site of app/i.test(h));
   const statusIdx = headers.findIndex(h => /^status/i.test(h));
@@ -2151,7 +2169,7 @@ app.post('/api/videoscans/import-digitoegankelijk', asyncHandler(async (req, res
   }
 
   let skippedApps = 0;
-  const sites: { name: string; url: string; status: string; rootDomain: string }[] = [];
+  const sites: { name: string; url: string; status: string; rootDomain: string; org: string }[] = [];
 
   for (let i = 1; i < lines.length; i++) {
     const fields = parseCsvLine(lines[i]);
@@ -2170,6 +2188,7 @@ app.post('/api/videoscans/import-digitoegankelijk', asyncHandler(async (req, res
       url: ensureHttp(siteUrl),
       status: statusIdx !== -1 ? (fields[statusIdx] || '') : '',
       rootDomain,
+      org: orgIdx !== -1 ? (fields[orgIdx] || '').trim() : '',
     });
   }
 
@@ -2181,13 +2200,39 @@ app.post('/api/videoscans/import-digitoegankelijk', asyncHandler(async (req, res
   }
 
   const groups = [...groupMap.entries()]
-    .sort((a, b) => b[1].length - a[1].length)
+    // Site count first, then domain name, so a tie resolves the same way every
+    // time instead of by CSV row order — orgName below reads groups[0].
+    .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
     .map(([rootDomain, domainSites]) => ({
       rootDomain,
       sites: domainSites.map(({ name, url, status }) => ({ name, url, status })),
     }));
 
-  const orgName = sites.length > 0 && sites[0].name ? sites[0].name.split(' - ')[0].split(' \u2013 ')[0].trim() : `Organisation ${id}`;
+  // The organisation this import is named after. `Naam` is the name of the
+  // website on that row, so reading row 0 named whole batches after whichever
+  // site happened to sort first \u2014 a Krimpenerwaard import came out as
+  // "Agenda vergaderingen Krimpenerwaard", and that name propagates all the way
+  // into the merged scan's filename and the dashboard's domain column.
+  //
+  // Prefer an explicit organisation column; otherwise fall back to the domain
+  // the most sites share, which is what the batch actually spans (four of
+  // Krimpenerwaard's eight sites sit on krimpenerwaard.nl). `groups` is sorted
+  // by site count, so groups[0] is that domain.
+  //
+  // The fallback is only taken when one domain OUTNUMBERS the rest. On a tie
+  // there is no dominant domain to speak of, and picking either one would be the
+  // same arbitrary choice this replaced — so the import stays explicitly unnamed
+  // instead of asserting something wrong.
+  //
+  // Known limit: this names the batch after the most common domain, which for an
+  // organisation whose sites are mostly hosted by one supplier is the supplier's
+  // domain, not theirs. An explicit organisation column is the only real fix;
+  // today's digitoegankelijk export has no such column.
+  const orgFromColumn = sites.find(s => s.org)?.org;
+  const hasDominantDomain = groups.length > 0 && (groups.length === 1 || groups[0].sites.length > groups[1].sites.length);
+  // rootDomain is always "name.tld", so the first label is the name.
+  const domainName = hasDominantDomain ? groups[0].rootDomain.split('.')[0] : '';
+  const orgName = orgFromColumn || domainName || `Organisation ${id}`;
 
   res.json({ orgName, totalSites: sites.length, skippedApps, groups });
 }));

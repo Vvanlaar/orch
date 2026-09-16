@@ -16,7 +16,8 @@ After each code change, use the code-simplifier and review skills. Fix any error
 - `pnpm dev:server` - Server only (tsx watch, port 3011)
 - `pnpm dev:dashboard` - Vite dev server (port 3010, proxies API/WS to 3011)
 - `pnpm build` - `tsc` (server/core) then `vite build` (dashboard)
-- `pnpm test` - Vitest (run single: `pnpm exec vitest run path/to/test`)
+- `pnpm test` - Vitest **and** the node:test videoscan suite (run single: `pnpm exec vitest run path/to/test`)
+- `pnpm test:watch` - Vitest in watch mode
 - `pnpm start` - Production server from `dist/`
 
 ## Architecture

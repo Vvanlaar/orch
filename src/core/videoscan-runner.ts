@@ -407,6 +407,24 @@ interface ScanData {
   playerSummary: Record<string, { count: number; pages: string[] }>;
   details: ScanDetail[];
   _state: { visited: string[]; queue: string[] };
+  batchId?: string;
+  batchLabel?: string;
+}
+
+/**
+ * True for scans that are derived artifacts of other scans — a merge or a batch
+ * summary — rather than the output of a crawl.
+ *
+ * These carry a `_state.queue` built from their sources (union minus visited),
+ * so a queue-length test alone reads them as resumable. Resuming one would crawl
+ * a queue no single run ever owned and write the results back over the merge, so
+ * every caller that asks "can this be continued?" has to exclude them.
+ *
+ * Detected by filename because that is what merges and summaries have in common
+ * on disk, including the ones written before this flag existed.
+ */
+export function isDerivedScan(filename: string): boolean {
+  return filename.endsWith('-merged.json') || filename.endsWith('-summary.json');
 }
 
 export function mergeScansData(scansData: ScanData[]): ScanData {
@@ -451,6 +469,21 @@ export function mergeScansData(scansData: ScanData[]): ScanData {
   const latestDate = scansData.reduce((latest, s) =>
     s.scanDate > latest ? s.scanDate : latest, scansData[0].scanDate);
 
+  // Carry the batch through the merge. Without this the merged scan comes out
+  // batch-less and the dashboard files it under "Ungrouped", stranding it away
+  // from the batch it summarizes.
+  //
+  // Sources that name DIFFERENT batches leave it unset rather than picking a
+  // winner. Sources that name one batch plus some with no batch at all still
+  // propagate it — that mix is the normal case for the targetFilename merge
+  // path, where a fresh scan with no batch is folded into a batched target, and
+  // dropping the batch there would strand the result.
+  const batchIds = new Set(scansData.map(s => s.batchId).filter(Boolean));
+  const batchId = batchIds.size === 1 ? [...batchIds][0] : undefined;
+  const batchLabel = batchId
+    ? scansData.find(s => s.batchId === batchId && s.batchLabel)?.batchLabel
+    : undefined;
+
   return {
     domain: scansData[0].domain,
     scanDate: latestDate,
@@ -460,6 +493,8 @@ export function mergeScansData(scansData: ScanData[]): ScanData {
     playerSummary: Object.fromEntries(playerMap),
     details: mergedDetails,
     _state: { visited: [...visitedSet], queue: [...queueSet] },
+    ...(batchId ? { batchId } : {}),
+    ...(batchLabel ? { batchLabel } : {}),
   };
 }
 
@@ -673,7 +708,7 @@ export async function syncScanToSupabase(jsonFilename: string): Promise<SyncResu
       hasPdf: existsSync(join(VIDEOSCAN_DIR, pdfFile)),
       hasPreview: existsSync(join(VIDEOSCAN_DIR, previewFile)),
       hasPreviewPdf: existsSync(join(VIDEOSCAN_DIR, previewPdfFile)),
-      canResume: (data._state?.queue?.length || 0) > 0,
+      canResume: (data._state?.queue?.length || 0) > 0 && !isDerivedScan(jsonFilename),
       batchId: typeof data.batchId === 'string' ? data.batchId : undefined,
       batchLabel: typeof data.batchLabel === 'string' ? data.batchLabel : undefined,
     });
@@ -727,7 +762,7 @@ function listScansFromDisk(): ScanSummary[] {
           hasPdf: existsSync(join(VIDEOSCAN_DIR, pdfFile)),
           hasPreview: existsSync(join(VIDEOSCAN_DIR, previewFile)),
           hasPreviewPdf: existsSync(join(VIDEOSCAN_DIR, previewPdfFile)),
-          canResume: (data._state?.queue?.length || 0) > 0,
+          canResume: (data._state?.queue?.length || 0) > 0 && !isDerivedScan(filename),
           ...(typeof data.batchId === 'string' && data.batchId ? { batchId: data.batchId } : {}),
           ...(typeof data.batchLabel === 'string' && data.batchLabel ? { batchLabel: data.batchLabel } : {}),
         };
@@ -769,10 +804,22 @@ export async function deleteScans(filenames: string[]): Promise<void> {
 export async function listScans(): Promise<ScanSummary[]> {
   if (isSupabaseConfigured()) {
     try {
-      return await dbListScans();
+      return (await dbListScans()).map(withResumeRule);
     } catch {
       return listScansFromDisk();
     }
   }
   return listScansFromDisk();
+}
+
+/**
+ * Re-apply the derived-scan rule to a stored row.
+ *
+ * `canResume` is persisted, so rows written before that rule existed still claim
+ * a merge is resumable. Deciding it on read instead of trusting the column keeps
+ * old rows right without a backfill, and keeps the answer in one place if the
+ * rule changes again.
+ */
+function withResumeRule(scan: ScanSummary): ScanSummary {
+  return scan.canResume && isDerivedScan(scan.filename) ? { ...scan, canResume: false } : scan;
 }

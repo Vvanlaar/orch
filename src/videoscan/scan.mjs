@@ -464,7 +464,27 @@ function filterNonVideoSocials(detected, html, networkRequests) {
 
 // ── Crawler ─────────────────────────────────────────────────────────
 
-function normalizeUrl(url, base) {
+// Crawler-trap bounds. A site that resolves relative links against *any* path
+// regenerates every page one level deeper, forever: waardwijzer.krimpenerwaard.nl
+// left 11,243 such URLs queued after a single scan (median depth 39, max 61,
+// up to 1057 chars) while the real site is ~3 levels deep.
+//
+// All three thresholds were measured against the real URLs in this repo's scan
+// history. The path bounds each reject exactly one of 573,359 — the same
+// malformed link, two URLs concatenated — while together catching 99.2% of that
+// trap. Deepest genuine page seen is 10 segments; the most any segment
+// legitimately repeats is 3 (8 URLs), so 12 and 4 sit clear of real traffic.
+//
+// The query bound covers the other half of the trap: a paginator that appends
+// ?from= on every link, growing the URL a parameter at a time. No real URL
+// repeats a query key more than twice (multi-value facets like
+// ?filter=a&filter=b are common and must survive), so rejecting at 3 caps that
+// growth without touching a single genuine page.
+const MAX_PATH_SEGMENTS = 12;
+const MAX_SEGMENT_REPEATS = 4;
+const MAX_QUERY_KEY_REPEATS = 3;
+
+export function normalizeUrl(url, base) {
   try {
     const u = new URL(url, base);
     u.hash = "";
@@ -472,10 +492,62 @@ function normalizeUrl(url, base) {
     if (u.pathname !== "/" && u.pathname.endsWith("/")) {
       u.pathname = u.pathname.slice(0, -1);
     }
+    // Drop query parameters that repeat verbatim. Some CMSes re-append their own
+    // param to every internal link, so ?origin=gm&origin=gm and ?origin=gm are
+    // one page fetched twice (2,329 such URLs in this repo's scan history).
+    //
+    // Only byte-identical key=value pairs go. A repeated KEY is not the same
+    // thing: ?filter=a&filter=b is a multi-value facet naming a different result
+    // set than ?filter=b, and 4,429 real URLs here rely on that — collapsing by
+    // key would quietly drop half of every faceted listing. Runaway repetition
+    // is handled by MAX_QUERY_KEY_REPEATS instead, which bounds it without
+    // reinterpreting anyone's parameters.
+    //
+    // Done on the raw query string rather than via URLSearchParams so that
+    // untouched parameters keep their exact original encoding — re-serializing
+    // would rewrite %20 as + on params that never repeated.
+    const rawQuery = u.search.slice(1);
+    if (rawQuery.includes("&")) {
+      const parts = rawQuery.split("&");
+      const unique = [...new Set(parts)];
+      if (unique.length !== parts.length) u.search = unique.join("&");
+    }
     return u.href;
   } catch {
     return null;
   }
+}
+
+/**
+ * True when a URL's shape marks it as crawler-trap output rather than a real
+ * page — excessive path depth, one path segment repeated over and over, or a
+ * query key stacked up past anything a real multi-value parameter uses.
+ */
+export function isCrawlerTrap(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+
+  const segments = parsed.pathname.split("/").filter(Boolean);
+  if (segments.length > MAX_PATH_SEGMENTS) return true;
+  const segmentCounts = new Map();
+  for (const segment of segments) {
+    const n = (segmentCounts.get(segment) || 0) + 1;
+    if (n >= MAX_SEGMENT_REPEATS) return true;
+    segmentCounts.set(segment, n);
+  }
+
+  const keyCounts = new Map();
+  for (const key of parsed.searchParams.keys()) {
+    const n = (keyCounts.get(key) || 0) + 1;
+    if (n >= MAX_QUERY_KEY_REPEATS) return true;
+    keyCounts.set(key, n);
+  }
+
+  return false;
 }
 
 function isSameDomain(url, domain) {
@@ -489,7 +561,7 @@ function isSameDomain(url, domain) {
   }
 }
 
-function shouldSkipUrl(url) {
+export function shouldSkipUrl(url) {
   const skip = [
     /\.(pdf|zip|png|jpg|jpeg|gif|svg|webp|mp4|mp3|wav|doc|docx|xls|xlsx|ppt|pptx|css|js|xbri|xbrl|xml|csv)(\?|$)/i,
     /mailto:/i,
@@ -501,6 +573,8 @@ function shouldSkipUrl(url) {
     /[?&]preview[-_]token=/i,
   ];
   if (skip.some((r) => r.test(url))) return true;
+
+  if (isCrawlerTrap(url)) return true;
 
   // Pagination: skip ?page=N unless it's a listing/archive path where
   // pagination is the only way to reach older items.
@@ -1440,18 +1514,60 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   if (resumeFile) {
     const prev = JSON.parse(readFileSync(resumeFile, "utf-8"));
 
-    if (prev._state?.visited?.length) {
-      visited = new Set(prev._state.visited);
-    } else {
-      const allUrls = new Set();
-      for (const d of prev.details || []) allUrls.add(d.url);
-      for (const [, data] of Object.entries(prev.playerSummary || {})) {
-        for (const p of data.pages || []) allUrls.add(p);
+    // `visited` is normalized with the same function as the queue below. Both
+    // sides of the "have I seen this?" test have to speak one spelling: a URL
+    // stored as visited under ?from=162&from=162 would otherwise never match its
+    // restored, collapsed form and would be crawled a second time, inflating
+    // pagesScanned and making the coverage figure incomparable to the run before
+    // the pause.
+    const normalizeAll = (urls) => {
+      const out = new Set();
+      for (const u of urls) {
+        const n = normalizeUrl(u, startUrl);
+        if (n) out.add(n);
       }
-      visited = allUrls;
+      return out;
+    };
+
+    if (prev._state?.visited?.length) {
+      visited = normalizeAll(prev._state.visited);
+    } else {
+      const allUrls = [];
+      for (const d of prev.details || []) allUrls.push(d.url);
+      for (const [, data] of Object.entries(prev.playerSummary || {})) {
+        for (const p of data.pages || []) allUrls.push(p);
+      }
+      visited = normalizeAll(allUrls);
     }
 
-    queue = prev._state?.queue?.length ? prev._state.queue : [normalizeUrl(startUrl, startUrl)];
+    // Re-filter the restored queue: it was written by whatever rules were in
+    // force when the scan paused, so a run interrupted before the crawler-trap
+    // bounds existed would otherwise resume straight back into the trap it was
+    // stuck in. (One real scan came back with 11,243 queued URLs, 99% of them
+    // trap output.) Costs one pass over a list we were about to crawl anyway.
+    // Normalize as well as filter: the same rules that collapse a re-appended
+    // ?from= at enqueue time have to be applied to URLs queued before they
+    // existed, or the paginator half of the trap survives the restore.
+    const storedQueue = prev._state?.queue || [];
+    const restored = [
+      ...new Set(
+        storedQueue.map((u) => normalizeUrl(u, startUrl)).filter((u) => u && !shouldSkipUrl(u)),
+      ),
+    ];
+    const dropped = storedQueue.length - restored.length;
+    if (dropped > 0) {
+      console.log(
+        chalk.yellow(`  Dropped ${dropped} queued URL(s) as crawler-trap output or duplicates`),
+      );
+    }
+    // Say so out loud when the filter took everything. The run then finds the
+    // start URL already visited and finishes with zero pages, which otherwise
+    // looks like an unexplained no-op rather than "the remaining queue was all
+    // trap".
+    if (storedQueue.length > 0 && restored.length === 0) {
+      console.log(chalk.yellow("  Every queued URL was trap output — nothing left to resume"));
+    }
+    queue = restored.length ? restored : [normalizeUrl(startUrl, startUrl)];
 
     results = (prev.details || []).map((d) => ({
       url: d.url,

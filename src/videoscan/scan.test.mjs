@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { detectPlayers, ACTIVATE_SELECTORS } from "./scan.mjs";
+import { detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, normalizeUrl } from "./scan.mjs";
 
 const names = (result) => result.map((r) => r.player).sort();
 
@@ -373,4 +373,116 @@ test("Real Video.js markup still detected — vjs- skin classes", () => {
 test("Real Video.js markup still detected — quoted vjs- class alone", () => {
   const html = `<div class="vjs-poster"></div>`;
   assert.deepEqual(names(detectFromCorpus(html)), ["Video.js"]);
+});
+
+// ── Crawler traps ───────────────────────────────────────────────────
+// Thresholds here were measured against the 573,359 URLs in this repo's scan
+// history; the fixtures below are real URLs from those files.
+
+test("crawler trap: repeated path segments are rejected", () => {
+  const trap =
+    "https://waardwijzer.krimpenerwaard.nl/is/product/154586/220638/" +
+    "www.chrisvoorkom.nl/docs.google.com/forms/d/1MDX/www.chrisvoorkom.nl/" +
+    "docs.google.com/forms/d/1MDX/www.chrisvoorkom.nl/aanbod";
+  assert.equal(isCrawlerTrap(trap), true);
+  assert.equal(shouldSkipUrl(trap), true);
+});
+
+test("crawler trap: excessive path depth is rejected", () => {
+  const deep = "https://example.nl/" + Array.from({ length: 13 }, (_, i) => `s${i}`).join("/");
+  assert.equal(isCrawlerTrap(deep), true);
+});
+
+test("crawler trap: the deepest real page in scan history is kept", () => {
+  // 10 segments — rijksmuseum.nl, deepest genuine page across 573k URLs.
+  const real =
+    "https://www.rijksmuseum.nl/nl/onderwijs/voortgezet-onderwijs/havo-vwo/" +
+    "talentprogrammas/docnljr/pop-up-doc-nl-jr/joel/story/joel-pop-up-tentoonstelling";
+  assert.equal(new URL(real).pathname.split("/").filter(Boolean).length, 10);
+  assert.equal(isCrawlerTrap(real), false);
+  assert.equal(shouldSkipUrl(real), false);
+});
+
+test("crawler trap: a segment repeating 3x is real traffic, not a trap", () => {
+  // Measured: 8 real URLs repeat a segment 3x; none repeat one 4x.
+  const real = "https://example.nl/nieuws/archief/nieuws/2024/nieuws";
+  assert.equal(isCrawlerTrap(real), false);
+});
+
+test("crawler trap: a malformed URL is not treated as a trap", () => {
+  assert.equal(isCrawlerTrap("not-a-url"), false);
+});
+
+// ── normalizeUrl query canonicalization ─────────────────────────────
+
+test("normalizeUrl drops a verbatim-repeated parameter", () => {
+  // size=6 appears twice identically; from= carries two real values and stays.
+  const got = normalizeUrl(
+    "https://waardwijzer.krimpenerwaard.nl/is/producten?view=list&size=6&from=162&size=6&from=150",
+    "https://waardwijzer.krimpenerwaard.nl/",
+  );
+  assert.equal(
+    got,
+    "https://waardwijzer.krimpenerwaard.nl/is/producten?view=list&size=6&from=162&from=150",
+  );
+});
+
+test("normalizeUrl keeps multi-value facets intact", () => {
+  // 4,429 real URLs in this repo's scan history repeat a key with DIFFERENT
+  // values; ?filter=a&filter=b is a different result set than ?filter=b, so
+  // collapsing by key would silently halve every faceted listing.
+  const url = "https://www.rijksmuseum.nl/nl/zien-en-doen?filter=toegankelijkheid&filter=tentoonstellingen";
+  assert.equal(normalizeUrl(url, "https://www.rijksmuseum.nl/"), url);
+});
+
+test("normalizeUrl does not re-encode parameters it did not touch", () => {
+  // Rebuilding the query via URLSearchParams would turn %20 into + on b.
+  assert.equal(
+    normalizeUrl("https://example.nl/z?a=1&b=x%20y&a=1", "https://example.nl/"),
+    "https://example.nl/z?a=1&b=x%20y",
+  );
+});
+
+test("crawler trap: a query key stacked past real multi-value use is rejected", () => {
+  // No real URL repeats a key more than twice; the paginator trap grows past it.
+  assert.equal(isCrawlerTrap("https://example.nl/p?from=1&from=2"), false);
+  assert.equal(isCrawlerTrap("https://example.nl/p?from=1&from=2&from=3"), true);
+});
+
+test("normalizeUrl collapses a CMS param re-appended to itself", () => {
+  const got = normalizeUrl(
+    "https://www.kunstmuseum.nl/nl/collectie/aan-den-arbeid?origin=gm&origin=gm",
+    "https://www.kunstmuseum.nl/",
+  );
+  assert.equal(got, "https://www.kunstmuseum.nl/nl/collectie/aan-den-arbeid?origin=gm");
+});
+
+test("normalizeUrl leaves a URL without repeated keys byte-identical", () => {
+  const url = "https://example.nl/zoek?q=video%20speler&page=2&sort=date";
+  assert.equal(normalizeUrl(url, "https://example.nl/"), url);
+});
+
+test("normalizeUrl still strips hash and trailing slash", () => {
+  assert.equal(normalizeUrl("https://example.nl/pad/#sectie", "https://example.nl/"), "https://example.nl/pad");
+});
+
+test("resume restore: trap URLs are filtered, real pagination survives", () => {
+  // The restore pipeline from the --resume branch, run over a queue shaped like
+  // the real one: deep repeated-segment traps plus ?from= re-appended per link.
+  const start = "https://waardwijzer.krimpenerwaard.nl/";
+  const stored = [
+    "https://waardwijzer.krimpenerwaard.nl/is/product/154586/a/b/a/b/a/b/a/b/a/b/aanbod",
+    "https://waardwijzer.krimpenerwaard.nl/is/producten?view=list&from=162&from=150",
+    "https://waardwijzer.krimpenerwaard.nl/is/producten?view=list&from=99&from=150",
+    "https://waardwijzer.krimpenerwaard.nl/is/organisaties?size=12&from=372",
+  ];
+  const restored = [
+    ...new Set(stored.map((u) => normalizeUrl(u, start)).filter((u) => u && !shouldSkipUrl(u))),
+  ];
+  assert.deepEqual(restored, [
+    // Real from= values are preserved; only trap output is dropped.
+    "https://waardwijzer.krimpenerwaard.nl/is/producten?view=list&from=162&from=150",
+    "https://waardwijzer.krimpenerwaard.nl/is/producten?view=list&from=99&from=150",
+    "https://waardwijzer.krimpenerwaard.nl/is/organisaties?size=12&from=372",
+  ]);
 });
