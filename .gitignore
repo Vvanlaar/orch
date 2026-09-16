@@ -19,6 +19,10 @@ orch-dev.log
 orch-service.log
 videoscans/
 videoscan-*.json
+# Report deliverables built from scan output - dated export bundles and
+# per-batch result sheets. Derived data, regenerated per run, megabytes each.
+videoscan-monitor-*
+*-batch-results.csv
 *.png
 .superpowers/
 .claude/settings.local.json
