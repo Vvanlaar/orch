@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mergeScansData, isDerivedScan } from './videoscan-runner.js';
+import { mergeScansData, isDerivedScan, isBatchSummary } from './videoscan-runner.js';
 
 // Minimal scan shaped like the JSON scan.mjs writes.
 function scan(over: Partial<Parameters<typeof mergeScansData>[0][number]> = {}) {
@@ -26,6 +26,16 @@ describe('isDerivedScan', () => {
     expect(isDerivedScan('videoscan-trefhetinoss.nl-2026-09-02T11-25-39.json')).toBe(false);
     // "-merged"/"-summary" only count as the filename suffix, not anywhere in it.
     expect(isDerivedScan('videoscan-merged-sites.nl-2026-09-02T11-25-39.json')).toBe(false);
+  });
+});
+
+describe('isBatchSummary', () => {
+  it('flags only wrap-up output, so merged domain scans survive a re-wrap', () => {
+    expect(isBatchSummary('videoscan-digi-import-zaanstad-2026-09-19T10-07-51-289-summary.json')).toBe(true);
+    // A merged scan is all that is left of its domain once mergeScans archived
+    // the sources — excluding it would drop the domain from the next summary.
+    expect(isBatchSummary('videoscan-werkenbij.zaanstad.nl-2026-09-18T09-27-41-merged.json')).toBe(false);
+    expect(isBatchSummary('videoscan-zaanstad.nl-2026-09-18T11-07-10.json')).toBe(false);
   });
 });
 
