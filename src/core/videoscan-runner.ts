@@ -427,6 +427,15 @@ export function isDerivedScan(filename: string): boolean {
   return filename.endsWith('-merged.json') || filename.endsWith('-summary.json');
 }
 
+/**
+ * A batch summary is wrap-up's own output, so a re-wrap must not read it back.
+ * Narrower than isDerivedScan on purpose: a `-merged.json` is a real domain's
+ * scan whose sources mergeScans archived, so dropping it would lose the domain.
+ */
+export function isBatchSummary(filename: string): boolean {
+  return filename.endsWith('-summary.json');
+}
+
 export function mergeScansData(scansData: ScanData[]): ScanData {
   // Merge details — dedupe by URL, keep entry with more players
   const detailMap = new Map<string, ScanDetail>();
@@ -624,7 +633,9 @@ export async function wrapUpBatch(batchId: string): Promise<WrapUpResult> {
 
 async function wrapUpBatchInner(batchId: string): Promise<WrapUpResult> {
   const all = await listScans();
-  const initial = all.filter(s => s.batchId === batchId);
+  // Skip an earlier wrap-up's summary: its `domain` is the batch label, so it
+  // would group with the next summary and get merged into it below.
+  const initial = all.filter(s => s.batchId === batchId && !isBatchSummary(s.filename));
   if (initial.length === 0) throw new Error(`No scans found for batch ${batchId}`);
 
   const batchLabel = initial.find(s => s.batchLabel)?.batchLabel || batchId;
@@ -660,11 +671,12 @@ async function wrapUpBatchInner(batchId: string): Promise<WrapUpResult> {
     mergedDomains.push(domain);
   }
 
-  // Derived scans are excluded: an earlier wrap-up's summary carries the same
-  // batchId, and mergeScansData keeps whichever entry has more players per URL.
-  // Feeding a stale summary back in therefore resurrects detections that were
-  // since corrected in the sources, so a re-wrap must rebuild from them alone.
-  const after = (await listScans()).filter(s => s.batchId === batchId && !isDerivedScan(s.filename));
+  // Same exclusion as `initial`: an earlier summary carries this batchId, and
+  // mergeScansData keeps whichever entry has more players per URL, so feeding a
+  // stale summary back in resurrects detections since corrected in the sources.
+  // The `-merged.json` files written just above must stay — they are all that is
+  // left of their domain once mergeScans archived the sources.
+  const after = (await listScans()).filter(s => s.batchId === batchId && !isBatchSummary(s.filename));
   if (after.length === 0) throw new Error(`No scans left in batch ${batchId} after merge step`);
   await ensureLocal(after.map(s => s.filename));
 

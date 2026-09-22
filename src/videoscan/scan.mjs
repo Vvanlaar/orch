@@ -208,6 +208,9 @@ export const DETECTORS = {
     patterns: [
       /player\.vimeo\.com/i,
       /vimeo\.com\/video/i,
+      // Event / showcase embeds are iframe srcs in their own right, and the
+      // removed link pattern never covered them (no digits after the slash).
+      /vimeo\.com\/(?:event|showcase)\/[^"'\s<>]*\/embed/i,
       // NB: no bare /vimeo\.com\/\d+/ — same trap as the youtu.be link shape
       // above: a share/watch URL, never an embed src. It fired on pages that
       // only linked to a Vimeo recording from body text or a JSON payload.

@@ -170,8 +170,8 @@ test("YouTube embed iframe still detected (guard against over-removal)", () => {
 });
 
 test("Vimeo share link (vimeo.com/<id>) is NOT a player", () => {
-  // Same trap as youtu.be: archief/raadsinformatie pages carried the recording
-  // URL in escaped body text and an Outlook deeplink, with no player on them.
+  // Same trap as youtu.be: a raadsinformatie meeting page carried the recording
+  // URL in escaped body text, with no player anywhere on it.
   const html = `<p>Bekijk de opname: &lt;a href="https://vimeo.com/461441500/bfcbfb5945"&gt;link&lt;/a&gt;</p>`;
   const result = detectFromCorpus(html);
   assert.deepEqual(names(result), []);
@@ -184,9 +184,25 @@ test("Vimeo embed iframe still detected (guard against over-removal)", () => {
 });
 
 test("zoekwidget is NOT Kaltura", () => {
-  // /kWidget/i matched the tail of "zoekwidget1.php" — an unrelated Netwerk
-  // Oorlogsbronnen search widget — and flagged three video-less news pages.
+  // /kWidget/i matched inside "zoekwidget1.php" — an unrelated Netwerk
+  // Oorlogsbronnen search widget — and flagged news pages with no video.
   const html = `<iframe src="http://www.netwerkoorlogsbronnen.nl/publications/zoekwidget1.php"></iframe>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), []);
+});
+
+test("a lowercase kwidget.embed is NOT Kaltura (case lock)", () => {
+  // The word boundary alone would accept this; only case-sensitivity rejects it.
+  // Restoring the /i flag must turn this test red.
+  const html = `<script src="/js/kwidget.min.js"></script><script>kwidget.embed({});</script>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), []);
+});
+
+test("a kWidget mention without an API call is NOT Kaltura", () => {
+  // Deliberate: the dot is what makes it embed code rather than a stray
+  // identifier, so a feature test on its own is not evidence of a player.
+  const html = `<script>if (typeof kWidget === "undefined") { warn(); }</script>`;
   const result = detectFromCorpus(html);
   assert.deepEqual(names(result), []);
 });
@@ -198,9 +214,23 @@ test("Kaltura kWidget.embed still detected", () => {
 });
 
 test("Vimeo embed path still detected (guard against over-removal)", () => {
-  const html = `<div data-vimeo-id="461441500"></div><iframe src="https://vimeo.com/video/461441500"></iframe>`;
+  // No data-vimeo-* here: that pattern matches on its own and would keep this
+  // green even if the vimeo.com/video path pattern were deleted.
+  const html = `<iframe src="https://vimeo.com/video/461441500"></iframe>`;
   const result = detectFromCorpus(html);
   assert.deepEqual(names(result), ["Vimeo"]);
+});
+
+test("Vimeo event/showcase embed is a player, a bare event link is not", () => {
+  const embed = `<iframe src="https://vimeo.com/event/1234567/embed/abcdef"></iframe>`;
+  assert.deepEqual(names(detectFromCorpus(embed)), ["Vimeo"]);
+  const showcase = `<iframe src="https://vimeo.com/showcase/7654321/embed"></iframe>`;
+  assert.deepEqual(names(detectFromCorpus(showcase)), ["Vimeo"]);
+  const link = `<p>Kijk live mee: &lt;a href="https://vimeo.com/event/1234567"&gt;link&lt;/a&gt;</p>`;
+  assert.deepEqual(names(detectFromCorpus(link)), []);
+  // The match may not run across markup to reach a later /embed.
+  const spanning = `<a href=x>vimeo.com/event/1234567</a><b>/embed</b>`;
+  assert.deepEqual(names(detectFromCorpus(spanning)), []);
 });
 
 test("Kaltura kWidget.addReadyCallback still detected (self-hosted, no kaltura.com)", () => {
@@ -209,10 +239,9 @@ test("Kaltura kWidget.addReadyCallback still detected (self-hosted, no kaltura.c
   assert.deepEqual(names(result), ["Kaltura"]);
 });
 
-test("zoekWidget.embed is NOT Kaltura (word boundary + case)", () => {
-  const html = `<script>zoekWidget.embed({}); mijnkWidget.embed();</script>`;
-  const result = detectFromCorpus(html);
-  assert.deepEqual(names(result), []);
+test("a word ending in kWidget is NOT Kaltura (word boundary)", () => {
+  assert.deepEqual(names(detectFromCorpus(`<script>zoekWidget.embed({});</script>`)), []);
+  assert.deepEqual(names(detectFromCorpus(`<script>mijnkWidget.embed();</script>`)), []);
 });
 
 // ── Non-video socials must not annihilate real players ───────────────
