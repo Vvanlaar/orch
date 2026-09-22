@@ -660,7 +660,11 @@ async function wrapUpBatchInner(batchId: string): Promise<WrapUpResult> {
     mergedDomains.push(domain);
   }
 
-  const after = (await listScans()).filter(s => s.batchId === batchId);
+  // Derived scans are excluded: an earlier wrap-up's summary carries the same
+  // batchId, and mergeScansData keeps whichever entry has more players per URL.
+  // Feeding a stale summary back in therefore resurrects detections that were
+  // since corrected in the sources, so a re-wrap must rebuild from them alone.
+  const after = (await listScans()).filter(s => s.batchId === batchId && !isDerivedScan(s.filename));
   if (after.length === 0) throw new Error(`No scans left in batch ${batchId} after merge step`);
   await ensureLocal(after.map(s => s.filename));
 

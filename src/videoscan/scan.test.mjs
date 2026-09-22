@@ -169,6 +169,52 @@ test("YouTube embed iframe still detected (guard against over-removal)", () => {
   assert.deepEqual(names(result), ["YouTube"]);
 });
 
+test("Vimeo share link (vimeo.com/<id>) is NOT a player", () => {
+  // Same trap as youtu.be: archief/raadsinformatie pages carried the recording
+  // URL in escaped body text and an Outlook deeplink, with no player on them.
+  const html = `<p>Bekijk de opname: &lt;a href="https://vimeo.com/461441500/bfcbfb5945"&gt;link&lt;/a&gt;</p>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), []);
+});
+
+test("Vimeo embed iframe still detected (guard against over-removal)", () => {
+  const html = `<iframe src="https://player.vimeo.com/video/461441500"></iframe>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), ["Vimeo"]);
+});
+
+test("zoekwidget is NOT Kaltura", () => {
+  // /kWidget/i matched the tail of "zoekwidget1.php" — an unrelated Netwerk
+  // Oorlogsbronnen search widget — and flagged three video-less news pages.
+  const html = `<iframe src="http://www.netwerkoorlogsbronnen.nl/publications/zoekwidget1.php"></iframe>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), []);
+});
+
+test("Kaltura kWidget.embed still detected", () => {
+  const html = `<div id="kaltura_player"></div><script>kWidget.embed({targetId: "kaltura_player", wid: "_1234"});</script>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), ["Kaltura"]);
+});
+
+test("Vimeo embed path still detected (guard against over-removal)", () => {
+  const html = `<div data-vimeo-id="461441500"></div><iframe src="https://vimeo.com/video/461441500"></iframe>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), ["Vimeo"]);
+});
+
+test("Kaltura kWidget.addReadyCallback still detected (self-hosted, no kaltura.com)", () => {
+  const html = `<div id="kaltura_player"></div><script>kWidget.addReadyCallback(function (id) {});</script>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), ["Kaltura"]);
+});
+
+test("zoekWidget.embed is NOT Kaltura (word boundary + case)", () => {
+  const html = `<script>zoekWidget.embed({}); mijnkWidget.embed();</script>`;
+  const result = detectFromCorpus(html);
+  assert.deepEqual(names(result), []);
+});
+
 // ── Non-video socials must not annihilate real players ───────────────
 // Regression: filterToHighestTier used to run first, so an unconfirmed tier-2
 // social embed dropped every lower-tier player, and filterNonVideoSocials then

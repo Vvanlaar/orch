@@ -61,7 +61,12 @@ export const DETECTORS = {
     patterns: [
       /kaltura\.com/i,
       /cdnapisec\.kaltura/i,
-      /kWidget/i,
+      // NB: case-sensitive, word-anchored, and followed by the API dot. A bare
+      // /kWidget/i matched the substring anywhere — `zoekwidget1.php`, an
+      // unrelated search widget — and flagged pages with no video at all.
+      // Relies on the corpus never being lowercased: extractEncodedMarkup
+      // lowercases only for needle tests, the markup it pushes keeps its case.
+      /\bkWidget\s*\./,
       /kaltura-player/i,
     ],
     scripts: [/kaltura\.com/i],
@@ -203,7 +208,9 @@ export const DETECTORS = {
     patterns: [
       /player\.vimeo\.com/i,
       /vimeo\.com\/video/i,
-      /vimeo\.com\/\d+/i,
+      // NB: no bare /vimeo\.com\/\d+/ — same trap as the youtu.be link shape
+      // above: a share/watch URL, never an embed src. It fired on pages that
+      // only linked to a Vimeo recording from body text or a JSON payload.
       /vimeocdn\.com/i,
       /data-vimeo-id/i,
       /data-vimeo-url/i,
