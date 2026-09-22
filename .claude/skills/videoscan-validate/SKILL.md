@@ -114,20 +114,23 @@ curl -s -o /dev/null -w "%{http_code} %{content_type}\n" "<media url>"
 ### 3a. The detector (`src/videoscan/scan.mjs`)
 
 Players live in one object of `{ patterns: [...], scripts: [...] }`. Read the
-patterns for the player you disproved before writing anything — which of these
-two shapes you are looking at decides the fix, and whether either has already
-been dealt with depends on the branch you are on:
+patterns for the player you disproved before writing anything — the shape of
+the false positive decides the fix. Two shapes have bitten this scanner
+already, and the comment beside each surviving pattern records which string
+fooled it:
 
-- **Unanchored substring.** `/kWidget/i` matches the tail of `zoekwidget1.php`,
-  an unrelated search widget. Anchor on the real API shape and drop `/i` when
-  the vendor spells it in camelCase:
-  `/\bkWidget\s*\.\s*(?:embed|thumbEmbed)/`.
+- **Unanchored substring.** `/kWidget/i` matched the tail of `zoekwidget1.php`,
+  an unrelated search widget. Now `/\bkWidget\s*\./`: word-anchored, followed by
+  the API dot, and case-sensitive because the vendor spells it in camelCase
+  (which holds only as long as the corpus keeps its case — `extractEncodedMarkup`
+  lowercases for needle tests only).
 - **Share link mistaken for an embed.** `/vimeo\.com\/\d+/i` and `/youtu\.be\//i`
-  fire on pages that merely link to a recording. `stripAnchorHrefs` only strips
-  `<a href>`, so the URL still reaches the corpus from body text, JSON and
-  `data-*`. Delete the pattern; keep the embed shapes (`player.vimeo.com`,
-  `youtube.com/embed`, `vimeocdn.com`, `data-vimeo-id`) and, where the platform
-  has them, the embed-only paths (`vimeo.com/event/<id>/embed`).
+  fired on pages that merely linked to a recording. `stripAnchorHrefs` only
+  strips `<a href>`, so the URL still reaches the corpus from body text, JSON
+  and `data-*`. Both are gone; the embed shapes stayed (`player.vimeo.com`,
+  `youtube.com/embed`, `vimeocdn.com`, `data-vimeo-id`) and the embed-only
+  paths a share link cannot reach were added
+  (`vimeo.com/event|showcase/<id>/embed`).
 
 Rules for a fix: narrow the pattern, never the detector — the player must still
 be found on a real embed. Leave a one-line comment saying which string fooled
