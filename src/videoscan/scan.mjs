@@ -678,21 +678,16 @@ export function shouldSkipUrl(url) {
 
 // Discover URLs via robots.txt → sitemap (handles sitemapindex recursion).
 // Returns same-domain, non-skip URLs only. Best-effort: any error → empty.
-async function discoverSitemapUrls(startUrl, domain, { maxUrls = 5000, fetchTimeout = 30000 } = {}) {
+export async function discoverSitemapUrls(startUrl, domain, { maxUrls = 5000, fetchTimeout = 30000 } = {}) {
   const origin = new URL(startUrl).origin;
   const targetProtocol = new URL(startUrl).protocol;
   const sitemapCandidates = new Set();
 
   // 1. Try robots.txt first
-  try {
-    const robotsRes = await fetchWithTimeout(`${origin}/robots.txt`, fetchTimeout);
-    if (robotsRes?.ok) {
-      const text = await robotsRes.text();
-      for (const m of text.matchAll(/^\s*Sitemap:\s*(\S+)/gim)) {
-        sitemapCandidates.add(m[1].trim());
-      }
-    }
-  } catch {}
+  const robots = await fetchText(`${origin}/robots.txt`, fetchTimeout);
+  for (const m of (robots || "").matchAll(/^\s*Sitemap:\s*(\S+)/gim)) {
+    sitemapCandidates.add(m[1].trim());
+  }
 
   // 2. Fallback to common locations
   if (sitemapCandidates.size === 0) {
@@ -700,61 +695,157 @@ async function discoverSitemapUrls(startUrl, domain, { maxUrls = 5000, fetchTime
     sitemapCandidates.add(`${origin}/sitemap`);
   }
 
-  const visitedSitemaps = new Set();
-  const found = new Set();
   const MAX_SITEMAP_DEPTH = 3;
+  // Fetched one after another before the crawl starts
+  const MAX_SITEMAP_FETCHES = 100;
+  const visitedSitemaps = new Set();
+  const urlsets = [];
+  let urlsetTotal = 0;
+  let fetches = 0;
 
-  async function processSitemap(url, depth = 0) {
-    if (depth > MAX_SITEMAP_DEPTH || visitedSitemaps.has(url) || found.size >= maxUrls) return;
-    visitedSitemaps.add(url);
-    let xml;
-    try {
-      const res = await fetchWithTimeout(url, fetchTimeout);
-      if (!res?.ok) return;
-      xml = await res.text();
-    } catch { return; }
-
-    const isIndex = /<sitemapindex\b/i.test(xml);
-    const locs = [...xml.matchAll(/<loc>\s*([^<]+?)\s*<\/loc>/gi)].map((m) => m[1]);
-    if (isIndex) {
-      for (const loc of locs) {
-        if (found.size >= maxUrls) break;
-        // Only follow sub-sitemaps on the same domain to avoid arbitrary outbound fetches
-        if (!isSameDomain(loc.replace(/^https?:/, targetProtocol), domain)) continue;
-        await processSitemap(loc, depth + 1);
-      }
-    } else {
-      for (const loc of locs) {
-        if (found.size >= maxUrls) break;
-        // Normalize scheme to match the site's protocol (sitemaps often use http://)
-        const schemeMatched = loc.replace(/^https?:/, targetProtocol);
-        const normalized = normalizeUrl(schemeMatched, startUrl);
-        if (normalized && isSameDomain(normalized, domain) && !shouldSkipUrl(normalized)) {
-          found.add(normalized);
-        }
-      }
+  // Normalized while parsing: a raw loc is a slice of the sitemap document and
+  // would keep all of it in memory. No one urlset can add more than maxUrls.
+  function toUrls(locs) {
+    const urls = [];
+    for (const loc of locs) {
+      if (urls.length >= maxUrls) break;
+      // Normalize scheme to match the site's protocol (sitemaps often use http://)
+      const normalized = normalizeUrl(loc.replace(/^https?:/, targetProtocol), startUrl);
+      if (normalized && isSameDomain(normalized, domain) && !shouldSkipUrl(normalized)) urls.push(normalized);
     }
+    return urls;
   }
 
-  for (const sm of sitemapCandidates) {
-    if (found.size >= maxUrls) break;
-    await processSitemap(sm);
+  // Level by level through the index tree, so an index of years → months
+  // spends the fetch budget on months across all years, not on the first
+  // year's. Per level: one sitemap of each kind first, then the rest spread,
+  // until every kind is in and the urlsets hold enough to fill the cap.
+  let level = [...sitemapCandidates];
+  let unfetched = 0;
+  for (let depth = 0; depth <= MAX_SITEMAP_DEPTH && level.length > 0; depth++) {
+    const { ordered, kinds } = orderSitemaps(level);
+    const next = [];
+    for (let i = 0; i < ordered.length; i++) {
+      if (i >= kinds && urlsetTotal >= maxUrls) break;
+      if (fetches >= MAX_SITEMAP_FETCHES) {
+        unfetched += ordered.length - i;
+        break;
+      }
+      const url = ordered[i];
+      if (visitedSitemaps.has(url)) continue;
+      visitedSitemaps.add(url);
+      fetches++;
+      const xml = await fetchText(url, fetchTimeout);
+      if (!xml) continue;
+      const locs = parseLocs(xml);
+      if (/<sitemapindex\b/i.test(xml)) {
+        for (const loc of locs) {
+          // Only follow sub-sitemaps on the same domain to avoid arbitrary outbound fetches
+          if (isSameDomain(loc.replace(/^https?:/, targetProtocol), domain)) next.push(loc);
+        }
+      } else {
+        const urls = toUrls(spreadPick(locs, locs.length));
+        urlsets.push(urls);
+        urlsetTotal += urls.length;
+      }
+    }
+    if (fetches >= MAX_SITEMAP_FETCHES) {
+      unfetched += next.length;
+      break;
+    }
+    level = next;
+  }
+  if (unfetched > 0) {
+    console.log(chalk.gray(`  Sitemap: fetch budget (${MAX_SITEMAP_FETCHES}) reached, ${unfetched} sitemap(s) not fetched`));
+  }
+
+  // Sitemaps are split by content type, so filling the cap front to back fills
+  // it with whatever comes first — often one news archive. Round-robin over
+  // the urlsets instead: each gets an even share, and what a small one can't
+  // use goes to the others.
+  const found = new Set();
+  for (let i = 0, more = true; more && found.size < maxUrls; i++) {
+    more = false;
+    for (const urls of urlsets) {
+      if (i >= urls.length || found.size >= maxUrls) continue;
+      found.add(urls[i]);
+      more = true;
+    }
   }
   return [...found];
 }
 
-async function fetchWithTimeout(url, timeoutMs) {
+// <loc> text, unescaped. TYPO3 index entries carry ?page=1&amp;sitemap=…&amp;cHash=…
+// and WordPress core uses &#038;; fetched still escaped, the query breaks and
+// the child comes back empty. Some generators wrap the URL in CDATA.
+function parseLocs(xml) {
+  return [...xml.matchAll(/<loc>\s*(?:<!\[CDATA\[\s*)?([^<]+?)\s*(?:\]\]>\s*)?<\/loc>/gi)].map((m) =>
+    decodeXmlEntities(m[1]),
+  );
+}
+
+const XML_ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+
+export function decodeXmlEntities(text) {
+  return text.replace(/&(?:(amp|lt|gt|quot|apos)|#(\d+)|#[xX]([0-9a-fA-F]+));/g, (entity, name, dec, hex) => {
+    if (name) return XML_ENTITIES[name];
+    const code = dec ? Number(dec) : parseInt(hex, 16);
+    return code <= 0x10ffff ? String.fromCodePoint(code) : entity;
+  });
+}
+
+// An index often lists one archive in numbered parts (post-sitemap1..60) next
+// to a handful of other kinds. A positional spread over 61 children can skip
+// the lone page-sitemap, so order one of each kind first, then the rest
+// spread. Kind = the URL minus digit runs and hash tokens (TYPO3's cHash).
+export function orderSitemaps(urls) {
+  const firstOfKind = new Map();
+  for (const url of urls) {
+    const kind = url.replace(/[0-9a-f]{8,}/gi, "").replace(/\d+/g, "");
+    if (!firstOfKind.has(kind)) firstOfKind.set(kind, url);
+  }
+  const ordered = new Set(spreadPick([...firstOfKind.values()], firstOfKind.size));
+  for (const url of spreadPick(urls, urls.length)) ordered.add(url);
+  return { ordered: [...ordered], kinds: firstOfKind.size };
+}
+
+// Order a list so every prefix is spread across it: 0, ½, ¼, ¾, ⅛, … Cutting
+// the result anywhere still samples the whole list rather than its head.
+export function spreadPick(list, n) {
+  const count = Math.min(n, list.length);
+  const out = [];
+  const taken = new Set();
+  const take = (idx) => {
+    if (!taken.has(idx)) {
+      taken.add(idx);
+      out.push(list[idx]);
+    }
+  };
+  if (count > 0) take(0);
+  // Once 2·step exceeds the list length every index has been hit, so this ends.
+  for (let step = 1; out.length < count; step *= 2) {
+    for (let k = 1; k < 2 * step && out.length < count; k += 2) take(Math.floor((k * list.length) / (2 * step)));
+  }
+  return out;
+}
+
+// Body as text, or null on any failure. The timeout covers the body too: a
+// stalled sitemap body would otherwise hang discovery with no output.
+async function fetchText(url, timeoutMs) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    return await fetch(url, { signal: ctrl.signal, redirect: "follow" });
+    const res = await fetch(url, { signal: ctrl.signal, redirect: "follow" });
+    return res.ok ? await res.text() : null;
+  } catch {
+    return null;
   } finally {
     clearTimeout(timer);
   }
 }
 
 // Pages with these path segments are more likely to have video content.
-// We prioritize them in the crawl queue so they get scanned first.
+// orderQueue moves such a URL up in its section (see there).
 const VIDEO_LIKELY_PATHS = [
   /video/i, /media/i, /blog/i, /nieuws/i, /news/i, /podcast/i,
   /over-/i, /about/i, /campagne/i, /campaign/i, /verhaal/i, /story/i,
@@ -762,25 +853,97 @@ const VIDEO_LIKELY_PATHS = [
   /academy/i, /training/i, /demo/i, /tutorial/i, /case/i,
 ];
 
-function prioritizeUrls(urls) {
-  const high = [];
-  const normal = [];
-  for (const url of urls) {
-    if (VIDEO_LIKELY_PATHS.some((p) => p.test(url))) {
-      high.push(url);
-    } else {
-      normal.push(url);
-    }
+// A language prefix is not a section: /nl/wonen and /nl/nieuws are two.
+const LANG_SEGMENT = /^(nl|en|de|fr|fy|es|it|pl|tr|ar|nl-nl|nl-be|fr-be|en-gb|en-us)$/i;
+
+// Section = first path segment under which the page sits. A top-level page
+// (/contact, /nieuws itself) has no section of its own and shares "".
+export function urlSection(url) {
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return { section: "", depth: 0, path: "" };
   }
-  return [...high, ...normal];
+  let segs = u.pathname.split("/").filter(Boolean);
+  if (segs.length && LANG_SEGMENT.test(segs[0])) segs = segs.slice(1);
+  return { section: segs.length > 1 ? segs[0].toLowerCase() : "", depth: segs.length, path: u.pathname + u.search };
+}
+
+// FNV-1a: a stable pseudo-random rank, so the order within a section depends
+// only on the URL — never on the queue order it arrived in. Reordering every
+// batch must converge, not reshuffle.
+function hashUrl(url) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < url.length; i++) h = Math.imul(h ^ url.charCodeAt(i), 0x01000193);
+  return h >>> 0;
+}
+
+// The queue is re-ordered after every batch, so parse each URL once, not once
+// per batch. Once full it stops growing instead of clearing: a crawl past the
+// cap re-parses only its excess, where clearing would re-parse everything on
+// every batch.
+const urlMetaCache = new Map();
+const URL_META_CACHE_MAX = 500_000;
+
+function urlMeta(url) {
+  let meta = urlMetaCache.get(url);
+  if (!meta) {
+    const { section, depth, path } = urlSection(url);
+    // The path, not the host: on media.x.nl every URL would match, which
+    // makes the weight meaningless
+    meta = { section, depth, hash: hashUrl(url), weight: VIDEO_LIKELY_PATHS.some((p) => p.test(path)) ? 2 : 1 };
+    if (urlMetaCache.size < URL_META_CACHE_MAX) urlMetaCache.set(url, meta);
+  }
+  return meta;
+}
+
+// Order the queue so a capped crawl samples every section of the site instead
+// of spending its whole budget in one. A URL's rank is roughly how many pages
+// its section will have had scanned when its turn comes; lowest rank goes
+// first, so under-sampled sections catch up. A video-likely URL's rank is
+// halved, which moves it up. Within a section: hub pages before deep ones,
+// then a hash-spread sample rather than the first N of a 5,000-item archive.
+export function orderQueue(urls, visited = []) {
+  const scanned = new Map();
+  for (const url of visited) {
+    const { section } = urlMeta(url);
+    scanned.set(section, (scanned.get(section) || 0) + 1);
+  }
+  const items = [];
+  const buckets = new Map();
+  for (const url of urls) {
+    const { section, depth, hash, weight } = urlMeta(url);
+    const item = { url, depth, hash, weight, rank: 0 };
+    items.push(item);
+    const bucket = buckets.get(section);
+    if (bucket) bucket.push(item);
+    else buckets.set(section, [item]);
+  }
+  for (const [section, bucket] of buckets) {
+    bucket.sort((a, b) => a.depth - b.depth || a.hash - b.hash);
+    const base = scanned.get(section) || 0;
+    for (let i = 0; i < bucket.length; i++) bucket[i].rank = (base + i) / bucket[i].weight;
+  }
+  items.sort((a, b) => a.rank - b.rank || b.weight - a.weight || a.depth - b.depth || a.hash - b.hash);
+  return items.map((item) => item.url);
 }
 
 // Reorder the crawl queue in place. Not `queue.splice(0, n, ...ordered)`: a
 // spread passes every URL as a call argument and V8 overflows the stack near
 // 125k — which killed three Tilburg crawls the moment their queue got there.
-export function reprioritizeQueue(queue) {
-  const ordered = prioritizeUrls(queue);
+export function reprioritizeQueue(queue, visited = []) {
+  const ordered = orderQueue(queue, visited);
   for (let i = 0; i < ordered.length; i++) queue[i] = ordered[i];
+}
+
+// Re-sort the queue, then put the rate-limited URLs in front. They are held
+// out until after the sort, which would otherwise file them back under their
+// section, where a capped crawl may never reach them.
+export function rebalanceQueue(queue, visited, retryNext) {
+  reprioritizeQueue(queue, visited);
+  queue.unshift(...retryNext);
+  retryNext.length = 0;
 }
 
 async function acceptCookies(page) {
@@ -1703,6 +1866,9 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
 
   setupInterruptHandler();
 
+  // Rate-limited URLs waiting for rebalanceQueue to put them in front
+  const retryNext = [];
+
   // Accept cookies on first page before parallel scanning
   const firstUrl = queue.shift();
   if (firstUrl && !visited.has(firstUrl)) {
@@ -1721,19 +1887,21 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       }
       results.push({ url: firstUrl, players: detected });
 
-      const newLinks = [];
+      // A Set: header and footer both link /contact, and the re-sort puts
+      // identical URLs side by side, so both copies would land in one batch
+      const newLinks = new Set();
       for (const link of links) {
         const norm = normalizeUrl(link, firstUrl);
         if (norm && !visited.has(norm) && !queue.includes(norm) && isSameDomain(norm, domain) && !shouldSkipUrl(norm)) {
-          newLinks.push(norm);
+          newLinks.add(norm);
         }
       }
-      queue.push(...prioritizeUrls(newLinks));
+      for (const link of newLinks) queue.push(link);
     } catch (err) {
       if (err._rateLimit) {
         onRateLimit(throttle, firstUrl, err._rateLimit);
         visited.delete(firstUrl);
-        queue.unshift(firstUrl);
+        retryNext.push(firstUrl);
         console.log(chalk.yellow(`  ⚠ First page rate-limited, will retry`));
       } else {
         console.log(chalk.red(`  ERROR: ${err.message.slice(0, 60)}`));
@@ -1743,11 +1911,16 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   }
 
   // Parallel crawl loop
-  const queuedSet = new Set(queue);
+  const queuedSet = new Set([...queue, ...retryNext]);
 
   // Seed queue from sitemap (skip when resuming — already in state)
   if (sitemap && !resumeFile) {
-    const sitemapUrls = await discoverSitemapUrls(startUrl, domain, { maxUrls: maxSitemapUrls }).catch(() => []);
+    const sitemapUrls = await discoverSitemapUrls(startUrl, domain, { maxUrls: maxSitemapUrls }).catch((err) => {
+      // Fetch failures already come back empty, so this is a bug: say so
+      // rather than report it as "none found"
+      console.log(chalk.yellow(`  Sitemap: discovery failed: ${err.message}`));
+      return [];
+    });
     let added = 0;
     for (const u of sitemapUrls) {
       if (!visited.has(u) && !queuedSet.has(u)) {
@@ -1757,12 +1930,13 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       }
     }
     if (added > 0) {
-      reprioritizeQueue(queue);
       console.log(chalk.gray(`  Sitemap: ${sitemapUrls.length} URLs found, ${added} new added to queue`));
     } else if (sitemapUrls.length === 0) {
       console.log(chalk.gray(`  Sitemap: none found (or unreachable)`));
     }
   }
+  // Also re-sorts a resumed queue, stored in whatever order the last run left it
+  rebalanceQueue(queue, visited, retryNext);
 
   let batchNum = 0;
   let lastProgressAt = Date.now();
@@ -1840,8 +2014,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
           const retries = retryCount.get(url) || 0;
           if (retries < MAX_RETRIES) {
             retryCount.set(url, retries + 1);
-            queue.unshift(url); // push to front for retry
-            queuedSet.add(url);
+            retryNext.push(url);
           } else {
             console.log(chalk.red(`  ✗ ${truncate(url, 65)}  permanently failed (${MAX_RETRIES} retries)`));
             results.push({ url, players: [], error: `Rate limited: ${err._rateLimit} (max retries)` });
@@ -1852,6 +2025,11 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
         }
       }
     }
+
+    // Re-balance after each batch: new links join their section, and the
+    // sections just scanned drop back behind the ones still under-sampled.
+    // Before the checkpoint, so it stores the sorted queue and the retries.
+    rebalanceQueue(queue, visited, retryNext);
 
     // Recovery check: if no rate limits this batch and cooldown expired
     if (!batchHadRateLimit && throttle.rateLimitHits > 0) {
@@ -1870,9 +2048,6 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       lastProgressAt = Date.now();
       writeCheckpoint(domain, results, visited, queue);
     }
-
-    // Re-prioritize remaining queue after each batch (new video-likely URLs bubble up)
-    reprioritizeQueue(queue);
 
     // Recycle the browser between batches once we've scanned enough pages — a
     // fresh process resets accumulated state / a degraded DNS resolver. Safe
