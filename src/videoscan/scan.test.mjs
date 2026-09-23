@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, normalizeUrl } from "./scan.mjs";
+import { detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, normalizeUrl, reprioritizeQueue } from "./scan.mjs";
 
 const names = (result) => result.map((r) => r.player).sort();
 
@@ -637,4 +637,36 @@ test("Empty meeting page with no data-video-type → no players", () => {
   const html = `<div class="box-content"><h2>Agendapunten</h2><ol><li>Opening</li></ol></div>`;
   const result = detectFromCorpus(html);
   assert.deepEqual(names(result), []);
+});
+
+test("reprioritizeQueue survives a queue past V8's spread-argument limit", () => {
+  // 124k–125k queued URLs overflowed the stack when the queue was spread into
+  // splice(); sportintilburg, leerplicht… and werkenvoortilburg all died there.
+  const queue = Array.from({ length: 200_000 }, (_, i) => `https://example.nl/page/${i}`);
+  queue.push("https://example.nl/video/intro");
+  assert.doesNotThrow(() => reprioritizeQueue(queue));
+  assert.equal(queue.length, 200_001);
+  assert.equal(queue[0], "https://example.nl/video/intro");
+});
+
+// WP Rocket's lazyload boilerplate, inlined on every page of a WP Rocket site
+// whether or not it embeds anything (readspeaker.com: 1397 pages).
+const WP_ROCKET_BOILERPLATE =
+  '<style id="rocket-lazyload-inline-css">.rll-youtube-player{position:relative;padding-bottom:56.23%}' +
+  ".rll-youtube-player iframe{position:absolute}</style>" +
+  `<script>function lazyLoadThumb(e,alt,l){var t='<img src="https://i.ytimg.com/vi_webp/ID/hqdefault.webp">'}` +
+  'var a=document.getElementsByClassName("rll-youtube-player");</script>';
+
+test("WP Rocket lazyload boilerplate alone → no YouTube", () => {
+  assert.deepEqual(names(detectFromCorpus(WP_ROCKET_BOILERPLATE)), []);
+});
+
+test("WP Rocket lazy YouTube placeholder element → YouTube", () => {
+  const html = WP_ROCKET_BOILERPLATE + '<div class="rll-youtube-player" data-id="6a-2QWvNhWY" data-query=""></div>';
+  assert.deepEqual(names(detectFromCorpus(html)), ["YouTube"]);
+});
+
+test("YouTube thumbnail of a real video id → YouTube", () => {
+  const html = WP_ROCKET_BOILERPLATE + '<img src="https://i.ytimg.com/vi/6a-2QWvNhWY/hqdefault.jpg">';
+  assert.deepEqual(names(detectFromCorpus(html)), ["YouTube"]);
 });

@@ -194,13 +194,17 @@ export const DETECTORS = {
       // NB: no bare /youtu\.be\// — that's a share/watch link domain, never an
       // embed src. It fired on plain links (stripAnchorHrefs only strips <a href>,
       // not data-*/text/JSON), flagging pages that merely link to YouTube.
-      /ytimg\.com/i,
+      // Thumbnail of one specific video, not bare /ytimg\.com/: WP Rocket inlines
+      // the template 'i.ytimg.com/vi_webp/ID/hqdefault.webp' on every page.
+      /ytimg\.com\/vi(?:_webp)?\/[\w-]{11}\//i,
       /youtube\.com\/iframe_api/i,
       /yt-video/i,
       /class="youtube/i,
       /data-youtube-id/i,
       /data-youtube-video-id/i,
-      /youtube-player/i,
+      // As an element's class/id, not bare /youtube-player/: WP Rocket's inline
+      // CSS '.rll-youtube-player{…}' ships on every page of the site.
+      /(?:class|id)=["'][^"']*\byoutube-player\b/i,
     ],
     scripts: [/youtube\.com/i, /ytimg\.com/i],
   },
@@ -736,6 +740,14 @@ function prioritizeUrls(urls) {
     }
   }
   return [...high, ...normal];
+}
+
+// Reorder the crawl queue in place. Not `queue.splice(0, n, ...ordered)`: a
+// spread passes every URL as a call argument and V8 overflows the stack near
+// 125k — which killed three Tilburg crawls the moment their queue got there.
+export function reprioritizeQueue(queue) {
+  const ordered = prioritizeUrls(queue);
+  for (let i = 0; i < ordered.length; i++) queue[i] = ordered[i];
 }
 
 async function acceptCookies(page) {
@@ -1699,7 +1711,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       }
     }
     if (added > 0) {
-      queue.splice(0, queue.length, ...prioritizeUrls(queue));
+      reprioritizeQueue(queue);
       console.log(chalk.gray(`  Sitemap: ${sitemapUrls.length} URLs found, ${added} new added to queue`));
     } else if (sitemapUrls.length === 0) {
       console.log(chalk.gray(`  Sitemap: none found (or unreachable)`));
@@ -1814,7 +1826,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     }
 
     // Re-prioritize remaining queue after each batch (new video-likely URLs bubble up)
-    queue.splice(0, queue.length, ...prioritizeUrls(queue));
+    reprioritizeQueue(queue);
 
     // Recycle the browser between batches once we've scanned enough pages — a
     // fresh process resets accumulated state / a degraded DNS resolver. Safe

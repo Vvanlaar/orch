@@ -5,7 +5,11 @@
 // such player.
 //
 //   node scan-prune.mjs <file|batch|domain> --player Kaltura [--evidence kwidget]
-//                       [--url-contains /nieuws] [--apply]
+//                       [--only-evidence "HTML: a,HTML: b"] [--url-contains /nieuws] [--apply]
+//
+// --evidence drops a detection when ANY evidence string contains it.
+// --only-evidence drops it only when EVERY evidence string contains one of the
+// comma-separated needles — for boilerplate that real embeds also carry.
 //
 // Default is a dry run. --apply rewrites the JSONs (a .bak copy is kept) and
 // prints which reports to regenerate.
@@ -14,7 +18,7 @@ import { copyFileSync, existsSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { readJson, resolveTarget, videoscanDir } from './lib.mjs';
 
-const VALUE_FLAGS = new Set(['--player', '--evidence', '--url-contains']);
+const VALUE_FLAGS = new Set(['--player', '--evidence', '--only-evidence', '--url-contains']);
 const opts = {};
 let target;
 const args = process.argv.slice(2);
@@ -24,10 +28,11 @@ for (let i = 0; i < args.length; i++) {
   else if (a === '--apply') opts.apply = true;
   else if (!a.startsWith('--')) target ??= a;
 }
-const { player, evidence, 'url-contains': urlContains, apply } = opts;
+const { player, evidence, 'only-evidence': onlyEvidence, 'url-contains': urlContains, apply } = opts;
+const onlyNeedles = onlyEvidence?.split(',').map(n => n.trim().toLowerCase()).filter(Boolean);
 
 if (!target || !player) {
-  console.error('usage: scan-prune.mjs <file|batch|domain> --player <name> [--evidence <substr>] [--url-contains <substr>] [--apply]');
+  console.error('usage: scan-prune.mjs <file|batch|domain> --player <name> [--evidence <substr>] [--only-evidence <a,b>] [--url-contains <substr>] [--apply]');
   process.exit(2);
 }
 
@@ -53,6 +58,7 @@ for (const s of scans) {
     const players = row.players.filter(p => {
       if (p.name !== player) return true;
       if (evidence && !(p.evidence || []).some(e => e.toLowerCase().includes(evidence.toLowerCase()))) return true;
+      if (onlyNeedles && !(p.evidence?.length && p.evidence.every(e => onlyNeedles.some(n => e.toLowerCase().includes(n))))) return true;
       return false;
     });
     dropped += before - players.length;
