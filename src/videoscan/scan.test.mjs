@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, normalizeUrl, reprioritizeQueue } from "./scan.mjs";
+import { detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, normalizeUrl, reprioritizeQueue, recordSubresource } from "./scan.mjs";
 
 const names = (result) => result.map((r) => r.player).sort();
 
@@ -294,10 +294,11 @@ test("Network evidence keeps the matched token when the URL is truncated", () =>
   // positive undiagnosable from the stored report).
   // The filler length is tuned so "vjs" lands past the 80-char URL cut; if
   // that cut ever changes, lengthen it or this stops testing truncation.
+  // The token sits in the path: `scripts` patterns never see the query string.
   const url =
     "https://example.nl/sites/default/files/js/js_" +
     "A".repeat(43) +
-    ".js?include=xx_vjs-yy";
+    "/xx_vjs-yy.js?v=1";
   const result = detectPlayers("<p>x</p>", [url]);
   const evidence = result.flatMap((r) => r.evidence);
   assert.deepEqual(names(result), ["Video.js"]);
@@ -332,7 +333,7 @@ test("Network evidence: a match straddling the 80-char cut still gets a window",
   // Starts before the cut, ends after it — the branch keys off the match END
   // for exactly this case; keying off match.index would drop the window and
   // leave the evidence showing only the first half of what fired.
-  const url = "https://example.com/" + "b".repeat(56) + "video.js?x=1";
+  const url = "https://example.com/" + "b".repeat(55) + "/video.js?x=1";
   const result = detectPlayers("<p>x</p>", [url]);
   const evidence = result.flatMap((r) => r.evidence);
   assert.deepEqual(names(result), ["Video.js"]);
@@ -669,4 +670,151 @@ test("WP Rocket lazy YouTube placeholder element → YouTube", () => {
 test("YouTube thumbnail of a real video id → YouTube", () => {
   const html = WP_ROCKET_BOILERPLATE + '<img src="https://i.ytimg.com/vi/6a-2QWvNhWY/hqdefault.jpg">';
   assert.deepEqual(names(detectFromCorpus(html)), ["YouTube"]);
+});
+
+// ── OpenGemeenten: the CMS brand is not the player ─────────────────
+// Verbatim shape of nieuwegein.nl's head: every page of the site carries it.
+const OPENGEMEENTEN_CMS =
+  '<!-- TYPO3 website by OpenGemeenten, www.opengemeenten.nl. Hosting by Cobytes -->' +
+  '<script defer src="/_assets/317130fb/Js/OpenGemeentenSite-Media.min.js?1789965298"></script>';
+
+test("OpenGemeenten CMS signature alone is NOT a player", () => {
+  const network = ["https://www.nieuwegein.nl/_assets/317130fb/Js/OpenGemeentenSite-Media.min.js?1789965298"];
+  assert.deepEqual(names(detectFromCorpus(OPENGEMEENTEN_CMS, "", network)), []);
+});
+
+test("OpenGemeenten CMS signature does not hide a real YouTube embed", () => {
+  const html = OPENGEMEENTEN_CMS + '<iframe src="https://www.youtube-nocookie.com/embed/6a-2QWvNhWY"></iframe>';
+  assert.deepEqual(names(detectFromCorpus(html)), ["YouTube"]);
+});
+
+test("OpenGemeenten Mediaplayer content element still detected", () => {
+  const html = OPENGEMEENTEN_CMS +
+    '<script src="/_assets/8916/Js/OpenGemeentenMediaPlayer-MediaPlayer.min.js?1789965336"></script>' +
+    '<div class="mediaplayer__container flow"><video class="mejs__player"><source src="/fileadmin/Videos/a.mp4" type="video/mp4"></video></div>';
+  assert.deepEqual(names(detectFromCorpus(html)), ["OpenGemeenten"]);
+});
+
+// ── TikTok / Spotify: pixels and share links are not embeds ────────
+test("TikTok ad pixel is NOT a TikTok player (and does not hide a <video>)", () => {
+  const network = ["https://analytics.tiktok.com/i18n/pixel/events.js?sdkid=CVE38T3C77U2KF3E5SQG&lib=ttq"];
+  assert.deepEqual(names(detectFromCorpus('<video src="/a.mp4"></video>', "", network)), ["HTML5 native"]);
+});
+
+test("TikTok embed still detected", () => {
+  const html = '<blockquote class="tiktok-embed" cite="https://www.tiktok.com/@x/video/1"></blockquote>';
+  const network = ["https://www.tiktok.com/embed.js"];
+  assert.deepEqual(names(detectFromCorpus(html, "", network)), ["TikTok"]);
+});
+
+test("Spotify show link in a social-links JSON is NOT a player", () => {
+  const html = '<script>{"tiktok":"https://www.tiktok.com/@amsterdam_museum",' +
+    '"spotify":"https://open.spotify.com/show/3cvkC0FnIVAIipKZIDbHCK?si=ee4d"}</script>';
+  const network = ["https://pixel.byspotify.com/ping?url=x"];
+  assert.deepEqual(names(detectFromCorpus(html, "", network)), []);
+});
+
+test("Spotify embeds still detected — open.spotify.com and podcasters", () => {
+  const open = '<iframe src="https://open.spotify.com/embed/episode/4rOoJ6Egrf8K2IrywzwOMk"></iframe>';
+  assert.deepEqual(names(detectFromCorpus(open)), ["Spotify (podcast)"]);
+  const pod = "https://podcasters.spotify.com/pod/show/fries-museum/embed/episodes/Luisterwandeling-e2a";
+  assert.deepEqual(names(detectFromCorpus("<p>x</p>", "", [pod])), ["Spotify (podcast)"]);
+});
+
+// ── Host allow-lists: a CSP or preconnect names vendors, embeds nothing ─
+const WERKENBIJOSS_CSP =
+  `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; frame-src 'self' ` +
+  `https://player.vimeo.com https://www.google.com/recaptcha/ https://*.bbvms.com; script-src 'self'">`;
+
+test("CSP meta allow-list naming bbvms.com / player.vimeo.com is NOT a player", () => {
+  assert.deepEqual(names(detectFromCorpus(WERKENBIJOSS_CSP + "<p>Vacatures</p>")), []);
+});
+
+test("preconnect / dns-prefetch hints to a video host are NOT a player", () => {
+  const html = '<link rel="preconnect" href="https://player.vimeo.com">' +
+    "<link rel=dns-prefetch href=//fast.wistia.net><link href=\"https://cdn.jwplayer.com\" rel=\"preconnect\">";
+  assert.deepEqual(names(detectFromCorpus(html)), []);
+});
+
+test("real Blue Billywig embed next to a CSP allow-list still detected", () => {
+  const html = WERKENBIJOSS_CSP + '<script src="https://demo.bbvms.com/p/default/c/1234.js"></script>';
+  assert.deepEqual(names(detectFromCorpus(html)), ["Blue Billywig"]);
+});
+
+// ── Video.js: WordPress script handles and *-video.js names ────────
+test("WordPress script id parallax-video-js is NOT Video.js", () => {
+  const html = '<script src="https://cdnjs.cloudflare.com/ajax/libs/jarallax/1.12.1/jarallax-video.min.js?ver=1.12.1" id="parallax-video-js"></script>';
+  const network = ["https://cdnjs.cloudflare.com/ajax/libs/jarallax/1.12.1/jarallax-video.js"];
+  assert.deepEqual(names(detectFromCorpus(html, "", network)), []);
+});
+
+test("Video.js still detected — video-js class, <video-js> tag, video.js path", () => {
+  assert.deepEqual(names(detectFromCorpus('<div class="video-js"></div>')), ["Video.js"]);
+  assert.deepEqual(names(detectFromCorpus("<video-js id=p></video-js>")), ["Video.js"]);
+  const network = ["https://cdn.jsdelivr.net/npm/video.js@8/dist/video.min.js"];
+  assert.deepEqual(names(detectFromCorpus("<p>x</p>", "", network)), ["Video.js"]);
+});
+
+// ── Network: trackers carry the page URL in their query ────────────
+test("a tracker query naming a player is NOT that player", () => {
+  const network = [
+    "https://www.google.com/pagead/1p-user-list/1015767948/?random=1778&url=https%3A%2F%2Fx.nl%2Fmediasite-colleges%2Fvideo.js",
+    "https://region1.google-analytics.com/g/collect?v=2&dl=https%3A%2F%2Fx.nl%2Fplayers.brightcove.net&dt=Flowplayer%20Panopto",
+  ];
+  assert.deepEqual(names(detectFromCorpus("<p>x</p>", "", network)), []);
+});
+
+test("a player whose own request carries a query is still detected", () => {
+  const network = ["https://players.brightcove.net/3910869727001/default_default/index.min.js?v=7"];
+  assert.deepEqual(names(detectFromCorpus("<p>x</p>", "", network)), ["Brightcove"]);
+});
+
+// ── Bare vendor words in body text ─────────────────────────────────
+test("vendor names in body text are NOT players (Mediasite, hihaho.com, vixy.nl)", () => {
+  const html = "<p>Colleges terugkijken via Mediasite. Interactief gemaakt met hihaho.com, gehost door vixy.nl.</p>";
+  assert.deepEqual(names(detectFromCorpus(html)), []);
+});
+
+test("Mediasite / Hihaho embeds still detected", () => {
+  assert.deepEqual(names(detectFromCorpus('<iframe src="https://mediasite.hva.nl/Mediasite/Play/0d1e2f3a1d"></iframe>')), ["Mediasite"]);
+  assert.deepEqual(names(detectFromCorpus('<iframe src="https://player.hihaho.com/1b2c3d4e-aaaa"></iframe>')), ["Hihaho"]);
+});
+
+test("rel=preload is kept, a hint later in the rel token list is stripped", () => {
+  assert.deepEqual(
+    names(detectFromCorpus('<link rel="preload" as="script" href="https://players.brightcove.net/1/x_default/index.min.js">')),
+    ["Brightcove"]
+  );
+  assert.deepEqual(names(detectFromCorpus('<link rel="preload preconnect" href="https://player.vimeo.com">')), []);
+});
+
+test("CSP meta with content before http-equiv is stripped too", () => {
+  const html = `<meta content="frame-src https://*.bbvms.com https://player.vimeo.com" http-equiv="Content-Security-Policy">`;
+  assert.deepEqual(names(detectFromCorpus(html)), []);
+});
+
+test("narrowed vendors still detected on their embed shapes", () => {
+  const cases = [
+    ['<iframe src="https://platform.vixyvideo.com/p/1/sp/100/embedIframeJs/uiconf_id/2"></iframe>', "Vixy Video"],
+    ['<iframe src="https://hihaho.com/embed/1b2c3d4e"></iframe>', "Hihaho"],
+    ['<div data-block=\'{"url":"https:\/\/mediasite.uu.nl\/Mediasite\/Play\/0d1e2f"}\'></div>', "Mediasite"],
+    ['<iframe src="https://creators.spotify.com/pod/profile/museum/embed/episodes/ep-1"></iframe>', "Spotify (podcast)"],
+    ['<iframe src="https://anchor.fm/museum/embed/episodes/ep-1"></iframe>', "Spotify (podcast)"],
+    ['<script src="/typo3conf/ext/opengemeenten_mediaplayer/Resources/Public/player.js"></script>', "OpenGemeenten"],
+  ];
+  for (const [html, player] of cases) assert.deepEqual(names(detectFromCorpus(html)), [player], html);
+  assert.deepEqual(names(detectFromCorpus("<p>x</p>", "", ["https://www.tiktok.com/player/v1/7300000000000000000"])), ["TikTok"]);
+});
+
+test("recordSubresource drops the page's own navigation, keeps iframes and assets", () => {
+  const mainFrame = {};
+  const page = { mainFrame: () => mainFrame };
+  const req = (url, nav, frame) => ({ url: () => url, isNavigationRequest: () => nav, frame: () => frame });
+  const seen = [];
+  const record = recordSubresource(page, seen);
+  record(req("https://www.ngf.nl/publicaties/youtube.com/watch?v=19lqfVgbBws", true, mainFrame));
+  record(req("https://www.youtube.com/embed/19lqfVgbBws", true, {}));
+  record(req("https://www.ngf.nl/app.js", false, mainFrame));
+  record({ url: () => "https://www.ngf.nl/sw-fetch", isNavigationRequest: () => true, frame: () => { throw new Error("sw"); } });
+  assert.deepEqual(seen, ["https://www.youtube.com/embed/19lqfVgbBws", "https://www.ngf.nl/app.js", "https://www.ngf.nl/sw-fetch"]);
 });

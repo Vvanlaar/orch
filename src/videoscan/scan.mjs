@@ -115,7 +115,9 @@ export const DETECTORS = {
     scripts: [/pingvp\.com/i],
   },
   Hihaho: {
-    patterns: [/player\.hihaho\.com/i, /hihaho\.com\/embed/i, /hihaho\.com/i],
+    // NB: no bare /hihaho\.com/ — a "made with hihaho.com" mention in body text
+    // is not an embed, and Hihaho is tier 1, so it would hide the real player.
+    patterns: [/player\.hihaho\.com/i, /hihaho\.com\/embed/i],
     scripts: [/hihaho\.com/i],
   },
   "Ivory Media Player": {
@@ -123,8 +125,16 @@ export const DETECTORS = {
     scripts: [/ivoryvideo\.com/i],
   },
   OpenGemeenten: {
-    patterns: [/opengemeenten\.nl/i, /AccessibleMediaPlayer/i, /opengemeenten/i],
-    scripts: [/opengemeenten/i],
+    // Only the TYPO3 Mediaplayer content element counts: it loads
+    // OpenGemeentenMediaPlayer-*.js on the pages that carry a player. The bare
+    // brand is the CMS itself — nieuwegein.nl ships "TYPO3 website by
+    // OpenGemeenten, www.opengemeenten.nl" and OpenGemeentenSite-*.js on every
+    // page, which flagged 3.3k pages with no video (tier 1, so it also hid the
+    // real YouTube embeds on them).
+    // The separator is optional so a TYPO3 extension path
+    // (opengemeenten_mediaplayer) counts as well as the asset name.
+    patterns: [/OpenGemeenten[_-]?Media-?Player/i, /AccessibleMediaPlayer/i],
+    scripts: [/OpenGemeenten[_-]?Media-?Player/i],
   },
   Rijksoverheidsplayer: {
     patterns: [
@@ -138,7 +148,8 @@ export const DETECTORS = {
     patterns: [
       /platform\.vixyvideo\.com/i,
       /vixyvideo\.com/i,
-      /vixy\.nl/i,
+      // NB: no bare /vixy\.nl/ — the vendor's company site, never an embed; the
+      // player always loads from vixyvideo.com.
     ],
     scripts: [/vixyvideo\.com/i],
   },
@@ -242,7 +253,10 @@ export const DETECTORS = {
       /tiktok-embed/i,
       /data-video-id.*tiktok/i,
     ],
-    scripts: [/tiktok\.com\/embed\.js/i, /tiktok\.com/i],
+    // NB: no bare /tiktok\.com/ — analytics.tiktok.com/i18n/pixel/events.js is
+    // the TikTok ad pixel, loaded site-wide once cookies are accepted. It flagged
+    // 44k museum pages as TikTok and, at tier 2, hid their real tier-5 players.
+    scripts: [/tiktok\.com\/embed/i, /tiktok\.com\/player\//i],
   },
   Instagram: {
     patterns: [
@@ -289,12 +303,22 @@ export const DETECTORS = {
     scripts: [/twitch\.tv/i],
   },
   "Spotify (podcast)": {
+    // Embed paths only. spotify.com/show|episode are share links: they fired on
+    // the social-links JSON amsterdammuseum.nl ships on every page
+    // ("spotify":"https://open.spotify.com/show/…"). A bare /spotify\.com/
+    // script pattern also matched the pixel.byspotify.com ad pixel.
+    // Podcast-host embeds: Spotify for Podcasters, renamed Spotify for Creators
+    // in 2025, and the anchor.fm URLs that predate both.
     patterns: [
       /open\.spotify\.com\/embed/i,
-      /spotify\.com\/episode/i,
-      /spotify\.com\/show/i,
+      /(?:podcasters|creators)\.spotify\.com\/pod\/(?:show|profile)\/[^"'\s<>]+\/embed/i,
+      /anchor\.fm\/[^/"'\s<>]+\/embed/i,
     ],
-    scripts: [/spotify\.com/i],
+    scripts: [
+      /open\.spotify\.com\/embed/i,
+      /(?:podcasters|creators)\.spotify\.com\/pod\/(?:show|profile)\/.+\/embed/i,
+      /anchor\.fm\/[^/]+\/embed/i,
+    ],
   },
   Loom: {
     patterns: [
@@ -396,13 +420,17 @@ export const DETECTORS = {
     // quote, apostrophe, slash, or dot can appear in the urlsafe-base64 alphabet
     // (A-Za-z0-9-_), so a blob cannot match, while real markup always leads with
     // a quote, space, dot or slash.
-    patterns: [/video\.js/i, /videojs/i, /(?:^|[\s"'\/.])vjs-/i, /video-js/i],
-    // `scripts` patterns are tested against the FULL request URL, query string
-    // included (see detectPlayers), which is why the query blob reached them.
-    // Residual: `_` and `-` are in the base64url alphabet, so `_vjs_` inside a blob
-    // can still match here — kept because real URLs use them (`player-vjs.js`,
-    // `vendors_vjs.js`), and the measured collision rate is ~0.007% per bundle URL.
-    scripts: [/videojs/i, /video\.js/i, /(?:^|[\/._-])vjs(?:[\/._-]|$)/i],
+    // `video.js` / `video-js` need a left boundary too: WordPress gives every
+    // enqueued script the id "<handle>-js", so the jarallax plugin's
+    // id="parallax-video-js" flagged all 336 pages of ettyhillesumcentrum.nl,
+    // and a bare /video\.js/ matches any site script named *-video.js.
+    patterns: [/(?<![\w-])video\.js\b/i, /videojs/i, /(?:^|[\s"'\/.])vjs-/i, /(?<![\w-])video-js\b/i],
+    // `scripts` patterns see the request URL without its query string (see
+    // detectPlayers), so a query blob can no longer reach them. Residual: `_` and
+    // `-` are in the base64url alphabet, so a path segment like `…_vjs_…` can
+    // still match — kept because real URLs use them (`player-vjs.js`,
+    // `vendors_vjs.js`).
+    scripts: [/videojs/i, /(?<![\w-])video\.js\b/i, /(?:^|[\/._-])vjs(?:[\/._-]|$)/i],
   },
   "MediaElement.js": {
     patterns: [
@@ -453,8 +481,13 @@ export const DETECTORS = {
     scripts: [/23video\.com/i],
   },
   Mediasite: {
-    patterns: [/mediasite/i],
-    scripts: [/mediasite/i],
+    // A path segment, not the bare word: Mediasite URLs are
+    // <host>/Mediasite/Play|Player|…, while "Mediasite" in body text (a
+    // university's "terugkijken via Mediasite") is not a player. The HTML side
+    // also takes JSON-escaped (\/) and URL-encoded (%2F) slashes, which is how a
+    // consent placeholder or block attribute carries an embed not yet loaded.
+    patterns: [/(?:\/|\\\/|%2f)mediasite(?:\/|\\\/|%2f)/i],
+    scripts: [/\/mediasite\//i],
   },
   ThePlatform: {
     patterns: [/theplatform\.com/i, /media\.theplatform/i],
@@ -961,6 +994,22 @@ function didRedirectOffDomain(page, originalUrl) {
   return finalHost !== origHost;
 }
 
+// Request listener that records every URL except the page's own main-frame
+// navigations (the crawled URL and its redirects). Those name the page, not
+// anything it loads: ngf.nl has a page whose path contains youtube.com/watch,
+// which the bare /youtube\.com/ script pattern read as a YouTube player. Iframe
+// navigations stay — those are the embeds.
+export function recordSubresource(page, networkRequests) {
+  return (req) => {
+    let ownNavigation = false;
+    // frame() throws for a service-worker request; that one is never ours.
+    try {
+      ownNavigation = req.isNavigationRequest() && req.frame() === page.mainFrame();
+    } catch {}
+    if (!ownNavigation) networkRequests.push(req.url());
+  };
+}
+
 // Gather consent-gated HTML and run detection.
 async function detectWithConsent(page, html, networkRequests) {
   const consentGatedHtml = await extractConsentGatedContent(page);
@@ -1143,10 +1192,7 @@ async function scanOnePage(browser, url, timeout) {
   try {
   const page = await context.newPage();
   const networkRequests = [];
-
-  page.on("request", (req) => {
-    networkRequests.push(req.url());
-  });
+  page.on("request", recordSubresource(page, networkRequests));
 
   let response;
   try {
@@ -1220,7 +1266,7 @@ async function scanFirstPage(browser, url, timeout) {
   try {
   const page = await context.newPage();
   const networkRequests = [];
-  page.on("request", (req) => networkRequests.push(req.url()));
+  page.on("request", recordSubresource(page, networkRequests));
 
   let response;
   try {
@@ -1875,6 +1921,34 @@ function stripDownlevelConditionals(html) {
   return html.replace(/<!--\[if\b[^\]]*\]>(?!\s*<!-->)[\s\S]*?<!\[endif\]-->/gi, "");
 }
 
+// Strip host lists that name player vendors without embedding anything. A
+// <meta http-equiv="Content-Security-Policy"> allow-list is template-wide:
+// werkenbijoss.nl lists "frame-src … https://*.bbvms.com https://player.vimeo.com"
+// on every page, which flagged all 25 pages as Blue Billywig. Preconnect /
+// dns-prefetch hints are the same shape — they warm a connection — and prefetch
+// fetches for a later navigation, so none of them loads anything for this page.
+// (rel=preload is left alone: that fetches a resource for this page.)
+// rel is a token list, so the hint may sit anywhere in it (rel="preload preconnect").
+const RESOURCE_HINT_LINK =
+  /<link\b[^>]*\brel\s*=\s*(?:"[^"]*\b(?:preconnect|dns-prefetch|prefetch)\b[^"]*"|'[^']*\b(?:preconnect|dns-prefetch|prefetch)\b[^']*'|(?:preconnect|dns-prefetch|prefetch)\b)[^>]*>/gi;
+
+function stripHostAllowLists(html) {
+  return html
+    .replace(/<meta\b[^>]*\bhttp-equiv\s*=\s*["']?content-security-policy\b[^>]*>/gi, "")
+    .replace(RESOURCE_HINT_LINK, "");
+}
+
+// `scripts` patterns see scheme + host + path only. Trackers carry the page URL,
+// title and referrer in their query (GA's dl/dt, pixel ?url=), and bundlers put
+// random base64 there: Google's pagead/1p-user-list?random=… and Drupal's
+// ?include=<blob> each flagged hundreds of pages as Video.js. A player's own
+// request rarely names its player in the query alone (combo loaders such as
+// /min/?f=video.js do), and such players leave markup evidence as well.
+function stripQuery(url) {
+  const cut = url.search(/[?#]/);
+  return cut === -1 ? url : url.slice(0, cut);
+}
+
 // Network evidence = the request URL (truncated) plus the substring that
 // actually fired. Long URLs get cut well before the matching region, so the
 // URL alone can carry no trace of why the detector hit (the data.oss.nl
@@ -1902,7 +1976,8 @@ function networkEvidence(url, match) {
 }
 
 export function detectPlayers(html, networkRequests) {
-  const searchable = stripAnchorHrefs(stripDownlevelConditionals(html));
+  const searchable = stripAnchorHrefs(stripHostAllowLists(stripDownlevelConditionals(html)));
+  const requestPaths = networkRequests.map(stripQuery);
   const found = [];
 
   for (const [player, config] of Object.entries(DETECTORS)) {
@@ -1916,13 +1991,15 @@ export function detectPlayers(html, networkRequests) {
 
     // Check network requests
     for (const scriptPattern of config.scripts) {
-      for (const r of networkRequests) {
+      for (let i = 0; i < networkRequests.length; i++) {
         // No scripts pattern is /g today, but a stateful lastIndex would hand
         // networkEvidence a wrong match.index and it would slice the wrong region.
         scriptPattern.lastIndex = 0;
-        const match = scriptPattern.exec(r);
+        // requestPaths[i] is a prefix of networkRequests[i], so match.index stays
+        // valid against the full URL the evidence shows.
+        const match = scriptPattern.exec(requestPaths[i]);
         if (!match) continue;
-        matches.push(`Network: ${networkEvidence(r, match)}`);
+        matches.push(`Network: ${networkEvidence(networkRequests[i], match)}`);
         break;
       }
     }
@@ -1935,7 +2012,7 @@ export function detectPlayers(html, networkRequests) {
   // Confirm/strip unconfirmed social embeds BEFORE tier-filtering: a tier-2
   // social that later fails confirmation would otherwise have already
   // annihilated the lower-tier real player, leaving an empty result.
-  return filterToHighestTier(filterNonVideoSocials(found, searchable, networkRequests));
+  return filterToHighestTier(filterNonVideoSocials(found, searchable, requestPaths));
 }
 
 // ── Explicit URL scanning (no crawl) ────────────────────────────────
