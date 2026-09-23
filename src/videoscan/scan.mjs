@@ -1346,13 +1346,40 @@ async function gotoResilient(page, url, timeout) {
   return response;
 }
 
-async function scanOnePage(browser, url, timeout) {
-  // Fresh context per page = fresh connection. Edges like ing.nl reset a reused
-  // HTTP/2 connection after a couple of requests, which would fail every later
-  // page in a shared context; a per-page context keeps the crawl working even
-  // when the IP is being rate-limited (one page-load fits one connection).
+// Fresh context per page = fresh connection. Edges like ing.nl reset a reused
+// HTTP/2 connection after a couple of requests, which would fail every later
+// page in a shared context; a per-page context keeps the crawl working even
+// when the IP is being rate-limited (one page-load fits one connection).
+//
+// Closed when the page is done, or at the deadline: goto has its own timeout,
+// but page.content() and evaluate() don't, and a page that pins its main
+// thread blocks them forever (an archief.amsterdam beeldbank page stalled a
+// crawl for 5 hours). Closing the context rejects every pending call on it.
+async function withScanContext(browser, deadlineMs, scan) {
   const context = await createScanContext(browser);
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`page took over ${Math.round(deadlineMs / 1000)}s`)), deadlineMs);
+  });
   try {
+    return await Promise.race([scan(context), deadline]);
+  } finally {
+    clearTimeout(timer);
+    // A wedged page can stall close() too
+    let closeTimer;
+    await Promise.race([
+      context.close().catch(() => {}),
+      new Promise((r) => { closeTimer = setTimeout(r, 10_000); }),
+    ]);
+    clearTimeout(closeTimer);
+  }
+}
+
+function scanOnePage(browser, url, timeout) {
+  return withScanContext(browser, timeout * 6, (context) => scanPageIn(context, url, timeout));
+}
+
+async function scanPageIn(context, url, timeout) {
   const page = await context.newPage();
   const networkRequests = [];
   page.on("request", recordSubresource(page, networkRequests));
@@ -1418,15 +1445,17 @@ async function scanOnePage(browser, url, timeout) {
   );
 
   return { detected, links };
-  } finally {
-    await context.close().catch(() => {});
-  }
 }
 
 // First page: accept cookies before scanning (re-navigates if cookies accepted)
-async function scanFirstPage(browser, url, timeout) {
-  const context = await createScanContext(browser);
-  try {
+// Twice the deadline: consent can mean a second goto, and its clicks run on
+// Playwright's own 30s default. A first page cut off queues no links, which
+// ends a crawl without a sitemap at one page.
+function scanFirstPage(browser, url, timeout) {
+  return withScanContext(browser, timeout * 12, (context) => scanFirstPageIn(context, url, timeout));
+}
+
+async function scanFirstPageIn(context, url, timeout) {
   const page = await context.newPage();
   const networkRequests = [];
   page.on("request", recordSubresource(page, networkRequests));
@@ -1491,9 +1520,6 @@ async function scanFirstPage(browser, url, timeout) {
   );
 
   return { detected, links };
-  } finally {
-    await context.close().catch(() => {});
-  }
 }
 
 // Initial guess before AutoTuner takes over (it'll converge within ~2 batches).
@@ -1554,6 +1580,24 @@ function createAutoTuner(controlFile) {
     return { total: Math.max(1, peers.length), peers };
   }
 
+  // loadavg() is always 0 on Windows, which read as an idle machine however
+  // busy it was. There, measure busy time across all cores since the last
+  // call instead (0..1, the same scale as loadavg / cores).
+  let lastCpuTimes = null;
+  function cpuLoad() {
+    if (os.platform() !== "win32") return (os.loadavg?.()[0] ?? 0) / cpuCount;
+    let idle = 0;
+    let total = 0;
+    for (const { times } of os.cpus()) {
+      idle += times.idle;
+      total += times.user + times.nice + times.sys + times.irq + times.idle;
+    }
+    const prev = lastCpuTimes;
+    lastCpuTimes = { idle, total };
+    if (!prev || total <= prev.total) return 0;
+    return 1 - (idle - prev.idle) / (total - prev.total);
+  }
+
   function cleanup() {
     if (!heartbeatPath) return;
     try { unlinkSync(heartbeatPath); } catch {}
@@ -1564,12 +1608,14 @@ function createAutoTuner(controlFile) {
   function proposeNext(throttle, hostname) {
     writeHeartbeat(throttle, hostname);
 
-    // CPU load factor. loadavg() returns 0 on Windows — fall back to 0 (no
-    // penalty). 1.0 ≈ saturated; <0.7 = comfortable headroom.
-    const load = os.loadavg?.()[0] ?? 0;
-    const loadFactor = Math.min(2, Math.max(0, load / cpuCount));
+    // CPU load factor: 1.0 ≈ saturated; <0.7 = comfortable headroom.
+    const loadFactor = Math.min(2, Math.max(0, cpuLoad()));
 
-    const softCap = Math.max(2, cpuCount);
+    // Pages spend most of their time waiting on the network, not the CPU, so
+    // the budget allows three pages per core and lets the measured load pull
+    // it back. With one page per core, ten scans got two pages each on an
+    // idle 12-core machine.
+    const softCap = Math.max(2, cpuCount * 3);
     const loadBudget = softCap * Math.max(0.25, 1.2 - loadFactor);
 
     const { total, peers = [] } = readPeers();
@@ -1578,7 +1624,9 @@ function createAutoTuner(controlFile) {
     // the rate-limit budget. Different hosts split CPU evenly.
     const hostPenalty = sameHost > 1 ? sameHost : 1;
     const share = Math.max(2, Math.floor(loadBudget / total / hostPenalty));
-    const target = Math.min(share, softCap);
+    // One site still gets at most one page per core: the extra budget is for
+    // many scans side by side, not for hitting a single host harder
+    const target = Math.min(share, Math.max(2, cpuCount));
 
     // Don't grow base during rate-limit cooldown — tryRecover() owns climb-back.
     if (Date.now() < throttle.cooldownUntil) return;
