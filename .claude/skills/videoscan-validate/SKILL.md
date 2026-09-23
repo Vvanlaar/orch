@@ -153,6 +153,11 @@ node .claude/skills/videoscan-validate/scripts/scan-prune.mjs <batch> --player K
 # dry run first; add --apply to write (keeps a .bak per file)
 ```
 
+`--evidence` drops a detection when *any* evidence string matches. When the
+bad marker is boilerplate that real embeds carry too (WP Rocket's
+`youtube-player` CSS), use `--only-evidence "HTML: youtube-player,HTML: ytimg.com"`
+instead: it drops only detections whose *every* evidence string is on the list.
+
 It removes the matching detections, drops pages that had no other player, and
 recomputes `pagesWithVideo` / `uniquePlayers` / `playerSummary` — in every file
 of the batch, the summary included, since the summary carries its own copy of
