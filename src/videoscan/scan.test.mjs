@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, normalizeUrl, reprioritizeQueue, recordSubresource } from "./scan.mjs";
+import { detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, normalizeUrl, reprioritizeQueue, orderQueue, urlSection, spreadPick, pickSitemaps, discoverSitemapUrls, recordSubresource } from "./scan.mjs";
 
 const names = (result) => result.map((r) => r.player).sort();
 
@@ -648,6 +648,108 @@ test("reprioritizeQueue survives a queue past V8's spread-argument limit", () =>
   assert.doesNotThrow(() => reprioritizeQueue(queue));
   assert.equal(queue.length, 200_001);
   assert.equal(queue[0], "https://example.nl/video/intro");
+});
+
+test("orderQueue gives every section a share instead of draining the news archive first", () => {
+  const news = Array.from({ length: 5000 }, (_, i) => `https://gemeente.nl/nieuws/bericht-${i}`);
+  const other = ["wonen", "zorg", "werk", "afval", "parkeren"].flatMap((s) =>
+    Array.from({ length: 50 }, (_, i) => `https://gemeente.nl/${s}/pagina-${i}`),
+  );
+  const first100 = orderQueue([...news, ...other]).slice(0, 100);
+  const bySection = Object.groupBy(first100, (u) => urlSection(u).section);
+  // Five sections at weight 1, nieuws at weight 2 (video-likely): 100 / 7 ≈ 14 each
+  for (const s of ["wonen", "zorg", "werk", "afval", "parkeren"]) assert.ok(bySection[s].length >= 13, s);
+  assert.ok(bySection.nieuws.length <= 30);
+});
+
+test("orderQueue favours sections that are behind on pages already scanned", () => {
+  const visited = Array.from({ length: 40 }, (_, i) => `https://gemeente.nl/wonen/oud-${i}`);
+  const queue = [
+    ...Array.from({ length: 20 }, (_, i) => `https://gemeente.nl/wonen/pagina-${i}`),
+    ...Array.from({ length: 20 }, (_, i) => `https://gemeente.nl/zorg/pagina-${i}`),
+  ];
+  assert.ok(orderQueue(queue, visited).slice(0, 20).every((u) => u.includes("/zorg/")));
+});
+
+test("orderQueue puts hub pages before deep pages and ignores arrival order", () => {
+  const queue = ["https://gemeente.nl/wonen/a/b/c", "https://gemeente.nl/wonen/a", "https://gemeente.nl/wonen/a/b"];
+  assert.deepEqual(orderQueue(queue).map((u) => urlSection(u).depth), [2, 3, 4]);
+  assert.deepEqual(orderQueue([...queue].reverse()), orderQueue(queue));
+});
+
+test("urlSection skips a language prefix and files top-level pages under root", () => {
+  assert.equal(urlSection("https://x.nl/nl/wonen/huur").section, "wonen");
+  assert.equal(urlSection("https://x.nl/contact").section, "");
+  assert.equal(urlSection("https://x.nl/").section, "");
+});
+
+test("spreadPick samples across the whole list and every prefix stays spread", () => {
+  const list = Array.from({ length: 1000 }, (_, i) => i);
+  assert.deepEqual(spreadPick(list, 4), [0, 500, 250, 750]);
+  const all = spreadPick(list, 1000);
+  assert.equal(new Set(all).size, 1000);
+  assert.deepEqual(spreadPick(["a", "b", "c"], 10), ["a", "b", "c"]);
+});
+
+test("pickSitemaps keeps the lone page sitemap next to a 60-part archive", () => {
+  const posts = Array.from({ length: 60 }, (_, i) => `https://x.nl/post-sitemap${i + 1}.xml`);
+  const picked = pickSitemaps([...posts, "https://x.nl/page-sitemap.xml"], 40);
+  assert.equal(picked.length, 40);
+  assert.ok(picked.includes("https://x.nl/page-sitemap.xml"));
+  assert.equal(new Set(picked).size, 40);
+});
+
+test("discoverSitemapUrls spends the share an empty sibling sitemap leaves unused", async (t) => {
+  const urlset = (n, path) =>
+    `<urlset>${Array.from({ length: n }, (_, i) => `<loc>https://x.nl/${path}/p-${i}</loc>`).join("")}</urlset>`;
+  const bodies = {
+    "https://x.nl/robots.txt": "Sitemap: https://x.nl/index.xml",
+    "https://x.nl/index.xml":
+      "<sitemapindex><loc>https://x.nl/nieuws.xml</loc><loc>https://x.nl/wonen.xml</loc><loc>https://x.nl/leeg.xml</loc></sitemapindex>",
+    "https://x.nl/nieuws.xml": urlset(500, "nieuws"),
+    "https://x.nl/wonen.xml": urlset(20, "wonen"),
+  };
+  t.mock.method(globalThis, "fetch", async (url) =>
+    url in bodies ? new Response(bodies[url]) : new Response("", { status: 404 }),
+  );
+  const urls = await discoverSitemapUrls("https://x.nl/", "x.nl", { maxUrls: 90 });
+  // Shares are 30/30/30; wonen fills 20 and leeg 0, so nieuws tops up to the cap
+  assert.equal(urls.length, 90);
+  assert.equal(urls.filter((u) => u.includes("/wonen/")).length, 20);
+  // Sampled across the whole archive, not its first 70 items
+  assert.ok(urls.some((u) => /\/nieuws\/p-4\d\d$/.test(u)));
+});
+
+test("discoverSitemapUrls follows TYPO3 index entries with XML-escaped query strings", async (t) => {
+  const bodies = {
+    "https://x.nl/robots.txt": "Sitemap: https://x.nl/sitemap.xml",
+    "https://x.nl/sitemap.xml": "<sitemapindex><loc>https://x.nl/sitemap.xml?page=1&amp;sitemap=pages</loc></sitemapindex>",
+    "https://x.nl/sitemap.xml?page=1&sitemap=pages": "<urlset><loc>https://x.nl/wonen/a?b=1&amp;c=2</loc></urlset>",
+  };
+  t.mock.method(globalThis, "fetch", async (url) =>
+    url in bodies ? new Response(bodies[url]) : new Response("", { status: 404 }),
+  );
+  const urls = await discoverSitemapUrls("https://x.nl/", "x.nl");
+  assert.equal(urls.length, 1);
+  assert.ok(!urls[0].includes("&amp;"));
+});
+
+test("discoverSitemapUrls bounds the fetches of nested sitemap indexes", async (t) => {
+  const index = (urls) => `<sitemapindex>${urls.map((u) => `<loc>${u}</loc>`).join("")}</sitemapindex>`;
+  const years = Array.from({ length: 40 }, (_, y) => `https://x.nl/sm-${2000 + y}.xml`);
+  let fetched = 0;
+  t.mock.method(globalThis, "fetch", async (url) => {
+    fetched++;
+    if (url === "https://x.nl/robots.txt") return new Response("Sitemap: https://x.nl/index.xml");
+    if (url === "https://x.nl/index.xml") return new Response(index(years));
+    const year = url.match(/sm-(\d+)\.xml$/);
+    if (year) return new Response(index(Array.from({ length: 40 }, (_, m) => `https://x.nl/sm-${year[1]}-m${m}.urls`)));
+    return new Response(`<urlset><loc>https://x.nl/nieuws/${url.split("/").pop()}/a</loc></urlset>`);
+  });
+  const urls = await discoverSitemapUrls("https://x.nl/", "x.nl", { maxUrls: 5000 });
+  assert.ok(fetched <= 101, `fetched ${fetched}`);
+  // Spread over the years, not spent on the first two
+  assert.ok(new Set(urls.map((u) => u.match(/sm-(\d+)/)[1])).size >= 30);
 });
 
 // WP Rocket's lazyload boilerplate, inlined on every page of a WP Rocket site
