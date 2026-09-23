@@ -380,6 +380,31 @@ export function findLatestScanFileForDomain(domain: string): string | null {
   }
 }
 
+/** pagesScanned of a scan JSON, or null when it can't be read. */
+export function readPagesScanned(scanPath: string): number | null {
+  try {
+    const n = JSON.parse(readFileSync(scanPath, 'utf-8')).pagesScanned;
+    return typeof n === 'number' ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * maxPages and targetPages for auto-resuming an orphaned scan. scan.mjs reads a
+ * resume's maxPages as "this many more", so passing the original maxPages
+ * again would scan a full extra round on every server restart. A task that is
+ * itself a manual resume has no known target: keep its maxPages as it was.
+ */
+export function resumeBudget(
+  context: { maxPages?: number; targetPages?: number; event?: string },
+  pagesScanned: number | null,
+): { maxPages: number; targetPages?: number } {
+  const target = context.targetPages ?? (context.event === 'videoscan-resume' ? undefined : context.maxPages);
+  if (target === undefined || pagesScanned === null) return { maxPages: context.maxPages ?? 200 };
+  return { maxPages: Math.max(1, target - pagesScanned), targetPages: target };
+}
+
 export function killVideoscan(taskId: number): boolean {
   const proc = runningProcesses.get(taskId);
   if (!proc) return false;

@@ -1810,7 +1810,7 @@ app.post('/api/actions/resume-videoscan', asyncHandler(async (req, res) => {
     res.status(404).json({ error: 'Scan file not found' });
     return;
   }
-  let scanData: { domain?: string; batchId?: string; batchLabel?: string };
+  let scanData: { domain?: string; batchId?: string; batchLabel?: string; pagesScanned?: number };
   try { scanData = JSON.parse(readFileSync(resumePath, 'utf-8')); } catch { res.status(400).json({ error: 'Invalid JSON file' }); return; }
   const domain = scanData.domain || 'unknown';
   const scanUrl = `https://www.${domain}`;
@@ -1834,6 +1834,9 @@ app.post('/api/actions/resume-videoscan', asyncHandler(async (req, res) => {
     title: `Resume videoscan: ${domain}`,
     scanUrl,
     maxPages: maxPages || 200,
+    // maxPages here means "this many more"; the target lets an auto-resume
+    // after a server restart ask only for what's left
+    ...(typeof scanData.pagesScanned === 'number' ? { targetPages: scanData.pagesScanned + (maxPages || 200) } : {}),
     resumeFile: resumePath,
     delay: delay ?? 200,
     ...(batchId ? { batchId } : {}),

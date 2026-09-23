@@ -64,6 +64,8 @@ export interface TaskContext {
   // Videoscan
   scanUrl?: string;
   maxPages?: number;
+  /** Page total the original scan aimed for. A resume's maxPages means "this many more", so auto-resume carries the target to ask only for what's left. */
+  targetPages?: number;
   /** @deprecated concurrency is auto-tuned at runtime — kept on old task rows only */
   concurrency?: number;
   resumeFile?: string; // path to previous scan JSON for resume

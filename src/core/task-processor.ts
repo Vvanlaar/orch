@@ -42,7 +42,7 @@ import {
   checkoutPRInWorktree,
   findRemoteForRepo,
 } from './git-ops.js';
-import { runVideoscan, findLatestScanFileForDomain, getVideoscanDir, mergeScans, syncScanToSupabase, generateReport as generateVideoscanReport } from './videoscan-runner.js';
+import { runVideoscan, findLatestScanFileForDomain, readPagesScanned, resumeBudget, getVideoscanDir, mergeScans, syncScanToSupabase, generateReport as generateVideoscanReport } from './videoscan-runner.js';
 import { isPidAlive, killProcessTree } from './process-kill.js';
 import { dbArchiveVideoscans } from './db/videoscans.js';
 import { MACHINE_ID, isSupabaseConfigured } from './db/client.js';
@@ -807,16 +807,22 @@ export async function startProcessor(intervalMs?: number): Promise<void> {
     if (t.type === 'videoscan' && t.context.scanUrl && !t.context.urls) {
       let domain = '';
       try { domain = new URL(t.context.scanUrl).hostname.replace(/^www\./, ''); } catch {}
-      const resumeName = domain ? findLatestScanFileForDomain(domain) : null;
+      // Only the checkpoint of the run that died. A scan killed before its first
+      // checkpoint has none, and the latest file is then an older finished
+      // report: resuming that would rewrite it in place as if it were this run.
+      const latest = domain ? findLatestScanFileForDomain(domain) : null;
+      const resumeName = latest?.includes('-INPROGRESS') ? latest : null;
       if (resumeName) {
         const resumePath = path.join(getVideoscanDir(), resumeName);
+        const { maxPages, targetPages } = resumeBudget(t.context, readPagesScanned(resumePath));
         await failTask(t.id, 'Server restarted; auto-resume task created');
         const resumed = await createTask('videoscan', t.context.scanUrl, getVideoscanDir(), {
           source: 'github',
           event: 'videoscan-resume',
           title: `Resume videoscan: ${domain}`,
           scanUrl: t.context.scanUrl,
-          maxPages: t.context.maxPages ?? 200,
+          maxPages,
+          ...(targetPages !== undefined ? { targetPages } : {}),
           delay: t.context.delay,
           resumeFile: resumePath,
           ...(t.context.batchId ? { batchId: t.context.batchId } : {}),
