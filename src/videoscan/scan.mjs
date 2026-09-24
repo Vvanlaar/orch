@@ -93,8 +93,12 @@ export const DETECTORS = {
     scripts: [/vidyard\.com/i],
   },
   Flowplayer: {
-    patterns: [/flowplayer\.com/i, /flowplayer\.org/i, /flowplayer\(/i],
-    scripts: [/flowplayer/i],
+    patterns: [/flowplayer\.com/i, /flowplayer\.org/i, /flowplayer\(/i, /class=["'][^"']*\bflowplayer\b/i],
+    // Not /flowplayer/: a self-hosted /flowplayer/flowplayer.min.js loads on
+    // every page of the GemeenteOplossingen council template with no player
+    // on it (gemeenteraad.haarlemmermeer.nl), and at tier 1 it hid the real
+    // YouTube embed. A self-hosted player still shows in the markup above.
+    scripts: [/flowplayer\.(?:com|org)\//i],
   },
   Panopto: {
     patterns: [

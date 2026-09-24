@@ -163,6 +163,22 @@ test("YouTube share link (youtu.be) is NOT a player — bare text / data attr", 
   assert.deepEqual(names(result), []);
 });
 
+test("self-hosted Flowplayer library with no player is NOT Flowplayer (and doesn't hide YouTube)", () => {
+  // GemeenteOplossingen council template: loads the library on every page
+  const html = `<link href="/flowplayer/skin/skin.css" rel="stylesheet">
+    <script src="/flowplayer/flowplayer.min.js?v=352f703e"></script>
+    <iframe src="https://www.youtube-nocookie.com/embed/1cpBCq4gK7Y"></iframe>`;
+  const network = ["https://gemeenteraad.haarlemmermeer.nl/flowplayer/flowplayer.min.js?v=352f703e"];
+  assert.deepEqual(names(detectFromCorpus(html, "", network)), ["YouTube"]);
+});
+
+test("Flowplayer still detected on a real player: container markup or its CDN", () => {
+  const selfHosted = `<div class="flowplayer is-splash" data-ratio="0.5625"><video><source src="/a.m3u8"></video></div>`;
+  assert.ok(names(detectFromCorpus(selfHosted)).includes("Flowplayer"));
+  const cdn = ["https://cdn.flowplayer.com/releases/native/3/stable/flowplayer.min.js"];
+  assert.ok(names(detectFromCorpus("<div id='player'></div>", "", cdn)).includes("Flowplayer"));
+});
+
 test("YouTube embed iframe still detected (guard against over-removal)", () => {
   const html = `<iframe src="https://www.youtube.com/embed/abc123"></iframe>`;
   const result = detectFromCorpus(html);
