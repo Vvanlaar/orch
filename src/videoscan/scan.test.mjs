@@ -210,6 +210,22 @@ test("unclosed JSON-escaped anchors stay linear", () => {
   assert.ok(performance.now() - t0 < 500, "stripAnchorHrefs went quadratic");
 });
 
+test("Vimeo host in a cookie-banner domain list is NOT a player", () => {
+  // gouda.nl: the consent config ships on every page
+  const cfg = '<script>window.cc={"cookies":[{"cookieID":"player","domain":".vimeo.com","provider":"vimeo.com"},{"cookieID":"sync_active","domain":"player.vimeo.com","provider":"vimeo.com"}]}</script>';
+  assert.deepEqual(names(detectFromCorpus(cfg)), []);
+});
+
+test("Vimeo embeds with a path on player.vimeo.com still detected", () => {
+  assert.deepEqual(names(detectFromCorpus('<script src="https://player.vimeo.com/api/player.js"></script>')), ["Vimeo"]);
+  assert.deepEqual(names(detectFromCorpus('<iframe src="https://player.vimeo.com/video/1017466491?dnt=1"></iframe>')), ["Vimeo"]);
+});
+
+test("YouTube embed with a doubled slash before the id is detected", () => {
+  // purmerend.nl CMS output
+  assert.deepEqual(names(detectFromCorpus('<iframe src="https://www.youtube.com/embed//GIRdeMdgYVY"></iframe>')), ["YouTube"]);
+});
+
 test("YouTube embeds with a video id still detected, consent-gated and playlist ones too", () => {
   const consent = `<div class="youtube-responsive consent-ce no-consent">
     <iframe class="consent-ce--iframe" src="https://www.youtube-nocookie.com/embed/LssNqQcxhz8?iv_load_policy=1"></iframe></div>`;
