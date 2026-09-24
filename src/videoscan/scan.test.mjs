@@ -795,21 +795,70 @@ test("iBabs branding alone is NOT a video (whole-site false positive)", () => {
 });
 
 test("Company Webcast embed detected from the marker alone", () => {
-  // The SDK <script> is omitted on purpose: were it present it would satisfy
-  // the host pattern by itself, and the marker regex could be deleted without
-  // failing a test. A Cwc slot carries an empty data-video-url, so if the SDK
-  // ever moves into a bundle the marker is the only in-page signal left.
+  // No SDK and no player URL here, so only the marker regex can pass this.
+  // A Cwc slot carries an empty data-video-url and the SDK builds the iframe
+  // later, so before render the marker is the only in-page signal.
   const html = `<div class="cwc" data-video-type="Cwc" data-video-id="gemeente/20260303_3"
       data-video-url=""></div>`;
   const result = detectFromCorpus(html);
   assert.deepEqual(names(result), ["Company Webcast"]);
 });
 
-test("Company Webcast detected from the SDK script alone", () => {
-  const html = `<div class="cwc"></div>
-    <script src="//sdk.companywebcast.com/sdk/player/client.js"></script>`;
-  const result = detectFromCorpus(html);
+test("Company Webcast SDK loaded site-wide is NOT a player", () => {
+  // steenwijkerland.nl/bis: client.js on every page, no video slot (1153 pages).
+  const html = `<ul class="download-links cwc"><li>Agenda</li></ul>
+    <script defer src="//sdk.companywebcast.com/sdk/player/client.js"></script>`;
+  const result = detectPlayers(html, ["https://sdk.companywebcast.com/sdk/player/client.js"]);
+  assert.deepEqual(names(result), []);
+});
+
+test("Company Webcast player URL as text or in a share/copy attribute is NOT a player", () => {
+  const url = "http://player.companywebcast.com/gemeente/20160920_1/nl/player";
+  for (const html of [
+    `<p class="description">Geluidsverslag: ${url} </p>`,
+    `<meta name="description" content="Geluidsverslag: ${url} ">`,
+    `<div class="fb-share-button" data-href="${url}"></div>`,
+    `<button data-clipboard-text="${url}">Kopieer</button>`,
+  ]) assert.deepEqual(names(detectFromCorpus(html)), [], html);
+});
+
+test("Company Webcast SDK loaded site-wide does not suppress a YouTube embed", () => {
+  const html = `<script src="//sdk.companywebcast.com/sdk/player/client.js"></script>
+    <iframe src="https://www.youtube-nocookie.com/embed/H9OxXJmVf4M"></iframe>`;
+  const result = detectPlayers(html, ["https://sdk.companywebcast.com/sdk/player/client.js"]);
+  assert.deepEqual(names(result), ["YouTube"]);
+});
+
+test("Company Webcast lazy/consent iframe and escaped forms are still players", () => {
+  const bs = String.fromCharCode(92); // backslash, kept out of the source literal
+  const esc = (s) => s.replaceAll("/", bs + "/");
+  for (const html of [
+    `<iframe data-src="https://player.companywebcast.com/g/1/nl/player"></iframe>`,
+    `<iframe class="cmplz-video" data-src-cmplz="https://sdk.companywebcast.com/sdk/player/?id=g_1" src="about:blank"></iframe>`,
+    `<script>var h="<iframe src=${bs}"${esc("https://player.companywebcast.com/g/1/nl/player")}${bs}"></iframe>";</script>`,
+  ]) assert.deepEqual(names(detectFromCorpus(html)), ["Company Webcast"], html);
+});
+
+test("Company Webcast player request alone (nested iframe) is a player", () => {
+  const result = detectPlayers(`<iframe src="https://x.bestuurlijkeinformatie.nl/Agenda/Index/x"></iframe>`, [
+    "https://sdk.companywebcast.com/sdk/player/?id=g_1",
+  ]);
   assert.deepEqual(names(result), ["Company Webcast"]);
+});
+
+test("Company Webcast SDK plus a Cwc slot or a player iframe is still a player", () => {
+  const sdk = `<script src="//sdk.companywebcast.com/sdk/player/client.js"></script>`;
+  const net = ["https://sdk.companywebcast.com/sdk/player/client.js"];
+  const slot = `<div class="cwc" data-video-type="Cwc" data-video-id="gemeente/20260303_3" data-video-url=""></div>`;
+  assert.deepEqual(names(detectPlayers(slot + sdk, net)), ["Company Webcast"]);
+  const iframe = `<iframe src="https://player.companywebcast.com/gemeente/20260303_3/nl/player"></iframe>`;
+  assert.deepEqual(names(detectPlayers(iframe + sdk, [...net, "https://player.companywebcast.com/gemeente/20260303_3/nl/player"])), ["Company Webcast"]);
+});
+
+test("Company Webcast SDK embed iframe (sdk/player/?id=) is a player", () => {
+  // lansingerland.nl/kindervragenuur
+  const html = `<iframe src="//sdk.companywebcast.com/sdk/player/?id=gemeentelansingerland_20241120_1" width="930"></iframe>`;
+  assert.deepEqual(names(detectPlayers(html, ["https://sdk.companywebcast.com/sdk/player/?id=gemeentelansingerland_20241120_1"])), ["Company Webcast"]);
 });
 
 test("Company Webcast poster on an iBabs page is NOT a second player", () => {
