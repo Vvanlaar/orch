@@ -2393,6 +2393,16 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
 
 // ── Report ──────────────────────────────────────────────────────────
 
+// On --resume of a real report, overwrite the source file so a scan-chain stays
+// in one entry. Otherwise (fresh scan, or resume of an INPROGRESS checkpoint,
+// which crawlSite has already deleted and a later scan would reuse) mint a
+// timestamped name.
+export function reportFilename(domain, resumeFile, now = new Date()) {
+  if (resumeFile && !basename(resumeFile).endsWith("-INPROGRESS.json")) return basename(resumeFile);
+  const ts = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  return `videoscan-${domain}-${ts}.json`;
+}
+
 function generateReport({ domain, results, pagesScanned, _state, rateLimits, batchId, batchLabel, resumeFile }) {
   const playerSummary = {};
   const pagesWithPlayers = [];
@@ -2493,15 +2503,7 @@ function generateReport({ domain, results, pagesScanned, _state, rateLimits, bat
 
   console.log(chalk.bold.blue("\n" + "═".repeat(70)));
 
-  // Save JSON report. On --resume, overwrite the source file so a scan-chain
-  // stays in one entry; otherwise mint a timestamped name for a fresh scan.
-  let jsonFile;
-  if (resumeFile) {
-    jsonFile = basename(resumeFile);
-  } else {
-    const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    jsonFile = `videoscan-${domain}-${ts}.json`;
-  }
+  const jsonFile = reportFilename(domain, resumeFile);
   const jsonReport = {
     domain,
     scanDate: new Date().toISOString(),

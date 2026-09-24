@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, normalizeUrl, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource } from "./scan.mjs";
+import { detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, normalizeUrl, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource, reportFilename } from "./scan.mjs";
 
 const names = (result) => result.map((r) => r.player).sort();
 
@@ -1009,4 +1009,13 @@ test("recordSubresource drops the page's own navigation, keeps iframes and asset
   record(req("https://www.ngf.nl/app.js", false, mainFrame));
   record({ url: () => "https://www.ngf.nl/sw-fetch", isNavigationRequest: () => true, frame: () => { throw new Error("sw"); } });
   assert.deepEqual(seen, ["https://www.youtube.com/embed/19lqfVgbBws", "https://www.ngf.nl/app.js", "https://www.ngf.nl/sw-fetch"]);
+});
+
+test("reportFilename: resume of INPROGRESS checkpoint mints a timestamped name, real report resumes in place", () => {
+  const now = new Date("2026-09-24T10:11:12.345Z");
+  const fresh = "videoscan-example.nl-2026-09-24T10-11-12.json";
+  assert.equal(reportFilename("example.nl", null, now), fresh);
+  assert.equal(reportFilename("example.nl", String.raw`C:\scans\videoscan-example.nl-INPROGRESS.json`, now), fresh);
+  assert.equal(reportFilename("example.nl", "/scans/videoscan-example.nl-INPROGRESS.json", now), fresh);
+  assert.equal(reportFilename("example.nl", "/scans/videoscan-example.nl-2026-09-01T08-00-00.json", now), "videoscan-example.nl-2026-09-01T08-00-00.json");
 });

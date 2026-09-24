@@ -1,6 +1,6 @@
 import { spawn, ChildProcess } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, basename } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { chromium } from 'playwright';
 import { claudeEmitter } from './claude-runner.js';
@@ -194,6 +194,8 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
         return;
       }
 
+      if (options.resumeFile) await dropSpentCheckpoint(basename(options.resumeFile), jsonFile, taskId);
+
       // If targetFilename set, merge new scan into existing scan
       if (options.targetFilename) {
         claudeEmitter.emit('output', taskId, `\nMerging into ${options.targetFilename}...\n`);
@@ -352,6 +354,23 @@ async function generatePdf(htmlPath: string): Promise<string> {
   }
   const filename = pdfPath.split(/[/\\]/).pop()!;
   return filename;
+}
+
+/**
+ * A resume from the INPROGRESS checkpoint writes its report under a fresh name
+ * and scan.mjs deletes the checkpoint JSON, but a crash-time sync may have left
+ * a Supabase row (and html/pdf) under the checkpoint name. Drop those so the
+ * dashboard doesn't list a dead, un-resumable entry. Only once the JSON is
+ * really gone: a still-present checkpoint is live resume state.
+ */
+async function dropSpentCheckpoint(checkpoint: string, reportFile: string, taskId: number): Promise<void> {
+  if (!checkpoint.endsWith('-INPROGRESS.json') || checkpoint === reportFile) return;
+  if (existsSync(join(VIDEOSCAN_DIR, checkpoint))) return;
+  try {
+    await deleteScans([checkpoint]);
+  } catch (err) {
+    claudeEmitter.emit('output', taskId, `[warn] Could not clean up spent checkpoint ${checkpoint}: ${err}\n`);
+  }
 }
 
 function findLatestScanFile(): string | undefined {
