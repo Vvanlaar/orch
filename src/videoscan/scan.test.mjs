@@ -180,6 +180,9 @@ test("YouTube embeds with a video id still detected, consent-gated and playlist 
   assert.deepEqual(names(detectFromCorpus(consent)), ["YouTube"]);
   const playlist = `<iframe src="https://www.youtube.com/embed/videoseries?list=PL123"></iframe>`;
   assert.deepEqual(names(detectFromCorpus(playlist)), ["YouTube"]);
+  // theaterspeelhuis.nl hero: only a video-id attribute until consent loads the API
+  const hero = `<div class="youtube screen mute active" id="player-ss0uBuG6N7k" data-youtubevid="ss0uBuG6N7k"></div>`;
+  assert.deepEqual(names(detectFromCorpus(hero)), ["YouTube"]);
 });
 
 test("self-hosted Flowplayer library with no player is NOT Flowplayer (and doesn't hide YouTube)", () => {

@@ -224,6 +224,10 @@ export const DETECTORS = {
       // class="youtube-li" linking to the channel. Real embeds carry the
       // embed URL or a video-id attribute.
       /data-youtube-id/i,
+      // Any data-youtube* attribute holding a video id: theaterspeelhuis.nl's
+      // hero player is <div data-youtubevid="ss0uBuG6N7k"> with the API loaded
+      // only after consent, so no embed URL and no request to go on.
+      /data-youtube[\w-]*=["'][\w-]{11}["']/i,
       /data-youtube-video-id/i,
       // As an element's class/id, not bare /youtube-player/: WP Rocket's inline
       // CSS '.rll-youtube-player{…}' ships on every page of the site.
