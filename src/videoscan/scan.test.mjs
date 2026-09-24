@@ -216,6 +216,43 @@ test("Vimeo host in a cookie-banner domain list is NOT a player", () => {
   assert.deepEqual(names(detectFromCorpus(cfg)), []);
 });
 
+test("Vimeo CDN host in a CookieYes provider list is NOT a player", () => {
+  // defryskemarren.nl: the blocklist ships on every page
+  const cfg = '<script>var cy={"_providersToBlock":[{"re":"youtube.com|youtube-nocookie.com","categories":["analytics"]},{"re":"player.vimeo.com|highcharts.com|vimeocdn.com","categories":["analytics"]}]};</script>';
+  assert.deepEqual(names(detectFromCorpus(cfg)), []);
+});
+
+test("Vimeo CDN asset with a path still detected", () => {
+  assert.deepEqual(names(detectFromCorpus('<script src="https://f.vimeocdn.com/p/4.37.1/js/player.js"></script>')), ["Vimeo"]);
+  assert.deepEqual(names(detectFromCorpus('<img src="https://i.vimeocdn.com/video/1017466491_640.jpg">')), ["Vimeo"]);
+});
+
+test("Vimeo URLs with JSON-escaped or URL-encoded slashes still detected", () => {
+  const bs = String.fromCharCode(92); // backslash, kept out of the source literal
+  const esc = (s) => s.replaceAll("/", bs + "/");
+  for (const html of [
+    `<div data-embed='{"src":"${esc("https://player.vimeo.com/video/123")}"}'></div>`,
+    `<div data-embed='{"thumb":"${esc("https://i.vimeocdn.com/video/1_640.jpg")}"}'></div>`,
+    `<script>var x="${"https://i.vimeocdn.com/video/1.jpg".replaceAll("/", bs + bs + "/")}";</script>`,
+    '<img src="/_next/image?url=https%3A%2F%2Fi.vimeocdn.com%2Fvideo%2F1.jpg">',
+  ]) assert.deepEqual(names(detectFromCorpus(html)), ["Vimeo"], html);
+});
+
+test("QR-scanner camera preview <video> is NOT a player", () => {
+  assert.deepEqual(names(detectFromCorpus('<div class="qr"><video id="QrScanVideoPreview"></video></div>')), []);
+  assert.deepEqual(names(detectFromCorpus('<video class="webcam-feed" autoplay playsinline></video>')), []);
+});
+
+test("<video> with an ordinary id/class still detected as HTML5 native", () => {
+  assert.deepEqual(names(detectFromCorpus('<video id="hero" class="header-video" autoplay muted><source src="/a.mp4"></video>')), ["HTML5 native"]);
+  // a later sibling tag's camera class must not leak into this one
+  assert.deepEqual(names(detectFromCorpus('<video controls src="/b.mp4"></video><div class="camera"></div>')), ["HTML5 native"]);
+  // a camera-ish name on a video that has a src is still a video
+  assert.deepEqual(names(detectFromCorpus('<video class="security-camera-promo" controls src="/promo.mp4"></video>')), ["HTML5 native"]);
+  // data-id is not the id attribute
+  assert.deepEqual(names(detectFromCorpus('<video data-id="camera-1" controls></video>')), ["HTML5 native"]);
+});
+
 test("Vimeo embeds with a path on player.vimeo.com still detected", () => {
   assert.deepEqual(names(detectFromCorpus('<script src="https://player.vimeo.com/api/player.js"></script>')), ["Vimeo"]);
   assert.deepEqual(names(detectFromCorpus('<iframe src="https://player.vimeo.com/video/1017466491?dnt=1"></iframe>')), ["Vimeo"]);
