@@ -2166,11 +2166,18 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
 
 // Strip <a href="..."> values so player-domain regexes don't match link
 // targets. Anchors are navigation, not embeds.
+// The second pass covers the JSON-escaped copy a Next.js payload carries
+// (`\u003ca href=\"…\"`): capelleaandenijssel.nl linked to a cbr.bbvms.com
+// video that way and was flagged as Blue Billywig.
+// The scan between opener and href stops at the next \u003c/\u003e, so an
+// unclosed opener can neither reach into the next tag nor go quadratic; href
+// must follow whitespace (not data-href); \\\" covers HTML inside a JSON prop.
+const ESCAPED_ANCHOR_HREF =
+  /(\\u003ca(?:\s|\\[nrt])(?:(?!\\u003[ce]).)*?)(?<=\s|\\[nrt])href\s*=\s*(?:\\\\)*\\"[^"]*?(?:\\\\)*\\"/gi;
 function stripAnchorHrefs(html) {
-  return html.replace(
-    /(<a\b[^>]*?)\s+href\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi,
-    "$1"
-  );
+  return html
+    .replace(/(<a\b[^>]*?)\s+href\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "$1")
+    .replace(ESCAPED_ANCHOR_HREF, "$1");
 }
 
 // Strip IE downlevel-hidden conditional comments (`<!--[if ...]> ... <![endif]-->`).
