@@ -254,8 +254,9 @@ export const DETECTORS = {
   Vimeo: {
     patterns: [
       // A path after the host: a bare player.vimeo.com is a cookie-banner domain
-      // list (gouda.nl, 1550 pages), CSP or preconnect, never an embed.
-      /player\.vimeo\.com\/\w/i,
+      // list (gouda.nl, 1550 pages), CSP or preconnect, never an embed. The slash
+      // may be JSON-escaped (\/) or URL-encoded (%2F) in a consent placeholder.
+      /player\.vimeo\.com(?:\\*\/|%2F)\w/i,
       /vimeo\.com\/video/i,
       // Event / showcase embeds are iframe srcs in their own right, and the
       // removed link pattern never covered them (no digits after the slash).
@@ -263,7 +264,9 @@ export const DETECTORS = {
       // NB: no bare /vimeo\.com\/\d+/ — same trap as the youtu.be link shape
       // above: a share/watch URL, never an embed src. It fired on pages that
       // only linked to a Vimeo recording from body text or a JSON payload.
-      /vimeocdn\.com/i,
+      // Path required for the same reason: CookieYes lists providers as
+      // "player.vimeo.com|highcharts.com|vimeocdn.com" (defryskemarren.nl, 1235 pages).
+      /vimeocdn\.com(?:\\*\/|%2F)\w/i,
       /data-vimeo-id/i,
       /data-vimeo-url/i,
       /vimeo-player/i,
@@ -503,7 +506,11 @@ export const DETECTORS = {
     scripts: [/(?:^|\/)shaka-player(?:\.compiled)?(?:\.min)?\.js/i],
   },
   "HTML5 native": {
-    patterns: [/<video[\s>]/i, /<source[^>]+type="video/i],
+    // A camera viewfinder is a <video> too: zevenaardoet.nl ships an empty
+    // <video id="QrScanVideoPreview"> for its QR scanner on every page (70 hits).
+    // Skipped only when the tag has no src AND its own id/class names a camera,
+    // so <video class="security-camera-promo" src="…"> still counts.
+    patterns: [/<video(?!(?=[^>]*(?<![\w-])(?:id|class)\s*=\s*["']?[^"'>]*(?:qr[-_]?(?:scan|code|reader)|camera|webcam))(?![^>]*\ssrc\s*=))[\s>]/i, /<source[^>]+type="video/i],
     scripts: [],
   },
   Cincopa: {
