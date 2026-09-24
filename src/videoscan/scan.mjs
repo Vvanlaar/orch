@@ -278,7 +278,11 @@ export const DETECTORS = {
       /vimeocdn\.com(?:\\*\/|%2F)\w/i,
       /data-vimeo-id/i,
       /data-vimeo-url/i,
-      /vimeo-player/i,
+      // A tag or an attribute token (class/className/id/data-module…, also
+      // JSON-escaped or entity-encoded), not prose: werkenbijcapelleaandenijssel.nl's
+      // cookie modal says "ingesloten Vimeo-players" on every page. The value
+      // scan is capped at 200 chars so a run of ?id= in text cannot backtrack.
+      /(?:<|\\u003c|&lt;|\b(?:class(?:Name)?|id|data-(?:module|component|js|type))\\*["']?\s*[=:]\s*(?:\\*["']|&quot;)?[^"'<>]{0,200}?)vimeo-player\b/i,
     ],
     scripts: [/player\.vimeo\.com/i, /vimeocdn\.com/i],
   },

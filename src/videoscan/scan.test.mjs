@@ -253,6 +253,34 @@ test("<video> with an ordinary id/class still detected as HTML5 native", () => {
   assert.deepEqual(names(detectFromCorpus('<video data-id="camera-1" controls></video>')), ["HTML5 native"]);
 });
 
+test("'Vimeo-player' in cookie-modal prose is NOT a player", () => {
+  const html = `<span>Schakelt de ingesloten Vimeo player-functie in. Cookies die worden geplaatst door ingesloten Vimeo-players zijn onderworpen aan Vimeo's beleid. Zie de Vimeo-player instellingen.</span>`;
+  assert.deepEqual(names(detectFromCorpus(html)), []);
+});
+
+test("vimeo-player as tag or attribute token still detected", () => {
+  const bs = String.fromCharCode(92); // backslash, kept out of the source literal
+  for (const html of [
+    '<vimeo-player video-id="76979871"></vimeo-player>',
+    '<div class="embed vimeo-player" data-id="1"></div>',
+    '<div id="vimeo-player"></div>',
+    '<figure class="wp-block-vimeo-player"></figure>',
+    '<div class="js-vimeo-player"></div>',
+    '<div data-module="vimeo-player"></div>',
+    `<script>var h="${bs}u003cvimeo-player video-id=${bs}"1${bs}"${bs}u003e";</script>`,
+    `<script>var h="<div class=${bs}"vimeo-player${bs}">";</script>`,
+    '<script>{"className":"vimeo-player"}</script>',
+    '<div data-embed="&lt;vimeo-player video-id=&quot;1&quot;&gt;"></div>',
+  ]) assert.deepEqual(names(detectFromCorpus(html)), ["Vimeo"], html);
+});
+
+test("vimeo-player pattern stays linear on a long run of ?id= text", () => {
+  const html = "<pre>" + "https://x.nl/p?id=1&q=2 ".repeat(50000) + "</pre>";
+  const t0 = performance.now();
+  detectFromCorpus(html);
+  assert.ok(performance.now() - t0 < 2000, "vimeo-player regex backtracked");
+});
+
 test("Vimeo embeds with a path on player.vimeo.com still detected", () => {
   assert.deepEqual(names(detectFromCorpus('<script src="https://player.vimeo.com/api/player.js"></script>')), ["Vimeo"]);
   assert.deepEqual(names(detectFromCorpus('<iframe src="https://player.vimeo.com/video/1017466491?dnt=1"></iframe>')), ["Vimeo"]);
