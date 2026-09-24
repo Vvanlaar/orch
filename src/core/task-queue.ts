@@ -147,11 +147,12 @@ export function clearStreamingOutput(id: number): void {
 // Evaluated once — Supabase config cannot change at runtime
 const useDb = isSupabaseConfigured();
 
-// Final status writes ride out a short DB blip; a longer outage is left to the
-// processor's reconciliation of running rows whose process is gone.
+// Final status writes ride out a short DB blip. After a longer outage the row stays
+// running: videoscans are settled by the processor's reconciliation, other task types
+// by the orphan sweep at the next server start.
 const FINAL_WRITE_RETRY_DELAYS_MS = [2_000, 10_000, 30_000];
 
-function retryFinalWrite(id: number, status: string, write: () => Promise<void>): Promise<void> {
+function retryFinalWrite(id: number, status: 'completed' | 'failed', write: () => Promise<void>): Promise<void> {
   return withRetry(write, FINAL_WRITE_RETRY_DELAYS_MS, (err, attempt, delayMs) =>
     log.warn(`Task #${id} marking ${status} failed (attempt ${attempt}), retrying in ${delayMs}ms: ${err instanceof Error ? err.message : err}`));
 }

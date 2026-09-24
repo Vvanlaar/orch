@@ -87,7 +87,7 @@ export type DeadScanAction =
 
 /**
  * What to do with a videoscan row that says running while its scan process is gone.
- * `latest` is the newest readable scan JSON for the scan's domain (null if none).
+ * `latest` is the newest scan JSON for the scan's domain (null if none or unreadable).
  * Kind is judged by content, not name: a scan resumed from its INPROGRESS checkpoint
  * writes its finished report back under that same name.
  */
@@ -96,8 +96,8 @@ export function decideDeadScan(opts: {
   startedAtMs: number | null;
   /** scanUrl without explicit urls: the only mode with resumable on-disk state. */
   crawlMode: boolean;
-  /** targetFilename set: the server-side merge after the scan never ran. */
-  mergeTarget: boolean;
+  /** targetFilename: the scan is merged into it server-side, so only that file proves the run finished. */
+  mergeTarget?: string;
 }): DeadScanAction {
   const { latest } = opts;
   if (!latest) return { action: 'fail', reason: 'no scan file' };
@@ -106,10 +106,13 @@ export function decideDeadScan(opts: {
       ? { action: 'resume', file: latest.name }
       : { action: 'fail', reason: 'explicit-URL scan cannot resume' };
   }
-  // A report older than this run is an earlier scan of the same domain.
-  if (opts.startedAtMs === null || latest.mtimeMs < opts.startedAtMs) {
+  // A report older than this run is an earlier scan of the same domain. The negated
+  // comparison also rejects a NaN start time (unparseable startedAt).
+  if (opts.startedAtMs === null || !(latest.mtimeMs >= opts.startedAtMs)) {
     return { action: 'fail', reason: 'no report from this run' };
   }
-  if (opts.mergeTarget) return { action: 'fail', reason: 'merge into target file did not run' };
+  if (opts.mergeTarget && latest.name !== opts.mergeTarget) {
+    return { action: 'fail', reason: 'merge into target file did not run' };
+  }
   return { action: 'complete', file: latest.name };
 }

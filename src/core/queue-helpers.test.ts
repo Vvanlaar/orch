@@ -3,7 +3,7 @@ import { createStaleTracker, decideDeadScan, freeSlots, singleFlight, withRetry,
 
 const STARTED = Date.parse('2026-09-24T10:00:00Z');
 const file = (name: string, mtimeMs: number, checkpoint = false): ScanFileInfo => ({ name, mtimeMs, checkpoint });
-const crawl = { startedAtMs: STARTED, crawlMode: true, mergeTarget: false };
+const crawl = { startedAtMs: STARTED, crawlMode: true };
 
 describe('decideDeadScan', () => {
   it('completes a scan whose final report was written during this run', () => {
@@ -42,7 +42,23 @@ describe('decideDeadScan', () => {
 
   it('fails a scan whose merge into a target file never ran', () => {
     const latest = file('videoscan-utrecht.nl-2026-09-24T12-00-00.json', STARTED + 1);
-    expect(decideDeadScan({ ...crawl, mergeTarget: true, latest }).action).toBe('fail');
+    expect(decideDeadScan({ ...crawl, mergeTarget: 'videoscan-utrecht.nl-2026-09-01T08-00-00.json', latest }).action).toBe('fail');
+  });
+
+  it('completes a scan whose merge into the target file ran before the status write was lost', () => {
+    const target = 'videoscan-utrecht.nl-2026-09-01T08-00-00.json';
+    const latest = file(target, STARTED + 1);
+    expect(decideDeadScan({ ...crawl, crawlMode: false, mergeTarget: target, latest })).toEqual({ action: 'complete', file: target });
+  });
+
+  it('counts a report written in the same millisecond the run started', () => {
+    const latest = file('videoscan-utrecht.nl-2026-09-24T10-00-00.json', STARTED);
+    expect(decideDeadScan({ ...crawl, latest }).action).toBe('complete');
+  });
+
+  it('fails on an unparseable start time instead of accepting any report', () => {
+    const latest = file('videoscan-utrecht.nl-2026-09-01T08-00-00.json', STARTED - 86_400_000);
+    expect(decideDeadScan({ ...crawl, startedAtMs: Date.parse('not a date'), latest }).action).toBe('fail');
   });
 });
 

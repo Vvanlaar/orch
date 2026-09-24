@@ -356,9 +356,14 @@ async function processPrCommentFix(task: Task): Promise<void> {
 
 // Throws when the DB stays unreachable: guessing "not paused" could overwrite a paused
 // row, while a row left running is settled later by reconcileDeadVideoscans.
+// dbGetTask reports a failed read as undefined, so treat a missing row as a failure too.
 async function isPaused(taskId: number): Promise<boolean> {
-  const current = await withRetry(() => getTask(taskId), [2_000, 10_000]);
-  return current?.status === 'paused';
+  const current = await withRetry(async () => {
+    const t = await getTask(taskId);
+    if (!t) throw new Error(`task #${taskId} not readable`);
+    return t;
+  }, [2_000, 10_000]);
+  return current.status === 'paused';
 }
 
 async function processVideoscan(task: Task): Promise<void> {
@@ -743,16 +748,17 @@ async function resolveDeadVideoscan(t: Task, why: string): Promise<void> {
   const decision = decideDeadScan({
     latest: latestName ? readScanFileInfo(latestName) : null,
     startedAtMs: t.startedAt ? Date.parse(t.startedAt) : null,
-    crawlMode: !!t.context.scanUrl && !t.context.urls,
-    mergeTarget: !!t.context.targetFilename,
+    crawlMode: !!t.context.scanUrl && !t.context.urls?.length,
+    mergeTarget: t.context.targetFilename,
   });
 
   if (decision.action === 'complete') {
     await completeTask(t.id, `Scan complete (${why}; status recovered from scan file)\nJSON: ${decision.file}`);
     log.warn(`Videoscan #${t.id} (${domain}): ${why}; final report ${decision.file} found — marked completed`);
-    // The sync that ran when the scan finished may have hit the same outage. Never rejects; logs its own failure.
-    void syncScanToSupabase(decision.file);
-    await autoMergeBatchIfDone(t.context);
+    // In the background: a batch merge (report + PDF) can take minutes and would hold the
+    // queue or startup. Sync first, as the merge archives the file the sync uploads (the
+    // first sync may have hit the same outage). Neither step rejects; both log failures.
+    void syncScanToSupabase(decision.file).then(() => autoMergeBatchIfDone(t.context));
     return;
   }
 
@@ -761,26 +767,33 @@ async function resolveDeadVideoscan(t: Task, why: string): Promise<void> {
     const { maxPages, targetPages } = resumeBudget(t.context, readPagesScanned(resumePath));
     // Fail first: if createTask then fails the scan is merely not resumed, whereas the
     // reverse order could leave the row running and resume it twice.
-    await failTask(t.id, `${why}; auto-resume task created`);
-    const resumed = await createTask('videoscan', t.context.scanUrl!, getVideoscanDir(), {
-      source: 'github',
-      event: 'videoscan-resume',
-      title: `Resume videoscan: ${domain}`,
-      scanUrl: t.context.scanUrl,
-      maxPages,
-      ...(targetPages !== undefined ? { targetPages } : {}),
-      delay: t.context.delay,
-      resumeFile: resumePath,
-      ...(t.context.batchId ? { batchId: t.context.batchId } : {}),
-      ...(t.context.batchLabel ? { batchLabel: t.context.batchLabel } : {}),
-    });
+    await failTask(t.id, `${why}; auto-resuming from ${decision.file}`);
+    let resumed: Task;
+    try {
+      resumed = await createTask('videoscan', t.context.scanUrl!, getVideoscanDir(), {
+        source: 'github',
+        event: 'videoscan-resume',
+        title: `Resume videoscan: ${domain}`,
+        scanUrl: t.context.scanUrl,
+        maxPages,
+        ...(targetPages !== undefined ? { targetPages } : {}),
+        delay: t.context.delay,
+        resumeFile: resumePath,
+        ...(t.context.batchId ? { batchId: t.context.batchId } : {}),
+        ...(t.context.batchLabel ? { batchLabel: t.context.batchLabel } : {}),
+      });
+    } catch (err) {
+      // The row is already failed, so nothing retries this: say how to resume by hand.
+      log.error(`Videoscan #${t.id} (${domain}): creating the auto-resume task failed; resume manually from ${resumePath}`, err);
+      return;
+    }
     log.warn(`Videoscan #${t.id} (${domain}): ${why} — auto-resume created as task #${resumed.id}`);
     return;
   }
 
   await failTask(t.id, `${why} (${decision.reason})`);
   log.warn(`Videoscan #${t.id} (${domain}): ${why} — marked failed (${decision.reason})`);
-  await autoMergeBatchIfDone(t.context);
+  void autoMergeBatchIfDone(t.context);
 }
 
 /**
@@ -877,43 +890,53 @@ function wakeProcessor(): void {
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const SAFETY_POLL_INTERVAL_MS = 60_000;
 
+// Settle a running row left by a previous server instance (crash/restart).
+async function settleOrphan(t: Task): Promise<void> {
+  const isTerminalTask = t.type === 'testing' || ((t.type === 'code-gen' || t.type === 'issue-fix') && !!t.context.workItemId);
+  if (isTerminalTask) {
+    await updateTaskStatus(t.id, 'pending');
+    log.warn(`Reset terminal task #${t.id} to pending (may still have active terminal)`);
+    return;
+  }
+
+  if (t.type !== 'videoscan') {
+    await failTask(t.id, 'Server restarted while task was running');
+    log.warn(`Marked orphaned task #${t.id} as failed`);
+    return;
+  }
+
+  // If the prior server died but its scan.mjs child survived (tsx-watch reload, etc.),
+  // kill it before we spawn a respawn — otherwise two scan.mjs processes race on the
+  // same resume file.
+  if (isPidAlive(t.pid)) {
+    log.warn(`Orphaned videoscan #${t.id} has live PID ${t.pid} from previous instance — killing tree`);
+    const result = await killProcessTree(t.pid!);
+    if (!result.killed) {
+      log.error(`Failed to kill orphaned scan #${t.id} PID ${t.pid}: ${result.error}; skipping auto-resume to avoid double-spawn`);
+      await failTask(t.id, `Orphan kill failed: ${result.error}`);
+      return;
+    }
+  }
+  await resolveDeadVideoscan(t, 'Server restarted while scan was running');
+}
+
 export async function startProcessor(intervalMs?: number): Promise<void> {
   if (intervalId) return;
   const realtimeAvailable = isSupabaseConfigured();
 
-  // Mark orphaned running tasks as failed (from previous server crash/restart).
-  // With Supabase: only fail tasks belonging to THIS machine (other machines may still
-  // be running them). Use the orphan-specific query so we don't pull hundreds of
+  // Settle orphaned running tasks: fail them, or for videoscans complete/auto-resume from
+  // the scan files. With Supabase: only rows belonging to THIS machine (other machines may
+  // still be running theirs). Use the orphan-specific query so we don't pull hundreds of
   // unrelated rows on every startup.
   const orphaned = await getOrphanCandidates(MACHINE_ID);
   for (const t of orphaned) {
-    const isTerminalTask = t.type === 'testing' || ((t.type === 'code-gen' || t.type === 'issue-fix') && !!t.context.workItemId);
-    if (isTerminalTask) {
-      await updateTaskStatus(t.id, 'pending');
-      log.warn(`Reset terminal task #${t.id} to pending (may still have active terminal)`);
-      continue;
+    // One failed row must not keep the processor from starting. A videoscan left running
+    // is settled later by reconcileDeadVideoscans.
+    try {
+      await settleOrphan(t);
+    } catch (err) {
+      log.error(`Settling orphaned task #${t.id} failed`, err);
     }
-
-    // If the prior server died but its scan.mjs child survived (tsx-watch reload, etc.),
-    // kill it before we spawn a respawn — otherwise two scan.mjs processes race on the
-    // same resume file.
-    if (t.type === 'videoscan' && isPidAlive(t.pid)) {
-      log.warn(`Orphaned videoscan #${t.id} has live PID ${t.pid} from previous instance — killing tree`);
-      const result = await killProcessTree(t.pid!);
-      if (!result.killed) {
-        log.error(`Failed to kill orphaned scan #${t.id} PID ${t.pid}: ${result.error}; skipping auto-resume to avoid double-spawn`);
-        await failTask(t.id, `Orphan kill failed: ${result.error}`);
-        continue;
-      }
-    }
-
-    if (t.type === 'videoscan') {
-      await resolveDeadVideoscan(t, 'Server restarted while scan was running');
-      continue;
-    }
-
-    await failTask(t.id, 'Server restarted while task was running');
-    log.warn(`Marked orphaned task #${t.id} as failed`);
   }
 
   // dbClaimTask arbitrates atomically, so duplicate realtime notifications are harmless.
