@@ -208,8 +208,8 @@ export const DETECTORS = {
       // 'youtube.com/embed/' is a string literal in Google Tag Manager's YouTube
       // trigger script, inlined on every page of stadsarchief.breda.nl (990
       // pages, no player).
-      /youtube\.com\/embed\/[\w-]{11}/i,
-      /youtube-nocookie\.com\/embed\/[\w-]{11}/i,
+      /youtube\.com\/embed\/+[\w-]{11}/i,
+      /youtube-nocookie\.com\/embed\/+[\w-]{11}/i,
       // NB: no bare /youtu\.be\// — that's a share/watch link domain, never an
       // embed src. It fired on plain links (stripAnchorHrefs only strips <a href>,
       // not data-*/text/JSON), flagging pages that merely link to YouTube.
@@ -240,7 +240,9 @@ export const DETECTORS = {
   },
   Vimeo: {
     patterns: [
-      /player\.vimeo\.com/i,
+      // A path after the host: a bare player.vimeo.com is a cookie-banner domain
+      // list (gouda.nl, 1550 pages), CSP or preconnect, never an embed.
+      /player\.vimeo\.com\/\w/i,
       /vimeo\.com\/video/i,
       // Event / showcase embeds are iframe srcs in their own right, and the
       // removed link pattern never covered them (no digits after the slash).
