@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, normalizeUrl, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource } from "./scan.mjs";
+import { DETECTORS, detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, normalizeUrl, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource } from "./scan.mjs";
 
 const names = (result) => result.map((r) => r.player).sort();
 
@@ -226,6 +226,51 @@ test("YouTube embed with a doubled slash before the id is detected", () => {
   assert.deepEqual(names(detectFromCorpus('<iframe src="https://www.youtube.com/embed//GIRdeMdgYVY"></iframe>')), ["YouTube"]);
 });
 
+test("player library CSS and a site-wide library load are NOT a player", () => {
+  // gemeenteraad.denhelder.nl: video.js default styles + stylesheet on every page
+  const denHelder = '<head><style class="vjs-styles-defaults">.video-js { width: 300px; }</style>' +
+    '<link rel="stylesheet" type="text/css" href="https://static.gemeenteoplossingen.nl/1.0/css/video-js.min.css"></head><p>x</p>';
+  assert.deepEqual(names(detectFromCorpus(denHelder)), []);
+  // jeugdhulprijnmond.nl: theme CSS names .mejs-container, video.js loaded site-wide
+  // (its <script src> is in page.content() too and names the library)
+  const rijnmond = '<style>div.tf_audio_lazy audio{height:0}.mejs-container{visibility:visible}</style>' +
+    '<script src="https://cdn.jsdelivr.net/npm/video.js@8/dist/video.min.js"></script>' +
+    "<script src='/wp-includes/js/mediaelement/mediaelement-and-player.min.js'></script>" +
+    '<link rel="preload" as="style" href="/css/video-js.min.css"><p>x</p>';
+  const net = ["https://cdn.jsdelivr.net/npm/video.js@8/dist/video.min.js", "https://x.nl/wp-includes/js/mediaelement/mediaelement-and-player.min.js"];
+  assert.deepEqual(names(detectFromCorpus(rijnmond, "", net)), []);
+});
+
+test("an unclosed or JSON-escaped <style> does not swallow a player", () => {
+  const unclosed = '<script>var s="<style>"+css;</script><div><video class="video-js vjs-tech" src="a.mp4"></video></div><style>.b{}</style>';
+  assert.deepEqual(names(detectFromCorpus(unclosed)), ["HTML5 native", "Video.js"]);
+  const escaped = '<script type="application/json">{"c":"<style>.a{}<\\/style>"}</script>' +
+    '<iframe src="https://www.youtube.com/embed/M7lc1UVf-VE"></iframe><style>.b{}</style>';
+  assert.deepEqual(names(detectFromCorpus(escaped)), ["YouTube"]);
+});
+
+test("YouTube IFrame API player built in script is detected by its videoId", () => {
+  const html = '<div id="yt"></div><script>new YT.Player("yt", { height: 390, videoId: "M7lc1UVf-VE" })</script>';
+  assert.deepEqual(names(detectFromCorpus(html, "", ["https://www.youtube.com/iframe_api"])), ["YouTube"]);
+  // a videoId in some other player's config is not YouTube
+  assert.deepEqual(names(detectFromCorpus('<script>player.load({ videoId: "12345678901" })</script>')), []);
+});
+
+test("YouTube IFrame API loader alone is NOT a player", () => {
+  // almelobuurtsamen.nl / actiefhoogeveen.nl: loaded on every page, no embed
+  const net = ["https://www.youtube.com/iframe_api", "https://www.youtube.com/s/player/7460dd14/www-widgetapi.vflset/www-widgetapi.js"];
+  assert.deepEqual(names(detectFromCorpus("<p>x</p>", "", net)), []);
+});
+
+test("real players next to library CSS / the IFrame API are still detected", () => {
+  const vjs = '<style>.video-js{}</style><video class="video-js vjs-tech" src="/a.mp4"></video>';
+  assert.ok(names(detectFromCorpus(vjs)).includes("Video.js"));
+  const mejs = '<style>.mejs-container{}</style><div class="mejs-container"><video src="/a.mp4"></video></div>';
+  assert.ok(names(detectFromCorpus(mejs)).includes("MediaElement.js"));
+  const yt = ["https://www.youtube.com/iframe_api", "https://www.youtube.com/embed/TVH0auuQ_lE?enablejsapi=1"];
+  assert.deepEqual(names(detectFromCorpus("<p>x</p>", "", yt)), ["YouTube"]);
+});
+
 test("YouTube embeds with a video id still detected, consent-gated and playlist ones too", () => {
   const consent = `<div class="youtube-responsive consent-ce no-consent">
     <iframe class="consent-ce--iframe" src="https://www.youtube-nocookie.com/embed/LssNqQcxhz8?iv_load_policy=1"></iframe></div>`;
@@ -395,7 +440,8 @@ test("Network evidence keeps the matched token when the URL is truncated", () =>
     "https://example.nl/sites/default/files/js/js_" +
     "A".repeat(43) +
     "/xx_vjs-yy.js?v=1";
-  const result = detectPlayers("<p>x</p>", [url]);
+  // Video.js needs markup too (a library request alone is not a player).
+  const result = detectPlayers('<div class="video-js"></div>', [url]);
   const evidence = result.flatMap((r) => r.evidence);
   assert.deepEqual(names(result), ["Video.js"]);
   assert.ok(
@@ -430,7 +476,8 @@ test("Network evidence: a match straddling the 80-char cut still gets a window",
   // for exactly this case; keying off match.index would drop the window and
   // leave the evidence showing only the first half of what fired.
   const url = "https://example.com/" + "b".repeat(55) + "/video.js?x=1";
-  const result = detectPlayers("<p>x</p>", [url]);
+  // Video.js needs markup too (a library request alone is not a player).
+  const result = detectPlayers('<div class="video-js"></div>', [url]);
   const evidence = result.flatMap((r) => r.evidence);
   assert.deepEqual(names(result), ["Video.js"]);
   assert.ok(
@@ -511,6 +558,9 @@ test("Drupal aggregated-JS bundle is NOT Video.js — network evidence", () => {
   // here flags 100% of pages, not a stray one.
   const result = detectFromCorpus("<p>Dataset page, no video.</p>", "", [DRUPAL_AGG_URL]);
   assert.deepEqual(names(result), []);
+  // Network-only Video.js is dropped anyway (NEEDS_MARKUP), so test the regex itself.
+  const path = DRUPAL_AGG_URL.split("?")[0];
+  assert.ok(!DETECTORS["Video.js"].scripts.some((re) => re.test(path)), "scripts regex must not match the bundle");
 });
 
 test("Drupal aggregated-JS bundle is NOT Video.js — same URL in HTML markup", () => {
@@ -531,8 +581,9 @@ test("Synthetic urlsafe-base64 blobs with vjs- inside do not match", () => {
 
 test("Real Video.js CDN script still detected (guard against over-narrowing)", () => {
   // vjs.zencdn.net is the only shape the `vjs` pattern is load-bearing for.
-  const result = detectFromCorpus("<p>x</p>", "", ["https://vjs.zencdn.net/8.10.0/video.min.js"]);
+  const result = detectFromCorpus('<div class="video-js"></div>', "", ["https://vjs.zencdn.net/8.10.0/video.min.js"]);
   assert.deepEqual(names(result), ["Video.js"]);
+  assert.ok(result[0].evidence.some((e) => e.includes("vjs.zencdn.net")), "network evidence kept");
 });
 
 test("Real Video.js markup still detected — vjs- skin classes", () => {
@@ -996,7 +1047,9 @@ test("Video.js still detected — video-js class, <video-js> tag, video.js path"
   assert.deepEqual(names(detectFromCorpus('<div class="video-js"></div>')), ["Video.js"]);
   assert.deepEqual(names(detectFromCorpus("<video-js id=p></video-js>")), ["Video.js"]);
   const network = ["https://cdn.jsdelivr.net/npm/video.js@8/dist/video.min.js"];
-  assert.deepEqual(names(detectFromCorpus("<p>x</p>", "", network)), ["Video.js"]);
+  const withNet = detectFromCorpus('<video class="video-js vjs-tech"></video>', "", network);
+  assert.deepEqual(names(withNet), ["HTML5 native", "Video.js"]);
+  assert.ok(withNet.find((r) => r.player === "Video.js").evidence.some((e) => e.startsWith("Network:")), "video.js path still matched on the network");
 });
 
 // ── Network: trackers carry the page URL in their query ────────────

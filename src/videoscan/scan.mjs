@@ -235,8 +235,15 @@ export const DETECTORS = {
       // As an element's class/id, not bare /youtube-player/: WP Rocket's inline
       // CSS '.rll-youtube-player{…}' ships on every page of the site.
       /(?:class|id)=["'][^"']*\byoutube-player\b/i,
+      // IFrame API player built in script (new YT.Player(el, {videoId: "…"})): until
+      // a click or consent creates the iframe, the loader is its only request.
+      // Scoped to the YT.Player call: other players' configs have a videoId too.
+      /\bYT\.Player\s*\([\s\S]{0,300}?\bvideoId\s*:\s*["'][\w-]{11}["']/,
     ],
-    scripts: [/youtube\.com/i, /ytimg\.com/i],
+    // Not the IFrame API loader (iframe_api → www-widgetapi.js): almelobuurtsamen.nl
+    // and actiefhoogeveen.nl load it on every page (1880 pages) with no player.
+    // An actual embed requests /embed/, its thumbnails (ytimg) or the player itself.
+    scripts: [/youtube(?:-nocookie)?\.com\/(?!iframe_api|player_api|s\/player\/[^/]+\/www-widgetapi)/i, /ytimg\.com/i],
   },
   Vimeo: {
     patterns: [
@@ -2212,6 +2219,30 @@ function stripHostAllowLists(html) {
     .replace(RESOURCE_HINT_LINK, "");
 }
 
+// A stylesheet is not a player. Video.js injects <style class="vjs-styles-defaults">
+// with `.video-js {…}` on load, and themes inline `.mejs-container{…}`: both sat on
+// every page of gemeenteraad.denhelder.nl (221) and jeugdhulprijnmond.nl (153)
+// without a single <video>. Same for <link rel="stylesheet" href="…/video-js.min.css">.
+const STYLESHEET_LINK =
+  /<link\b[^>]*\brel\s*=\s*(?:"[^"]*\bstylesheet\b[^"]*"|'[^']*\bstylesheet\b[^']*'|stylesheet\b)[^>]*>/gi;
+
+// The body may not contain "<": a "<style>" inside a script string (or JSON's
+// escaped "<\/style>") must not swallow everything up to the next real </style>,
+// players included. CSS with a literal "<" just stays, as before.
+function stripStylesheets(html) {
+  return html.replace(/<style(?=[\s>])[^>]*>[^<]*<\/style>/gi, "").replace(STYLESHEET_LINK, "");
+}
+
+// Generic player libraries are often loaded site-wide (jeugdhulprijnmond.nl loads
+// video.js on every page). Loading the library is not a player — neither the request
+// nor its <script src>/<link> tag, both of which name it. These players need a match
+// in the markup with those tags removed: the element a real player leaves in the
+// rendered DOM (<video class="video-js">, .mejs-container). Trade-off: a player inside
+// an iframe, whose only trace here is the iframe's script request, is not counted.
+const NEEDS_MARKUP = new Set(["Video.js", "MediaElement.js"]);
+const stripAssetTags = (html) =>
+  html.replace(/<script\b[^>]*\bsrc\s*=[^>]*>/gi, "").replace(/<link\b[^>]*>/gi, "");
+
 // `scripts` patterns see scheme + host + path only. Trackers carry the page URL,
 // title and referrer in their query (GA's dl/dt, pixel ?url=), and bundlers put
 // random base64 there: Google's pagead/1p-user-list?random=… and Drupal's
@@ -2250,9 +2281,10 @@ function networkEvidence(url, match) {
 }
 
 export function detectPlayers(html, networkRequests) {
-  const searchable = stripAnchorHrefs(stripHostAllowLists(stripDownlevelConditionals(html)));
+  const searchable = stripAnchorHrefs(stripStylesheets(stripHostAllowLists(stripDownlevelConditionals(html))));
   const requestPaths = networkRequests.map(stripQuery);
   const found = [];
+  let markupOnly;
 
   for (const [player, config] of Object.entries(DETECTORS)) {
     const matches = [];
@@ -2278,6 +2310,10 @@ export function detectPlayers(html, networkRequests) {
       }
     }
 
+    if (NEEDS_MARKUP.has(player)) {
+      markupOnly ??= stripAssetTags(searchable);
+      if (!config.patterns.some((p) => p.test(markupOnly))) continue;
+    }
     if (matches.length > 0) {
       found.push({ player, evidence: matches });
     }
