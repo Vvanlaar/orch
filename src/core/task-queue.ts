@@ -28,6 +28,7 @@ import {
 } from './db/tasks.js';
 import type { LeanTask } from './db/tasks.js';
 import { createLogger } from './logger.js';
+import { withRetry } from './queue-helpers.js';
 
 const log = createLogger('task-queue');
 
@@ -145,6 +146,15 @@ export function clearStreamingOutput(id: number): void {
 
 // Evaluated once — Supabase config cannot change at runtime
 const useDb = isSupabaseConfigured();
+
+// Final status writes ride out a short DB blip; a longer outage is left to the
+// processor's reconciliation of running rows whose process is gone.
+const FINAL_WRITE_RETRY_DELAYS_MS = [2_000, 10_000, 30_000];
+
+function retryFinalWrite(id: number, status: string, write: () => Promise<void>): Promise<void> {
+  return withRetry(write, FINAL_WRITE_RETRY_DELAYS_MS, (err, attempt, delayMs) =>
+    log.warn(`Task #${id} marking ${status} failed (attempt ${attempt}), retrying in ${delayMs}ms: ${err instanceof Error ? err.message : err}`));
+}
 
 export async function createTask(
   type: TaskType,
@@ -269,14 +279,14 @@ export async function claimTask(id: number): Promise<boolean> {
 export async function completeTask(id: number, result: string): Promise<void> {
   const output = tailOutput(streamingOutputs.get(id));
   streamingOutputs.delete(id);
-  if (useDb) return dbCompleteTask(id, result, output);
+  if (useDb) return retryFinalWrite(id, 'completed', () => dbCompleteTask(id, result, output));
   jsonUpdateTask(id, { status: 'completed', result, output, pid: undefined, completedAt: new Date().toISOString() });
 }
 
 export async function failTask(id: number, error: string): Promise<void> {
   const output = tailOutput(streamingOutputs.get(id));
   streamingOutputs.delete(id);
-  if (useDb) return dbFailTask(id, error, output);
+  if (useDb) return retryFinalWrite(id, 'failed', () => dbFailTask(id, error, output));
   jsonUpdateTask(id, { status: 'failed', error, output, pid: undefined, completedAt: new Date().toISOString() });
 }
 

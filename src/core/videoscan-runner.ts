@@ -10,6 +10,7 @@ import { dbListScans, dbUpsertVideoscan, dbDeleteVideoscans, dbArchiveVideoscans
 import { downloadFile, uploadScanFiles, deleteScanFiles } from './db/storage.js';
 import { reportOptionsToArgs, type ReportOptions } from './report-args.js';
 import { applyStickyReportOptions } from './report-sticky.js';
+import type { ScanFileInfo } from './queue-helpers.js';
 
 export type { ReportOptions };
 
@@ -385,6 +386,17 @@ export function readPagesScanned(scanPath: string): number | null {
   try {
     const n = JSON.parse(readFileSync(scanPath, 'utf-8')).pagesScanned;
     return typeof n === 'number' ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/** mtime and kind of a scan JSON, or null when it is missing or unparseable (e.g. died mid-write). */
+export function readScanFileInfo(name: string): ScanFileInfo | null {
+  const scanPath = join(VIDEOSCAN_DIR, name);
+  try {
+    const data = JSON.parse(readFileSync(scanPath, 'utf-8'));
+    return { name, mtimeMs: statSync(scanPath).mtimeMs, checkpoint: data?.checkpoint === true };
   } catch {
     return null;
   }

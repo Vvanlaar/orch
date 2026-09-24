@@ -42,11 +42,12 @@ import {
   checkoutPRInWorktree,
   findRemoteForRepo,
 } from './git-ops.js';
-import { runVideoscan, findLatestScanFileForDomain, readPagesScanned, resumeBudget, getVideoscanDir, mergeScans, syncScanToSupabase, generateReport as generateVideoscanReport } from './videoscan-runner.js';
+import { runVideoscan, findLatestScanFileForDomain, readPagesScanned, readScanFileInfo, resumeBudget, getVideoscanDir, mergeScans, syncScanToSupabase, generateReport as generateVideoscanReport, type VideoscanResult } from './videoscan-runner.js';
+import { createStaleTracker, decideDeadScan, freeSlots, singleFlight, withRetry } from './queue-helpers.js';
 import { isPidAlive, killProcessTree } from './process-kill.js';
 import { dbArchiveVideoscans } from './db/videoscans.js';
 import { MACHINE_ID, isSupabaseConfigured } from './db/client.js';
-import { dbSubscribeTaskChanges } from './db/tasks.js';
+import { dbSubscribeTaskChanges, type LeanTask } from './db/tasks.js';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import type { Task } from './types.js';
 
@@ -353,6 +354,13 @@ async function processPrCommentFix(task: Task): Promise<void> {
   }
 }
 
+// Throws when the DB stays unreachable: guessing "not paused" could overwrite a paused
+// row, while a row left running is settled later by reconcileDeadVideoscans.
+async function isPaused(taskId: number): Promise<boolean> {
+  const current = await withRetry(() => getTask(taskId), [2_000, 10_000]);
+  return current?.status === 'paused';
+}
+
 async function processVideoscan(task: Task): Promise<void> {
   const ctx = task.context;
   if (!ctx.scanUrl && !ctx.urls?.length) {
@@ -364,8 +372,9 @@ async function processVideoscan(task: Task): Promise<void> {
   clearStreamingOutput(task.id);
   notifyUpdate(task.id);
 
+  let result: VideoscanResult;
   try {
-    const result = await runVideoscan(task.id, {
+    result = await runVideoscan(task.id, {
       scanUrl: ctx.scanUrl || ctx.urls?.[0] || '',
       maxPages: ctx.maxPages,
       resumeFile: ctx.resumeFile,
@@ -375,49 +384,41 @@ async function processVideoscan(task: Task): Promise<void> {
       batchId: ctx.batchId,
       batchLabel: ctx.batchLabel,
     });
-
-    // If the user paused this task while runVideoscan was in flight, the row will
-    // already say 'paused'. Don't override that with completed/failed — just record
-    // the JSON filename so the resume endpoint knows where to pick up from.
-    const current = await getTask(task.id);
-    const wasPaused = current?.status === 'paused';
-
-    if (wasPaused) {
-      if (result.jsonFile) {
-        const resumePath = path.join(getVideoscanDir(), result.jsonFile);
-        await updateTaskContext(task.id, { resumeFile: resumePath });
-      }
-      log.info(`Task #${task.id} paused; subprocess exited gracefully${result.jsonFile ? ` (resume file: ${result.jsonFile})` : ''}`);
-    } else if (result.success) {
-      const parts = [`Scan complete`];
-      if (result.jsonFile) parts.push(`JSON: ${result.jsonFile}`);
-      if (result.htmlFile) parts.push(`Report: ${result.htmlFile}`);
-      if (result.pdfFile) parts.push(`PDF: ${result.pdfFile}`);
-      await completeTask(task.id, parts.join('\n'));
-    } else {
-      await failTask(task.id, result.error || 'Videoscan failed');
-    }
   } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
-    // Don't clobber a paused row with a 'failed' status if the error was triggered by the pause.
-    const current = await getTask(task.id);
-    if (current?.status !== 'paused') {
-      await failTask(task.id, error);
-    } else {
-      log.warn(`Task #${task.id} paused; runVideoscan threw (${error}) — leaving status as paused`);
+    result = { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+
+  // If the user paused this task while runVideoscan was in flight, the row will
+  // already say 'paused'. Don't override that with completed/failed — just record
+  // the JSON filename so the resume endpoint knows where to pick up from.
+  if (await isPaused(task.id)) {
+    if (result.jsonFile) {
+      const resumePath = path.join(getVideoscanDir(), result.jsonFile);
+      await updateTaskContext(task.id, { resumeFile: resumePath });
     }
+    log.info(`Task #${task.id} paused; subprocess exited${result.jsonFile ? ` (resume file: ${result.jsonFile})` : ''}${result.error ? ` (${result.error})` : ''}`);
+  } else if (result.success) {
+    const parts = [`Scan complete`];
+    if (result.jsonFile) parts.push(`JSON: ${result.jsonFile}`);
+    if (result.htmlFile) parts.push(`Report: ${result.htmlFile}`);
+    if (result.pdfFile) parts.push(`PDF: ${result.pdfFile}`);
+    await completeTask(task.id, parts.join('\n'));
+  } else {
+    await failTask(task.id, result.error || 'Videoscan failed');
   }
   notifyUpdate(task.id);
+  await autoMergeBatchIfDone(ctx);
+}
 
-  // Auto-merge digi-import batches once every sibling task has finished.
-  // Note: the TERMINAL gate below already excludes 'paused', so paused siblings naturally
-  // hold the merge until the user resumes them.
-  if (ctx.batchId && !ctx.targetFilename) {
-    try {
-      await tryAutoMergeBatch(ctx.batchId);
-    } catch (err) {
-      log.error(`Batch auto-merge failed for ${ctx.batchId}: ${err instanceof Error ? err.message : err}`);
-    }
+// Auto-merge digi-import batches once every sibling task has finished.
+// Note: the TERMINAL gate in tryAutoMergeBatch already excludes 'paused', so paused
+// siblings naturally hold the merge until the user resumes them.
+async function autoMergeBatchIfDone(ctx: Task['context']): Promise<void> {
+  if (!ctx.batchId || ctx.targetFilename) return;
+  try {
+    await tryAutoMergeBatch(ctx.batchId);
+  } catch (err) {
+    log.error(`Batch auto-merge failed for ${ctx.batchId}: ${err instanceof Error ? err.message : err}`);
   }
 }
 
@@ -719,18 +720,115 @@ async function processTask(task: Task): Promise<void> {
   }
 }
 
-export async function processQueue(): Promise<void> {
+// Tasks claimed by this process whose processTask hasn't settled. Counted as busy slots
+// even before the claim is visible in a DB read, and never treated as stale.
+const inFlight = new Map<number, Task['type']>();
+
+// A row must look dead for this long before it is settled. Covers rows another instance on
+// this machine is still finishing: no PID written yet, or the scan exited and that instance
+// is generating the report / retrying its final write.
+const deadScans = createStaleTracker(5 * 60_000);
+
+function scanDomain(ctx: Task['context']): string {
+  try { return new URL(ctx.scanUrl || ctx.urls?.[0] || '').hostname.replace(/^www\./, ''); } catch { return ''; }
+}
+
+/**
+ * Settle a videoscan row that says running while its scan process is gone: completed if
+ * this run's final report is on disk, auto-resumed from its checkpoint, or failed.
+ */
+async function resolveDeadVideoscan(t: Task, why: string): Promise<void> {
+  const domain = scanDomain(t.context);
+  const latestName = domain ? findLatestScanFileForDomain(domain) : null;
+  const decision = decideDeadScan({
+    latest: latestName ? readScanFileInfo(latestName) : null,
+    startedAtMs: t.startedAt ? Date.parse(t.startedAt) : null,
+    crawlMode: !!t.context.scanUrl && !t.context.urls,
+    mergeTarget: !!t.context.targetFilename,
+  });
+
+  if (decision.action === 'complete') {
+    await completeTask(t.id, `Scan complete (${why}; status recovered from scan file)\nJSON: ${decision.file}`);
+    log.warn(`Videoscan #${t.id} (${domain}): ${why}; final report ${decision.file} found — marked completed`);
+    // The sync that ran when the scan finished may have hit the same outage. Never rejects; logs its own failure.
+    void syncScanToSupabase(decision.file);
+    await autoMergeBatchIfDone(t.context);
+    return;
+  }
+
+  if (decision.action === 'resume') {
+    const resumePath = path.join(getVideoscanDir(), decision.file);
+    const { maxPages, targetPages } = resumeBudget(t.context, readPagesScanned(resumePath));
+    // Fail first: if createTask then fails the scan is merely not resumed, whereas the
+    // reverse order could leave the row running and resume it twice.
+    await failTask(t.id, `${why}; auto-resume task created`);
+    const resumed = await createTask('videoscan', t.context.scanUrl!, getVideoscanDir(), {
+      source: 'github',
+      event: 'videoscan-resume',
+      title: `Resume videoscan: ${domain}`,
+      scanUrl: t.context.scanUrl,
+      maxPages,
+      ...(targetPages !== undefined ? { targetPages } : {}),
+      delay: t.context.delay,
+      resumeFile: resumePath,
+      ...(t.context.batchId ? { batchId: t.context.batchId } : {}),
+      ...(t.context.batchLabel ? { batchLabel: t.context.batchLabel } : {}),
+    });
+    log.warn(`Videoscan #${t.id} (${domain}): ${why} — auto-resume created as task #${resumed.id}`);
+    return;
+  }
+
+  await failTask(t.id, `${why} (${decision.reason})`);
+  log.warn(`Videoscan #${t.id} (${domain}): ${why} — marked failed (${decision.reason})`);
+  await autoMergeBatchIfDone(t.context);
+}
+
+/**
+ * Running videoscan rows of this machine that no live process backs — e.g. the scan
+ * finished while the DB was down, so its final status write was lost. Left alone they
+ * hold a slot until the next server restart. Returns the ids settled.
+ */
+async function reconcileDeadVideoscans(rows: LeanTask[]): Promise<Set<number>> {
+  const settled = new Set<number>();
+  const stale = deadScans.update(rows
+    .filter(t => t.type === 'videoscan' && t.machineId === MACHINE_ID && !inFlight.has(t.id) && !isPidAlive(t.pid))
+    .map(t => t.id));
+  for (const id of stale) {
+    try {
+      const t = await getTask(id);
+      if (!t || t.status !== 'running') continue;
+      await resolveDeadVideoscan(t, 'Scan process exited but its status was never saved');
+      settled.add(t.id);
+      notifyUpdate(t.id);
+    } catch (err) {
+      log.error(`Reconciling stale videoscan #${id} failed; will retry next tick`, err);
+    }
+  }
+  return settled;
+}
+
+async function processQueueOnce(): Promise<void> {
   const [runningTasks, allPending] = await Promise.all([
     getRunningTasksLean(),
     getPendingTasks(config.claude.maxConcurrentTasks + config.claude.maxConcurrentVideoscans, MACHINE_ID),
   ]);
 
   // Slot budget is per-machine: don't count other machines' running tasks against this machine's capacity.
-  const myRunning = runningTasks.filter(t => !t.machineId || t.machineId === MACHINE_ID);
-  let videoscanSlots = config.claude.maxConcurrentVideoscans - myRunning.filter(t => t.type === 'videoscan').length;
-  let otherSlots = config.claude.maxConcurrentTasks - myRunning.filter(t => t.type !== 'videoscan').length;
+  const settled = await reconcileDeadVideoscans(runningTasks);
+  const myRunning = runningTasks.filter(t => (!t.machineId || t.machineId === MACHINE_ID) && !settled.has(t.id));
+  const idsOf = (isScan: boolean) => ({
+    running: myRunning.filter(t => (t.type === 'videoscan') === isScan).map(t => t.id),
+    inFlight: [...inFlight].filter(([, type]) => (type === 'videoscan') === isScan).map(([id]) => id),
+  });
+  const scans = idsOf(true);
+  const others = idsOf(false);
+  let videoscanSlots = freeSlots(config.claude.maxConcurrentVideoscans, scans.running, scans.inFlight);
+  let otherSlots = freeSlots(config.claude.maxConcurrentTasks, others.running, others.inFlight);
 
   for (const task of allPending) {
+    // Resumed while its previous run is still finishing (report, final write): wait for that
+    // run to settle, or two processTask calls would share one id.
+    if (inFlight.has(task.id)) continue;
     if (task.type === 'videoscan') {
       if (videoscanSlots <= 0) continue;
       videoscanSlots--;
@@ -746,11 +844,18 @@ export async function processQueue(): Promise<void> {
       continue;
     }
 
-    processTask(task).catch((err) => {
-      log.error(`Unhandled error in task #${task.id}`, err);
-    });
+    inFlight.set(task.id, task.type);
+    processTask(task)
+      .catch((err) => log.error(`Unhandled error in task #${task.id}`, err))
+      .finally(() => inFlight.delete(task.id));
   }
 }
+
+// Startup, interval ticks and realtime wakes all call this. Two overlapping runs would
+// each read the running count before the other's claims and overshoot the slot limit.
+// Errors are logged per run so a failed run doesn't drop the rerun queued behind it.
+export const processQueue = singleFlight(() =>
+  processQueueOnce().catch(err => log.error('Queue processing error', err)));
 
 let intervalId: NodeJS.Timeout | null = null;
 let realtimeChannel: RealtimeChannel | null = null;
@@ -763,7 +868,7 @@ function wakeProcessor(): void {
   realtimeWakePending = true;
   setImmediate(() => {
     realtimeWakePending = false;
-    processQueue().catch(err => log.error('Queue processing error (realtime wake)', err));
+    void processQueue();
   });
 }
 
@@ -802,35 +907,9 @@ export async function startProcessor(intervalMs?: number): Promise<void> {
       }
     }
 
-    // Auto-resume orphaned crawl-mode videoscans if a prior scan JSON exists.
-    // Explicit-URL mode (context.urls set) has no resumable on-disk state — fail it.
-    if (t.type === 'videoscan' && t.context.scanUrl && !t.context.urls) {
-      let domain = '';
-      try { domain = new URL(t.context.scanUrl).hostname.replace(/^www\./, ''); } catch {}
-      // Only the checkpoint of the run that died. A scan killed before its first
-      // checkpoint has none, and the latest file is then an older finished
-      // report: resuming that would rewrite it in place as if it were this run.
-      const latest = domain ? findLatestScanFileForDomain(domain) : null;
-      const resumeName = latest?.includes('-INPROGRESS') ? latest : null;
-      if (resumeName) {
-        const resumePath = path.join(getVideoscanDir(), resumeName);
-        const { maxPages, targetPages } = resumeBudget(t.context, readPagesScanned(resumePath));
-        await failTask(t.id, 'Server restarted; auto-resume task created');
-        const resumed = await createTask('videoscan', t.context.scanUrl, getVideoscanDir(), {
-          source: 'github',
-          event: 'videoscan-resume',
-          title: `Resume videoscan: ${domain}`,
-          scanUrl: t.context.scanUrl,
-          maxPages,
-          ...(targetPages !== undefined ? { targetPages } : {}),
-          delay: t.context.delay,
-          resumeFile: resumePath,
-          ...(t.context.batchId ? { batchId: t.context.batchId } : {}),
-          ...(t.context.batchLabel ? { batchLabel: t.context.batchLabel } : {}),
-        });
-        log.warn(`Orphaned videoscan #${t.id} (${domain}) — auto-resume created as task #${resumed.id}`);
-        continue;
-      }
+    if (t.type === 'videoscan') {
+      await resolveDeadVideoscan(t, 'Server restarted while scan was running');
+      continue;
     }
 
     await failTask(t.id, 'Server restarted while task was running');
@@ -862,11 +941,9 @@ export async function startProcessor(intervalMs?: number): Promise<void> {
 
   const effectiveInterval = intervalMs ?? (realtimeSubscribed ? SAFETY_POLL_INTERVAL_MS : DEFAULT_POLL_INTERVAL_MS);
   log.info(`Task processor started (poll ${effectiveInterval}ms${realtimeSubscribed ? ' + realtime' : ''})`);
-  intervalId = setInterval(() => {
-    processQueue().catch(err => log.error('Queue processing error', err));
-  }, effectiveInterval);
+  intervalId = setInterval(() => void processQueue(), effectiveInterval);
 
-  processQueue().catch(err => log.error('Queue processing error', err));
+  void processQueue();
 }
 
 export function stopProcessor(): void {
