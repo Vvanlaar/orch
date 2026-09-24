@@ -175,12 +175,21 @@ export const DETECTORS = {
     // empty and the SDK builds the iframe, so before render the marker is the
     // only in-page signal. \b after it rejects suffixed variants (CwcLive),
     // which the portal does not emit.
+    // The SDK alone is not a player: steenwijkerland.nl/bis loads
+    // /sdk/player/client.js on all 1153 pages, and 6 of them name a recording
+    // as body text ("Geluidsverslag: http://player.companywebcast.com/…").
+    // So the player host and the SDK's own embed iframe (/sdk/player/?id=…,
+    // lansingerland.nl) count only as a src-like attribute value (src,
+    // data-src, data-src-cmplz, data-lazy-src, data-video-url; slashes may be
+    // JSON-escaped or URL-encoded), never as text or a share/copy attribute.
     patterns: [
       /data-video-type=["']?Cwc\b/i,
-      /sdk\.companywebcast\.com\/sdk\//i,
-      /player\.companywebcast\.com/i,
+      /(?:\bsrc[\w-]*|data-video-url)\s*=\s*\\*["']?\s*(?:https?:|https?%3A)?(?:\\*\/|%2F){2}player\.companywebcast\.com/i,
+      /(?:\bsrc[\w-]*|data-video-url)\s*=\s*\\*["']?\s*(?:https?:|https?%3A)?(?:\\*\/|%2F){2}sdk\.companywebcast\.com(?:\\*\/|%2F)sdk(?:\\*\/|%2F)player(?:\\*\/|%2F)?(?:\?|%3F|#|index)/i,
     ],
-    scripts: [/sdk\.companywebcast\.com\/sdk\//i, /player\.companywebcast\.com/i],
+    // Queries are stripped before these run, so the ?id= embed iframe is
+    // /sdk/player/ and client.js no longer matches.
+    scripts: [/player\.companywebcast\.com/i, /sdk\.companywebcast\.com\/sdk\/player\/?$/i],
   },
   // Dutch hosting platform; its iframe player runs video.js inside, so without
   // this entry the only trace was a network-only Video.js hit (breda.nl/milieustation).
