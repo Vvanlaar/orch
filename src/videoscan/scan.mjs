@@ -228,6 +228,9 @@ export const DETECTORS = {
       // hero player is <div data-youtubevid="ss0uBuG6N7k"> with the API loaded
       // only after consent, so no embed URL and no request to go on.
       /data-youtube[\w-]*=["'][\w-]{11}["']/i,
+      // Drupal's oEmbed iframe: src/data-src="/media/oembed?url=https://youtu.be/ID"
+      // (nu.venlo.nl), no youtube.com/embed in the page until consent
+      /media\/oembed\?url=https?(?::|%3A)(?:\/\/|%2F%2F)(?:www\.)?(?:youtu\.be|youtube\.com)(?:\/|%2F)/i,
       /data-youtube-video-id/i,
       // As an element's class/id, not bare /youtube-player/: WP Rocket's inline
       // CSS '.rll-youtube-player{…}' ships on every page of the site.

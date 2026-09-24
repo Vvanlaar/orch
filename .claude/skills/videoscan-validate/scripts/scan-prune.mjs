@@ -5,11 +5,14 @@
 // such player.
 //
 //   node scan-prune.mjs <file|batch|domain> --player Kaltura [--evidence kwidget]
-//                       [--only-evidence "HTML: a,HTML: b"] [--url-contains /nieuws] [--apply]
+//                       [--only-evidence "HTML: a,HTML: b"] [--url-contains /nieuws]
+//                       [--url-excludes url1,url2] [--apply]
 //
 // --evidence drops a detection when ANY evidence string contains it.
 // --only-evidence drops it only when EVERY evidence string contains one of the
 // comma-separated needles — for boilerplate that real embeds also carry.
+// --url-excludes keeps the listed pages (comma-separated, exact URLs) — for the
+// few real embeds a browser check found among a template-wide false positive.
 //
 // Default is a dry run. --apply rewrites the JSONs (a .bak copy is kept) and
 // prints which reports to regenerate.
@@ -18,7 +21,7 @@ import { copyFileSync, existsSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { readJson, resolveTarget, videoscanDir } from './lib.mjs';
 
-const VALUE_FLAGS = new Set(['--player', '--evidence', '--only-evidence', '--url-contains']);
+const VALUE_FLAGS = new Set(['--player', '--evidence', '--only-evidence', '--url-contains', '--url-excludes']);
 const opts = {};
 let target;
 const args = process.argv.slice(2);
@@ -28,11 +31,12 @@ for (let i = 0; i < args.length; i++) {
   else if (a === '--apply') opts.apply = true;
   else if (!a.startsWith('--')) target ??= a;
 }
-const { player, evidence, 'only-evidence': onlyEvidence, 'url-contains': urlContains, apply } = opts;
+const { player, evidence, 'only-evidence': onlyEvidence, 'url-contains': urlContains, 'url-excludes': urlExcludes, apply } = opts;
+const excluded = new Set(urlExcludes?.split(',').map(u => u.trim()).filter(Boolean));
 const onlyNeedles = onlyEvidence?.split(',').map(n => n.trim().toLowerCase()).filter(Boolean);
 
 if (!target || !player) {
-  console.error('usage: scan-prune.mjs <file|batch|domain> --player <name> [--evidence <substr>] [--only-evidence <a,b>] [--url-contains <substr>] [--apply]');
+  console.error('usage: scan-prune.mjs <file|batch|domain> --player <name> [--evidence <substr>] [--only-evidence <a,b>] [--url-contains <substr>] [--url-excludes <url,url>] [--apply]');
   process.exit(2);
 }
 
@@ -54,6 +58,7 @@ for (const s of scans) {
   for (const row of data.details) {
     if (!Array.isArray(row?.players)) { kept.push(row); continue; }
     if (urlContains && !row.url.includes(urlContains)) { kept.push(row); continue; }
+    if (excluded.has(row.url)) { kept.push(row); continue; }
     const before = row.players.length;
     const players = row.players.filter(p => {
       if (p.name !== player) return true;

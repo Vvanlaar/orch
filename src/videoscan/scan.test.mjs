@@ -183,6 +183,12 @@ test("YouTube embeds with a video id still detected, consent-gated and playlist 
   // theaterspeelhuis.nl hero: only a video-id attribute until consent loads the API
   const hero = `<div class="youtube screen mute active" id="player-ss0uBuG6N7k" data-youtubevid="ss0uBuG6N7k"></div>`;
   assert.deepEqual(names(detectFromCorpus(hero)), ["YouTube"]);
+  // nu.venlo.nl: Drupal media oEmbed iframe, lazy until consent
+  const drupal = `<iframe data-src="https://nu.venlo.nl/media/oembed?url=https%3A//youtu.be/SrT2SAgDv3M&amp;max_width=0"></iframe>`;
+  assert.deepEqual(names(detectFromCorpus(drupal)), ["YouTube"]);
+  // …while the footer's channel link on every page is not a player
+  const footer = `<li class="youtube"><a href="https://www.youtube.com/user/DeGemeenteVenlo" aria-label="Video">YouTube</a></li>`;
+  assert.deepEqual(names(detectFromCorpus(footer)), []);
 });
 
 test("self-hosted Flowplayer library with no player is NOT Flowplayer (and doesn't hide YouTube)", () => {
