@@ -174,6 +174,42 @@ test("YouTube strings in tracking code, cookie banners and footer icons are NOT 
   assert.deepEqual(names(detectFromCorpus(banner)), []);
 });
 
+// A Next.js flight payload carries page HTML as a JSON string: < > as \u003c \u003e, quotes as \".
+const nextPayload = (html) =>
+  `<script>self.__next_f.push([1,"${html.replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/"/g, "\\\"")}"])</script>`;
+
+test("JSON-escaped <a href> in a Next.js payload is a link, not a player", () => {
+  // capelleaandenijssel.nl/rijbewijs: text links to a CBR video on bbvms.com
+  const payload = nextPayload(`<p>Deze <a href="https://cbr.bbvms.com/p/cbr_indienen_gv/p/654.html?inheritDimensions=true">video van het CBR</a> geeft advies</p>`);
+  assert.deepEqual(names(detectFromCorpus(payload)), []);
+});
+
+test("JSON-escaped Blue Billywig embed script still detected", () => {
+  const payload = nextPayload(`<a class="x">Kijk</a><script src="https://demo.bbvms.com/p/default/c/4256593.js"></script>`);
+  assert.deepEqual(names(detectFromCorpus(payload)), ["Blue Billywig"]);
+});
+
+test("JSON-escaped anchor: data-href first, double-escaped prop HTML", () => {
+  const dataHref = nextPayload('<a data-href="#" href="https://cbr.bbvms.com/p/x.html">video</a>');
+  assert.deepEqual(names(detectFromCorpus(dataHref)), []);
+  // HTML inside a JSON prop (dangerouslySetInnerHTML.__html) is escaped twice
+  const doubled = '"__html":"\\u003ca href=\\\\\\"https://cbr.bbvms.com/p/x.html\\\\\\"\\u003evideo\\u003c/a\\u003e"';
+  assert.deepEqual(names(detectFromCorpus(doubled)), []);
+});
+
+test("JSON-escaped anchor without href doesn't strip the next tag's href", () => {
+  // only < escaped, so the anchor never closes with \u003e
+  const payload = '\\u003ca class=\\"x\\">Kijk\\u003c/a>\\u003clink rel=\\"preload\\" as=\\"script\\" href=\\"https://demo.bbvms.com/p/default/c/1.js\\">';
+  assert.deepEqual(names(detectFromCorpus(payload)), ["Blue Billywig"]);
+});
+
+test("unclosed JSON-escaped anchors stay linear", () => {
+  const html = "\\u003ca x ".repeat(20000);
+  const t0 = performance.now();
+  detectFromCorpus(html);
+  assert.ok(performance.now() - t0 < 500, "stripAnchorHrefs went quadratic");
+});
+
 test("YouTube embeds with a video id still detected, consent-gated and playlist ones too", () => {
   const consent = `<div class="youtube-responsive consent-ce no-consent">
     <iframe class="consent-ce--iframe" src="https://www.youtube-nocookie.com/embed/LssNqQcxhz8?iv_load_policy=1"></iframe></div>`;
