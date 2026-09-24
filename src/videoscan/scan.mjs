@@ -204,17 +204,25 @@ export const DETECTORS = {
   // ── Major platforms ─────────────────────────────────────────────
   YouTube: {
     patterns: [
-      /youtube\.com\/embed/i,
-      /youtube-nocookie\.com\/embed/i,
+      // With the video id (videoseries fits the 11 chars too). Bare
+      // 'youtube.com/embed/' is a string literal in Google Tag Manager's YouTube
+      // trigger script, inlined on every page of stadsarchief.breda.nl (990
+      // pages, no player).
+      /youtube\.com\/embed\/[\w-]{11}/i,
+      /youtube-nocookie\.com\/embed\/[\w-]{11}/i,
       // NB: no bare /youtu\.be\// — that's a share/watch link domain, never an
       // embed src. It fired on plain links (stripAnchorHrefs only strips <a href>,
       // not data-*/text/JSON), flagging pages that merely link to YouTube.
       // Thumbnail of one specific video, not bare /ytimg\.com/: WP Rocket inlines
       // the template 'i.ytimg.com/vi_webp/ID/hqdefault.webp' on every page.
       /ytimg\.com\/vi(?:_webp)?\/[\w-]{11}\//i,
-      /youtube\.com\/iframe_api/i,
+      // NB: no /youtube\.com\/iframe_api/ in the markup — it is text in cookie
+      // banners' vendor lists (werkenindeleidseregio.nl, every page) and in the
+      // GTM snippet. A player that loads the API shows up as a network request.
       /yt-video/i,
-      /class="youtube/i,
+      // NB: no /class="youtube/ — it matched footer icons such as
+      // class="youtube-li" linking to the channel. Real embeds carry the
+      // embed URL or a video-id attribute.
       /data-youtube-id/i,
       /data-youtube-video-id/i,
       // As an element's class/id, not bare /youtube-player/: WP Rocket's inline

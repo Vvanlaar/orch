@@ -121,7 +121,7 @@ test("Tier filter: when IProX (MediaElement.js, T5) co-occurs with YouTube (T2),
   // higher-tier hits on multi-player pages.
   const html = `
     <div data-media-markup='data-playerfeatures="playpause,current,progress,duration"'></div>
-    <iframe src="https://www.youtube.com/embed/abc123"></iframe>`;
+    <iframe src="https://www.youtube.com/embed/dQw4w9WgXcQ"></iframe>`;
   const result = detectFromCorpus(html);
   assert.deepEqual(names(result), ["YouTube"]);
 });
@@ -141,7 +141,7 @@ test("Shadow DOM <video> → HTML5 native (light DOM has no <video>)", () => {
 test("Shadow DOM <iframe> youtube → YouTube via existing patterns", () => {
   const html = `<html><body><my-player></my-player></body></html>`;
   const shadowBlob =
-    `<iframe src="https://www.youtube.com/embed/abc123">\n` +
+    `<iframe src="https://www.youtube.com/embed/dQw4w9WgXcQ">\n` +
     `<!-- shadow host: my-player -->`;
   const result = detectFromCorpus(html, shadowBlob);
   assert.deepEqual(names(result), ["YouTube"]);
@@ -163,6 +163,25 @@ test("YouTube share link (youtu.be) is NOT a player — bare text / data attr", 
   assert.deepEqual(names(result), []);
 });
 
+test("YouTube strings in tracking code, cookie banners and footer icons are NOT a player", () => {
+  // stadsarchief.breda.nl: GTM's inlined YouTube trigger + a footer channel icon
+  const gtm = `<script>(function(m){var a=m.createElement("script");a.src="//www.youtube.com/iframe_api";
+    function u(a){a=a.src||"";return a.indexOf("youtube.com/embed/")>-1||a.indexOf("youtube-nocookie.com/embed/")>-1}})(document)</script>
+    <li class="youtube-li"><span>YouTube</span></li>`;
+  assert.deepEqual(names(detectFromCorpus(gtm)), []);
+  // werkenindeleidseregio.nl: the cookie banner lists the API as a vendor
+  const banner = `<div class="cookie-list__vendor__platform__li__name">https://www.youtube.com/iframe_api</div>`;
+  assert.deepEqual(names(detectFromCorpus(banner)), []);
+});
+
+test("YouTube embeds with a video id still detected, consent-gated and playlist ones too", () => {
+  const consent = `<div class="youtube-responsive consent-ce no-consent">
+    <iframe class="consent-ce--iframe" src="https://www.youtube-nocookie.com/embed/LssNqQcxhz8?iv_load_policy=1"></iframe></div>`;
+  assert.deepEqual(names(detectFromCorpus(consent)), ["YouTube"]);
+  const playlist = `<iframe src="https://www.youtube.com/embed/videoseries?list=PL123"></iframe>`;
+  assert.deepEqual(names(detectFromCorpus(playlist)), ["YouTube"]);
+});
+
 test("self-hosted Flowplayer library with no player is NOT Flowplayer (and doesn't hide YouTube)", () => {
   // GemeenteOplossingen council template: loads the library on every page
   const html = `<link href="/flowplayer/skin/skin.css" rel="stylesheet">
@@ -180,7 +199,7 @@ test("Flowplayer still detected on a real player: container markup or its CDN", 
 });
 
 test("YouTube embed iframe still detected (guard against over-removal)", () => {
-  const html = `<iframe src="https://www.youtube.com/embed/abc123"></iframe>`;
+  const html = `<iframe src="https://www.youtube.com/embed/dQw4w9WgXcQ"></iframe>`;
   const result = detectFromCorpus(html);
   assert.deepEqual(names(result), ["YouTube"]);
 });
@@ -377,7 +396,7 @@ test("Generic data-account + data-video-id wrapper is NOT Brightcove", () => {
   // data-account + data-player is Brightcove-specific.
   const html = `
     <div data-account="GA-123" data-video-id="abc"></div>
-    <iframe src="https://www.youtube.com/embed/abc"></iframe>`;
+    <iframe src="https://www.youtube.com/embed/dQw4w9WgXcQ"></iframe>`;
   const result = detectFromCorpus(html);
   assert.deepEqual(names(result), ["YouTube"]);
 });
