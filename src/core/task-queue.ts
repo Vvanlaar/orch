@@ -28,6 +28,7 @@ import {
 } from './db/tasks.js';
 import type { LeanTask } from './db/tasks.js';
 import { createLogger } from './logger.js';
+import { pinToCheckpointMachine } from './task-pin.js';
 
 const log = createLogger('task-queue');
 
@@ -152,8 +153,9 @@ export async function createTask(
   repoPath: string,
   context: TaskContext,
 ): Promise<Task> {
-  if (useDb) return dbCreateTask(type, repo, repoPath, context);
-  return jsonCreateTask(type, repo, repoPath, context);
+  const ctx = pinToCheckpointMachine(context, MACHINE_ID);
+  if (useDb) return dbCreateTask(type, repo, repoPath, ctx);
+  return jsonCreateTask(type, repo, repoPath, ctx);
 }
 
 export async function createSuggestion(

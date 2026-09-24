@@ -453,6 +453,13 @@ app.post('/api/tasks/:id/resume', asyncHandler(async (req, res) => {
     res.status(409).json({ error: 'Scan is still finishing its pause — try again in a moment' });
     return;
   }
+  // The checkpoint is on the disk of the machine that paused it (pause is local-only),
+  // and isVideoscanRunning above only sees this machine's subprocesses.
+  const isLocal = !task.machineId || task.machineId === MACHINE_ID;
+  if (!isLocal) {
+    res.status(400).json({ error: `Task is on a different machine (${task.machineId})` });
+    return;
+  }
 
   let resumeFile = task.context.resumeFile;
   if (!resumeFile) {
@@ -465,13 +472,19 @@ app.post('/api/tasks/:id/resume', asyncHandler(async (req, res) => {
       // findLatestScanFileForDomain returns just the filename; resolve to absolute so
       // it matches the format processVideoscan stores (path.join(VIDEOSCAN_DIR, jsonFile)).
       resumeFile = path.join(getVideoscanDir(), candidate);
-      await updateTaskContext(id, { resumeFile });
     }
   }
   if (!resumeFile) {
     res.status(400).json({ error: 'No resume file available for this task' });
     return;
   }
+  // A task paused while still pending was never claimed, so the check above can't
+  // tell where its checkpoint is. Only pin here once the file is known to be here.
+  if (!existsSync(resumeFile)) {
+    res.status(400).json({ error: 'Resume file is not on this machine' });
+    return;
+  }
+  await updateTaskContext(id, { resumeFile, targetMachineId: MACHINE_ID });
 
   await updateTaskStatus(id, 'pending');
   triggerUpdate();
@@ -529,6 +542,13 @@ app.post('/api/tasks/:id/retry', asyncHandler(async (req, res) => {
   }
   if (task.status !== 'failed') {
     res.status(400).json({ error: 'Can only retry failed tasks' });
+    return;
+  }
+  // createTask pins a task with a checkpoint to this machine; an unpinned one from
+  // before that existed may have its checkpoint elsewhere
+  const { resumeFile, targetMachineId } = task.context;
+  if (resumeFile && !targetMachineId && !existsSync(resumeFile)) {
+    res.status(400).json({ error: 'Resume file is not on this machine; retry from the machine that has it' });
     return;
   }
   const newTask = await retryTask(id);
