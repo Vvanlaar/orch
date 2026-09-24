@@ -226,6 +226,15 @@ test("YouTube embed with a doubled slash before the id is detected", () => {
   assert.deepEqual(names(detectFromCorpus('<iframe src="https://www.youtube.com/embed//GIRdeMdgYVY"></iframe>')), ["YouTube"]);
 });
 
+test("StreamPartner iframe player is detected (video.js runs inside the iframe)", () => {
+  // breda.nl/milieustation: only the iframe src is in the page; its video.js is network-only
+  const html = '<iframe src="https://ssl.streampartner.nl/player.php?url=n6ug3eb52lfhrz0utmjf&access=qdo994srioyhy60n9qpd"></iframe>';
+  const net = ["https://ssl.streampartner.nl/video_opensource/videojs-quality-menu.css"];
+  assert.deepEqual(names(detectFromCorpus(html, "", net)), ["StreamPartner"]);
+  // a link to the platform's site is not a player
+  assert.deepEqual(names(detectFromCorpus('<p>Hosted by streampartner.nl</p>')), []);
+});
+
 test("player library CSS and a site-wide library load are NOT a player", () => {
   // gemeenteraad.denhelder.nl: video.js default styles + stylesheet on every page
   const denHelder = '<head><style class="vjs-styles-defaults">.video-js { width: 300px; }</style>' +
