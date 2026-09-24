@@ -1338,8 +1338,30 @@ function createRateLimitError(reason) {
 // the network a bounded, best-effort chance to settle so network-based player
 // detection still benefits. Returns the navigation response (for rate-limit and
 // redirect checks); connection errors still throw from the inner goto.
+//
+// Anubis (techaro) answers with a proof-of-work page that solves itself in JS
+// and then reloads into the real site. Council sites run it (11 of the 348
+// gemeente URLs, e.g. gemeenteraad.haarlemmermeer.nl), and a scan that read the
+// challenge page saw one page and no links. Wait for the reload, then keep the
+// Anubis cookies: every page gets a fresh context, and carrying them over saves
+// solving the challenge again on each one.
+const ANUBIS_SCRIPT = 'script[src*="/.within.website/"]';
+let anubisCookies = [];
+
+async function passAnubis(page, timeout) {
+  const onChallenge = () => page.$(ANUBIS_SCRIPT).then(Boolean, () => true);
+  if (!(await onChallenge())) return;
+  const deadline = Date.now() + Math.max(30_000, timeout * 2);
+  while (Date.now() < deadline && (await onChallenge())) {
+    await sleep(1000);
+    await page.waitForLoadState("domcontentloaded").catch(() => {});
+  }
+  anubisCookies = (await page.context().cookies().catch(() => [])).filter((c) => /anubis/i.test(c.name));
+}
+
 async function gotoResilient(page, url, timeout) {
   const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout });
+  await passAnubis(page, timeout);
   await page
     .waitForLoadState("networkidle", { timeout: Math.min(8000, timeout) })
     .catch(() => {});
@@ -1791,6 +1813,7 @@ async function createScanContext(browser) {
   });
   await context.addInitScript(SHADOW_INIT_SCRIPT);
   await applyResourceBlocking(context);
+  if (anubisCookies.length) await context.addCookies(anubisCookies);
   return context;
 }
 
