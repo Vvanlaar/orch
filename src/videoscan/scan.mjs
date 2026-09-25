@@ -11,6 +11,12 @@ import { acquire } from "./wake-lock.mjs";
 // Each detector checks page HTML + network requests for a specific player.
 // Returns { found: boolean, details: string[] }
 
+// Facebook video markup, shared by the detector and its social confirmer:
+// the plugin iframe (optionally versioned, slashes escaped or URL-encoded) and
+// an fb-video div anywhere in the class list, any quoting.
+const FB_VIDEO_PLUGIN = /facebook\.com(?:\\*\/|%2F)(?:v[\d.]+(?:\\*\/|%2F))?plugins(?:\\*\/|%2F)video\.php/i;
+const FB_VIDEO_CLASS = /class\s*=\s*\\*["'][^"']*(?<![\w-])fb-video(?![\w-])/i;
+
 export const DETECTORS = {
   // ── Enterprise / OVP ────────────────────────────────────────────
   "Blue Billywig": {
@@ -321,10 +327,12 @@ export const DETECTORS = {
   },
   "Facebook Video": {
     patterns: [
-      /facebook\.com\/plugins\/video\.php/i,
-      /facebook\.com\/watch/i,
-      /class="fb-video/i,
+      FB_VIDEO_PLUGIN,
+      FB_VIDEO_CLASS,
     ],
+    // NB: no bare /facebook\.com\/watch/ — that is the share-link shape. A blog
+    // link on trefhetinoss.nl kept it in data-href="…/watch/?v=…" (stripAnchorHrefs
+    // drops only href). Embeds go through plugins/video.php or an fb-video div.
     scripts: [/connect\.facebook\.net\/.+\/sdk\.js/i],
   },
   "X (Twitter)": {
@@ -592,8 +600,8 @@ const SOCIAL_VIDEO_CONFIRMERS = {
         /pbs\.twimg\.com\/(ext_tw_video_thumb|amplify_video_thumb)/i.test(r)
     ),
   "Facebook Video": (html, net) =>
-    /class="[^"]*fb-video/i.test(html) ||
-    /facebook\.com\/(plugins\/video\.php|watch)/i.test(html) ||
+    FB_VIDEO_CLASS.test(html) ||
+    FB_VIDEO_PLUGIN.test(html) ||
     net.some((r) => /video\.xx\.fbcdn\.net/i.test(r) || /fbcdn\.net\/.+\.mp4/i.test(r)),
   LinkedIn: (html, net) =>
     net.some((r) => /dms\.licdn\.com\/playlist/i.test(r) || /dms\.licdn\.com\/.+\.mp4/i.test(r)) ||
