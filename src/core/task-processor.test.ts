@@ -86,7 +86,7 @@ vi.mock('./task-queue.js', () => {
   };
 });
 
-const { processQueue, startProcessor, stopProcessor, expectedTaskProcess } = await import('./task-processor.js');
+const { processQueue, startProcessor, stopProcessor, expectedTaskProcess, killStrayTaskProcess } = await import('./task-processor.js');
 const taskQueue = await import('./task-queue.js');
 const runner = await import('./videoscan-runner.js');
 const pk = await import('./process-kill.js');
@@ -167,7 +167,8 @@ describe('startup orphan handling', () => {
   // The scan died mid-crawl and left a checkpoint, so a dead scan is auto-resumed.
   beforeEach(() => {
     vi.mocked(runner.findLatestScanFileForDomain).mockReturnValue('videoscan-site676.nl-INPROGRESS.json');
-    vi.mocked(runner.readScanFileInfo).mockReturnValue({ name: 'videoscan-site676.nl-INPROGRESS.json', mtimeMs: 0, checkpoint: true });
+    // Written during the run: #18 resumes only this run's checkpoint.
+    vi.mocked(runner.readScanFileInfo).mockReturnValue({ name: 'videoscan-site676.nl-INPROGRESS.json', mtimeMs: Date.parse('2026-09-24T10:05:00Z'), checkpoint: true });
     vi.mocked(pk.isPidAlive).mockReturnValue(true);
   });
 
@@ -189,6 +190,15 @@ describe('startup orphan handling', () => {
     await startProcessor(60_000);
     expect(pk.killProcessTree).toHaveBeenCalledWith(4242);
     expect(taskQueue.createTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails without resuming when its own scan.mjs cannot be killed', async () => {
+    orphan(4242);
+    vi.mocked(pk.verifyProcessIdentity).mockResolvedValue({ identity: 'match' });
+    vi.mocked(pk.killProcessTree).mockResolvedValue({ killed: false, error: 'access denied' });
+    await startProcessor(60_000);
+    expect(taskQueue.createTask).not.toHaveBeenCalled();
+    expect(taskQueue.failTask).toHaveBeenCalledWith(676, 'Orphan kill failed: access denied');
   });
 
   it('neither kills nor resumes when the process cannot be verified', async () => {
@@ -246,6 +256,35 @@ describe('reconciling running scans left by another instance', () => {
     vi.setSystemTime(Date.now() + 6 * 60_000);
     await processQueue();
     expect(db.tasks.get(676)!.status).toBe('running');
+  });
+});
+
+describe('killStrayTaskProcess (/stop fallback)', () => {
+  const task = () => addTask(676, { status: 'running', machineId: 'm1', pid: 4242 });
+  beforeEach(() => vi.mocked(pk.isPidAlive).mockReturnValue(true));
+
+  it('kills a verified match', async () => {
+    vi.mocked(pk.verifyProcessIdentity).mockResolvedValue({ identity: 'match' });
+    expect(await killStrayTaskProcess(task())).toBeUndefined();
+    expect(pk.killProcessTree).toHaveBeenCalledWith(4242);
+  });
+
+  it('reports a failed kill of a verified match', async () => {
+    vi.mocked(pk.verifyProcessIdentity).mockResolvedValue({ identity: 'match' });
+    vi.mocked(pk.killProcessTree).mockResolvedValue({ killed: false, error: 'access denied' });
+    expect(await killStrayTaskProcess(task())).toBe('access denied');
+  });
+
+  it('leaves a PID that now belongs to another program', async () => {
+    vi.mocked(pk.verifyProcessIdentity).mockResolvedValue({ identity: 'mismatch' });
+    expect(await killStrayTaskProcess(task())).toBeUndefined();
+    expect(pk.killProcessTree).not.toHaveBeenCalled();
+  });
+
+  it('refuses to kill a PID it cannot verify', async () => {
+    vi.mocked(pk.verifyProcessIdentity).mockResolvedValue({ identity: 'unknown', error: 'powershell failed' });
+    expect(await killStrayTaskProcess(task())).toContain('cannot verify PID 4242');
+    expect(pk.killProcessTree).not.toHaveBeenCalled();
   });
 });
 

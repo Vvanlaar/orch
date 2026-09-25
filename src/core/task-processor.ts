@@ -808,6 +808,20 @@ export function expectedTaskProcess(t: Pick<Task, 'id' | 'type'> & { startedAt?:
 }
 
 /**
+ * Kill a task's process left by a prior server instance. The PID may since belong to an
+ * unrelated program: only a verified match is killed, and a mismatch means the task's
+ * process is gone. Returns why the process may still be alive, or undefined.
+ */
+export async function killStrayTaskProcess(t: Task): Promise<string | undefined> {
+  if (!isPidAlive(t.pid)) return undefined;
+  const check = await verifyProcessIdentity(t.pid!, expectedTaskProcess(t));
+  if (check.identity === 'unknown') return `cannot verify PID ${t.pid} belongs to this task (${check.error}); not killed`;
+  if (check.identity !== 'match') return undefined;
+  const result = await killProcessTree(t.pid!);
+  return result.killed ? undefined : result.error;
+}
+
+/**
  * Ids of rows whose scan process is gone: PID dead, or now held by another program. If the
  * process table can't be read, live PIDs count as their scans and the next tick retries.
  */

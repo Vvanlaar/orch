@@ -34,6 +34,7 @@ export type ProcessIdentity = 'match' | 'mismatch' | 'gone' | 'unreadable';
 
 // startedAt is written just before the spawn, from the same clock; this only absorbs rounding.
 const START_SKEW_MS = 5_000;
+const BOOT_CLOCK_MARGIN_MS = 10 * 60_000;
 
 /** Pure check of a process against what the task's process must look like. `info` null = no such process. */
 export function matchProcessIdentity(info: ProcessInfo | null, expected: ExpectedProcess): ProcessIdentity {
@@ -100,7 +101,8 @@ export type IdentityCheck = { identity: Exclude<ProcessIdentity, 'unreadable'> }
 export async function verifyProcessIdentity(pid: number, expected: ExpectedProcess): Promise<IdentityCheck> {
   // A task started before the last boot has no surviving process: whatever holds the PID
   // now isn't it. Decided without a process-table query, which may not work early at boot.
-  if (expected.notBeforeMs !== undefined && expected.notBeforeMs < Date.now() - os.uptime() * 1000) {
+  // The margin absorbs a clock step after boot, which shifts the computed boot time.
+  if (expected.notBeforeMs !== undefined && expected.notBeforeMs < Date.now() - os.uptime() * 1000 - BOOT_CLOCK_MARGIN_MS) {
     return { identity: isPidAlive(pid) ? 'mismatch' : 'gone' };
   }
   try {
