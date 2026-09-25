@@ -10,6 +10,7 @@ import { dbListScans, dbUpsertVideoscan, dbDeleteVideoscans, dbArchiveVideoscans
 import { downloadFile, uploadScanFiles, deleteScanFiles } from './db/storage.js';
 import { reportOptionsToArgs, type ReportOptions } from './report-args.js';
 import { applyStickyReportOptions } from './report-sticky.js';
+import type { ScanFileInfo } from './queue-helpers.js';
 
 export type { ReportOptions };
 
@@ -40,8 +41,13 @@ const runningProcesses = new Map<number, ChildProcess>();
 // Per-task control-file paths (for live concurrency/delay overrides)
 const controlFiles = new Map<number, string>();
 
+/** Also identifies the task's scan.mjs process: it is passed on the command line as --control-file. */
+export function controlFileName(taskId: number): string {
+  return `_control-${taskId}.json`;
+}
+
 function controlFilePath(taskId: number): string {
-  return join(VIDEOSCAN_DIR, `_control-${taskId}.json`);
+  return join(VIDEOSCAN_DIR, controlFileName(taskId));
 }
 
 export function getVideoscanControlFile(taskId: number): string | undefined {
@@ -385,6 +391,17 @@ export function readPagesScanned(scanPath: string): number | null {
   try {
     const n = JSON.parse(readFileSync(scanPath, 'utf-8')).pagesScanned;
     return typeof n === 'number' ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/** mtime and kind of a scan JSON, or null when it is missing or unparseable (e.g. died mid-write). */
+export function readScanFileInfo(name: string): ScanFileInfo | null {
+  const scanPath = join(VIDEOSCAN_DIR, name);
+  try {
+    const data = JSON.parse(readFileSync(scanPath, 'utf-8'));
+    return { name, mtimeMs: statSync(scanPath).mtimeMs, checkpoint: data?.checkpoint === true };
   } catch {
     return null;
   }

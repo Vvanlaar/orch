@@ -31,10 +31,9 @@ import { applyStreamingOutput, approveSuggestion, completeTask, createTask, dele
 import { initSettings } from '../core/settings.js';
 import { isSupabaseConfigured, MACHINE_ID } from '../core/db/client.js';
 import { dbGetNotifications, dbInsertNotification } from '../core/db/notifications.js';
-import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
+import { killStrayTaskProcess, setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
 import { getVideoscanDir, isDerivedScan, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, pauseVideoscan, findLatestScanFileForDomain, isVideoscanRunning, deleteScans, wrapUpBatch, type ReportOptions } from '../core/videoscan-runner.js';
 import { getClosedBatches, markBatchClosed, markBatchOpen } from '../core/batch-state.js';
-import { isPidAlive, killProcessTree } from '../core/process-kill.js';
 import { createSignedUrl, downloadFile } from '../core/db/storage.js';
 import { dbArchiveVideoscans } from '../core/db/videoscans.js';
 import type { TerminalId } from '../core/types.js';
@@ -364,10 +363,7 @@ app.post('/api/tasks/:id/stop', asyncHandler(async (req, res) => {
   if (isLocal) {
     const killed = task.type === 'videoscan' ? killVideoscan(id) : killTask(id);
     // Fallback when typed-kill no-ops (process spawned by a prior server instance).
-    if (!killed && isPidAlive(task.pid)) {
-      const result = await killProcessTree(task.pid!);
-      if (!result.killed) killError = result.error;
-    }
+    if (!killed) killError = await killStrayTaskProcess(task);
   }
   const failReason = killError
     ? `Stop requested but process ${task.pid} still alive: ${killError}`
