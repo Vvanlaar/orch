@@ -528,10 +528,13 @@ export const DETECTORS = {
   },
   "HTML5 native": {
     // A camera viewfinder is a <video> too: zevenaardoet.nl ships an empty
-    // <video id="QrScanVideoPreview"> for its QR scanner on every page (70 hits).
-    // Skipped only when the tag has no src AND its own id/class names a camera,
-    // so <video class="security-camera-promo" src="…"> still counts.
-    patterns: [/<video(?!(?=[^>]*(?<![\w-])(?:id|class)\s*=\s*["']?[^"'>]*(?:qr[-_]?(?:scan|code|reader)|camera|webcam))(?![^>]*\ssrc\s*=))[\s>]/i, /<source[^>]+type="video/i],
+    // <video id="QrScanVideoPreview"> for its QR scanner on every page (70 hits),
+    // and Recruitee job pages (werkenbijgemeentekrimpenerwaard.nl) a hidden
+    // <video class="ba-videorecorder-video"> for video applications.
+    // Skipped only when its own id/class names a camera or recorder AND nothing
+    // says it plays a file: no src/data-src, no controls, no <source> child. So
+    // <video class="security-camera-promo" src="…"> still counts.
+    patterns: [/<video(?!(?=[^>]*(?<![\w-])(?:id|class)\s*=\s*["']?[^"'>]*(?:qr[-_]?(?:scan|code|reader)|camera|webcam|recorder))(?![^>]*\s(?:data-)?src\s*=)(?![^>]*\scontrols\b)(?![^>]*>\s*<source\b))[\s>]/i, /<source[^>]+type="video/i],
     scripts: [],
   },
   Cincopa: {
