@@ -717,7 +717,79 @@ function isSameDomain(url, domain) {
   }
 }
 
-export function shouldSkipUrl(url) {
+// Translated copies. Dutch sites serve a (usually machine-) translated copy of
+// every page under a language prefix, and the language switcher links it from
+// every page, so each copy looks like a new page to the crawler. hilversum.nl
+// spent 2,169 of a 3,000-page budget on /es/ /bg/ /ro/ /pt/; almelo.nl,
+// visitvlissingen.nl (/de/ /en/ /fr/), sociaalteamhouten.nl (/en/ /uk/ /ar/
+// /fr/ /tr/) and amstelveenvoorelkaar.nl (/ar/) do the same. The copies cost
+// Dutch coverage and count a video twice.
+//
+// Only the FIRST path segment is checked, and only as a whole segment: /en/…,
+// /pt-br/…, /zh_Hans/… are copies; /english-lessons, /debat, /esports, /de-wolf
+// (harderwijk.nl) and /de-ing (ing.nl) are pages. Hosts (en.example.nl) and
+// query strings (?lang=en) are left alone. /de/ and /en/ are also Dutch words
+// (article, "and"), but as a whole first segment they are German and English
+// copies on every site in the scan history (13k /de/ URLs on 27 sites, 72k /en/
+// on 59) — some keep the Dutch slug (amstelveenvoorelkaar.nl/en/over-ons).
+//
+// Languages come from the 634k URLs in this repo's scan history plus the usual
+// municipal translation-widget targets (refugee/migrant languages). Dutch (nl,
+// nl-nl, nl-be) is never listed. Codes deliberately NOT listed because the
+// segment is a Dutch path there:
+//   is  (Icelandic) — /is/ is the product path of the "wijzer" social-domain
+//       platform: waardwijzer.krimpenerwaard.nl, velsenwijzer.nl, cjgzeist.nl… (25k URLs)
+//   my  (Burmese)   — /my/ account area on agnietenhof.nl, posthuistheater.nl
+//   th  (Thai)      — utrecht.nl/th is a Dutch shortlink
+//   id, eu, hr, ms  — too likely an identifier route, EU pages, HR, a medical term
+// Listed but worth watching: so (Somali) is also "speciaal onderwijs" on school
+// sites and it (Italian) an ICT section; neither shows up that way in the history.
+// Frisian (fy, and friesmuseum.nl's own /frl/) and Papiamento (rijksmuseum.nl
+// /pap/) are listed: those are copies of the Dutch page too.
+const TRANSLATION_LANGS = new Set([
+  "en", "de", "fr", "es", "pt", "it", "pl", "bg", "ro", "tr", "ar", "uk", "ru",
+  "zh", "ja", "ko", "el", "hu", "sk", "cs", "sl", "lt", "lv", "et", "fi", "da",
+  "sv", "no", "nb", "ca", "gl", "sq", "vi", "so", "ti", "am", "fa", "ps", "ku",
+  "fy", "frl", "pap",
+]);
+// A base code, optionally with a region (en-gb, pt_BR, es-419) or script
+// (zh-hans). Scripts are listed, not [a-z]{4}, so /de-wolf stays a page.
+const LANG_SEGMENT = /^([a-z]{2,3})(?:[-_](?:[a-z]{2}|\d{3}|hans|hant|latn|cyrl))?$/;
+
+// The base language of a path segment that is a language prefix — Dutch or a
+// listed translation — else null. Case-insensitive: /en-GB/, /pt_BR/.
+function segmentLang(segment) {
+  const m = LANG_SEGMENT.exec(segment.toLowerCase());
+  return m && (m[1] === "nl" || TRANSLATION_LANGS.has(m[1])) ? m[1] : null;
+}
+
+/**
+ * The translation prefix a URL lives under ("es", "pt-br"), or null when its
+ * first path segment is not a non-Dutch language code.
+ */
+export function translationPrefix(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  const first = parsed.pathname.split("/")[1] || "";
+  const lang = segmentLang(first);
+  return lang && lang !== "nl" ? first.toLowerCase().replace("_", "-") : null;
+}
+
+/**
+ * True when `url` is a translated copy the crawl should not visit. A scan
+ * started under a language prefix asked for that language, so the start URL's
+ * own prefix is kept; without a start URL every translation prefix is skipped.
+ */
+export function isTranslatedCopy(url, startUrl) {
+  const prefix = translationPrefix(url);
+  return prefix !== null && prefix !== (startUrl ? translationPrefix(startUrl) : null);
+}
+
+export function shouldSkipUrl(url, startUrl) {
   const skip = [
     /\.(pdf|zip|png|jpg|jpeg|gif|svg|webp|mp4|mp3|wav|doc|docx|xls|xlsx|ppt|pptx|css|js|xbri|xbrl|xml|csv)(\?|$)/i,
     /mailto:/i,
@@ -731,6 +803,8 @@ export function shouldSkipUrl(url) {
   if (skip.some((r) => r.test(url))) return true;
 
   if (isCrawlerTrap(url)) return true;
+
+  if (isTranslatedCopy(url, startUrl)) return true;
 
   // Pagination: skip ?page=N unless it's a listing/archive path where
   // pagination is the only way to reach older items.
@@ -776,7 +850,7 @@ export async function discoverSitemapUrls(startUrl, domain, { maxUrls = 5000, fe
       if (urls.length >= maxUrls) break;
       // Normalize scheme to match the site's protocol (sitemaps often use http://)
       const normalized = normalizeUrl(loc.replace(/^https?:/, targetProtocol), startUrl);
-      if (normalized && isSameDomain(normalized, domain) && !shouldSkipUrl(normalized)) urls.push(normalized);
+      if (normalized && isSameDomain(normalized, domain) && !shouldSkipUrl(normalized, startUrl)) urls.push(normalized);
     }
     return urls;
   }
@@ -805,8 +879,11 @@ export async function discoverSitemapUrls(startUrl, domain, { maxUrls = 5000, fe
       const locs = parseLocs(xml);
       if (/<sitemapindex\b/i.test(xml)) {
         for (const loc of locs) {
-          // Only follow sub-sitemaps on the same domain to avoid arbitrary outbound fetches
-          if (isSameDomain(loc.replace(/^https?:/, targetProtocol), domain)) next.push(loc);
+          // Only follow sub-sitemaps on the same domain to avoid arbitrary outbound
+          // fetches, and not a translation's (/es/sitemap.xml): every URL in it
+          // would be dropped, so it only spends the fetch budget
+          const sameProtocol = loc.replace(/^https?:/, targetProtocol);
+          if (isSameDomain(sameProtocol, domain) && !isTranslatedCopy(sameProtocol, startUrl)) next.push(loc);
         }
       } else {
         const urls = toUrls(spreadPick(locs, locs.length));
@@ -918,11 +995,9 @@ const VIDEO_LIKELY_PATHS = [
   /academy/i, /training/i, /demo/i, /tutorial/i, /case/i,
 ];
 
-// A language prefix is not a section: /nl/wonen and /nl/nieuws are two.
-const LANG_SEGMENT = /^(nl|en|de|fr|fy|es|it|pl|tr|ar|nl-nl|nl-be|fr-be|en-gb|en-us)$/i;
-
 // Section = first path segment under which the page sits. A top-level page
-// (/contact, /nieuws itself) has no section of its own and shares "".
+// (/contact, /nieuws itself) has no section of its own and shares "". A
+// language prefix (segmentLang) is not a section: /nl/wonen and /nl/nieuws are two.
 export function urlSection(url) {
   let u;
   try {
@@ -931,7 +1006,7 @@ export function urlSection(url) {
     return { section: "", depth: 0, path: "" };
   }
   let segs = u.pathname.split("/").filter(Boolean);
-  if (segs.length && LANG_SEGMENT.test(segs[0])) segs = segs.slice(1);
+  if (segs.length && segmentLang(segs[0])) segs = segs.slice(1);
   return { section: segs.length > 1 ? segs[0].toLowerCase() : "", depth: segs.length, path: u.pathname + u.search };
 }
 
@@ -1962,13 +2037,13 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     const storedQueue = prev._state?.queue || [];
     const restored = [
       ...new Set(
-        storedQueue.map((u) => normalizeUrl(u, startUrl)).filter((u) => u && !shouldSkipUrl(u)),
+        storedQueue.map((u) => normalizeUrl(u, startUrl)).filter((u) => u && !shouldSkipUrl(u, startUrl)),
       ),
     ];
     const dropped = storedQueue.length - restored.length;
     if (dropped > 0) {
       console.log(
-        chalk.yellow(`  Dropped ${dropped} queued URL(s) as crawler-trap output or duplicates`),
+        chalk.yellow(`  Dropped ${dropped} queued URL(s) as crawler-trap output, translated copies or duplicates`),
       );
     }
     // Say so out loud when the filter took everything. The run then finds the
@@ -1976,7 +2051,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     // looks like an unexplained no-op rather than "the remaining queue was all
     // trap".
     if (storedQueue.length > 0 && restored.length === 0) {
-      console.log(chalk.yellow("  Every queued URL was trap output — nothing left to resume"));
+      console.log(chalk.yellow("  Every queued URL was trap output or a translated copy — nothing left to resume"));
     }
     queue = restored.length ? restored : [normalizeUrl(startUrl, startUrl)];
 
@@ -2026,13 +2101,30 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       // A Set: header and footer both link /contact, and the re-sort puts
       // identical URLs side by side, so both copies would land in one batch
       const newLinks = new Set();
+      // A site that exists only under a language prefix (root redirects to
+      // /en/, no Dutch version) gives no page to follow once translations are
+      // skipped, so note the first copy to say so below. A link back to the
+      // start URL doesn't count: it may be the one that redirected.
+      let crawlable = false;
+      let translatedCopy = null;
       for (const link of links) {
         const norm = normalizeUrl(link, firstUrl);
-        if (norm && !visited.has(norm) && !queue.includes(norm) && isSameDomain(norm, domain) && !shouldSkipUrl(norm)) {
-          newLinks.add(norm);
+        if (!norm || norm === firstUrl || !isSameDomain(norm, domain)) continue;
+        if (shouldSkipUrl(norm, startUrl)) {
+          if (!translatedCopy && isTranslatedCopy(norm, startUrl)) translatedCopy = norm;
+          continue;
         }
+        crawlable = true;
+        if (!visited.has(norm) && !queue.includes(norm)) newLinks.add(norm);
       }
       for (const link of newLinks) queue.push(link);
+      if (!crawlable && translatedCopy) {
+        const copy = new URL(translatedCopy);
+        const segment = copy.pathname.split("/")[1];
+        console.log(
+          chalk.yellow(`  First page links only to translated copies (/${segment}/…), which are skipped; to scan that language, start at ${copy.origin}/${segment}/`),
+        );
+      }
     } catch (err) {
       if (err._rateLimit) {
         onRateLimit(throttle, firstUrl, err._rateLimit);
@@ -2134,7 +2226,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
         // Add discovered links to queue
         for (const link of links) {
           const norm = normalizeUrl(link, url);
-          if (norm && !visited.has(norm) && !queuedSet.has(norm) && isSameDomain(norm, domain) && !shouldSkipUrl(norm)) {
+          if (norm && !visited.has(norm) && !queuedSet.has(norm) && isSameDomain(norm, domain) && !shouldSkipUrl(norm, startUrl)) {
             queuedSet.add(norm);
             queue.push(norm);
           }
