@@ -80,6 +80,15 @@ describe('resolveScanJsonFile', () => {
       .toBe('videoscan-gouda.nl-2026-09-24T08-00-00.json');
   });
 
+  it('without a marker, never takes a report older than this run', () => {
+    touch('videoscan-gouda.nl-2026-09-23T08-00-00.json');
+    const runStartMs = (clock + 5) * 1000;
+    expect(resolveScanJsonFile('', { scanUrl: 'https://gouda.nl' }, dir, runStartMs)).toBeUndefined();
+    touch('videoscan-gouda.nl-2026-09-24T08-00-00.json');
+    expect(resolveScanJsonFile('', { scanUrl: 'https://gouda.nl' }, dir, runStartMs))
+      .toBe('videoscan-gouda.nl-2026-09-24T08-00-00.json');
+  });
+
   it('does not confuse a domain with a longer one sharing its suffix', () => {
     touch('videoscan-gouda.nl-2026-09-24T08-00-00.json', 'videoscan-raad.gouda.nl-2026-09-24T09-00-00.json');
     expect(resolveScanJsonFile('', { scanUrl: 'https://gouda.nl' }, dir))
