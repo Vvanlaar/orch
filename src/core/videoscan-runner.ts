@@ -194,14 +194,14 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
         return;
       }
 
-      // If targetFilename set, merge new scan into existing scan. Never merge the
-      // target into itself: the cleanup below would delete it.
-      if (options.targetFilename && jsonFile !== options.targetFilename) {
-        claudeEmitter.emit('output', taskId, `\nMerging into ${options.targetFilename}...\n`);
+      // If targetFilename set, merge new scan into existing scan.
+      const mergeTarget = mergeTargetFor(jsonFile, options.targetFilename);
+      if (mergeTarget) {
+        claudeEmitter.emit('output', taskId, `\nMerging into ${mergeTarget}...\n`);
         try {
-          const targetPath = join(VIDEOSCAN_DIR, options.targetFilename);
+          const targetPath = join(VIDEOSCAN_DIR, mergeTarget);
           if (!existsSync(targetPath)) {
-            await downloadFile(options.targetFilename, VIDEOSCAN_DIR);
+            await downloadFile(mergeTarget, VIDEOSCAN_DIR);
           }
           const targetData = JSON.parse(readFileSync(targetPath, 'utf-8')) as ScanData;
           const newData = JSON.parse(readFileSync(join(VIDEOSCAN_DIR, jsonFile), 'utf-8')) as ScanData;
@@ -211,7 +211,7 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
           for (const ext of ['.json', '.html', '.pdf']) {
             tryUnlink(join(VIDEOSCAN_DIR, jsonFile.replace('.json', ext)));
           }
-          jsonFile = options.targetFilename;
+          jsonFile = mergeTarget;
           claudeEmitter.emit('output', taskId, `Merged successfully (${merged.pagesScanned} pages, ${merged.pagesWithVideo} with video)\n`);
         } catch (err) {
           claudeEmitter.emit('output', taskId, `[warn] Merge failed: ${err}, keeping new scan as-is\n`);
@@ -401,6 +401,14 @@ export function resolveScanJsonFile(
   }
 
   return latestScanFile(dir, scanDomain(options), f => f.endsWith('-INPROGRESS.json'), notBeforeMs) ?? undefined;
+}
+
+/**
+ * The file to merge a finished scan into, if any. Never the scan's own file: the merge
+ * cleanup deletes the merged-in file, so merging the target into itself would delete it.
+ */
+export function mergeTargetFor(jsonFile: string, targetFilename?: string): string | undefined {
+  return targetFilename && jsonFile !== targetFilename ? targetFilename : undefined;
 }
 
 /** Domain scan.mjs names its files after: the start URL's host (urls[0] in --urls mode). */

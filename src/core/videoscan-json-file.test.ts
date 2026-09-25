@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, utimesSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { resolveScanJsonFile } from './videoscan-runner.js';
+import { mergeTargetFor, resolveScanJsonFile } from './videoscan-runner.js';
 
 let dir: string;
 let clock: number;
@@ -105,5 +105,20 @@ describe('resolveScanJsonFile', () => {
     touch('videoscan-lansingerland.nl-2026-09-24T08-05-00.json');
     expect(resolveScanJsonFile('', { scanUrl: 'https://gouda.nl' }, dir)).toBeUndefined();
     expect(resolveScanJsonFile('', { scanUrl: 'not a url' }, dir)).toBeUndefined();
+  });
+});
+
+describe('mergeTargetFor', () => {
+  it('merges a new scan into its target', () => {
+    expect(mergeTargetFor('videoscan-a.nl-2026-09-24T09-00-00.json', 'videoscan-a.nl-2026-09-01T08-00-00.json'))
+      .toBe('videoscan-a.nl-2026-09-01T08-00-00.json');
+  });
+
+  it('never merges the target into itself, as the cleanup would delete it', () => {
+    expect(mergeTargetFor('videoscan-a.nl-2026-09-01T08-00-00.json', 'videoscan-a.nl-2026-09-01T08-00-00.json')).toBeUndefined();
+  });
+
+  it('does not merge without a target', () => {
+    expect(mergeTargetFor('videoscan-a.nl-2026-09-24T09-00-00.json')).toBeUndefined();
   });
 });
