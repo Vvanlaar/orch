@@ -1139,6 +1139,29 @@ test("Spotify embeds still detected — open.spotify.com and podcasters", () => 
   assert.deepEqual(names(detectFromCorpus("<p>x</p>", "", [pod])), ["Spotify (podcast)"]);
 });
 
+test("Facebook watch link (href + data-href) is NOT a player", () => {
+  // trefhetinoss.nl blog: the anchor repeats its target in data-href, which
+  // survives stripAnchorHrefs.
+  const html = '<p>en <a href="https://www.facebook.com/watch/?v=997502637312348" target="_blank" ' +
+    'data-href="https://www.facebook.com/watch/?v=997502637312348">hoe ga je er mee om</a>?</p>';
+  assert.deepEqual(names(detectFromCorpus(html)), []);
+  // A site-wide SDK (like button) does not turn the link into a video either.
+  assert.deepEqual(names(detectFromCorpus(html, "", ["https://connect.facebook.net/nl_NL/sdk.js"])), []);
+  // Nor does a look-alike class.
+  assert.deepEqual(names(detectFromCorpus('<div class="fb-video-teaser"></div>')), []);
+});
+
+test("Facebook video embeds still detected — plugin iframe and fb-video div", () => {
+  const detected = (html) => assert.deepEqual(names(detectFromCorpus(html)), ["Facebook Video"], html);
+  detected('<iframe src="https://www.facebook.com/plugins/video.php?href=https%3A%2F%2Fwww.facebook.com%2Fwatch%2F%3Fv%3D1"></iframe>');
+  detected('<iframe data-src="https://www.facebook.com/v18.0/plugins/video.php?href=x"></iframe>');
+  detected('{"html":"<iframe src=\\"https:\\/\\/www.facebook.com\\/plugins\\/video.php?href=x\\"><\\/iframe>"}');
+  detected('<div class="fb-video" data-href="https://www.facebook.com/watch/?v=1"></div>');
+  detected('<div class="wp-block-embed fb-video" data-href="https://www.facebook.com/watch/?v=1"></div>');
+  detected("<div class='fb-video'></div>");
+  detected('{"html":"<div class=\\"fb-video\\"><\\/div>"}');
+});
+
 // ── Host allow-lists: a CSP or preconnect names vendors, embeds nothing ─
 const WERKENBIJOSS_CSP =
   `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; frame-src 'self' ` +
