@@ -29,8 +29,17 @@ describe('matchProcessIdentity', () => {
     expect(matchProcessIdentity({ commandLine: scanCmd, startedAtMs: STARTED - 60_000 }, scan)).toBe('mismatch');
   });
 
-  it('rejects a process whose command line is hidden (another user\'s)', () => {
-    expect(matchProcessIdentity({ commandLine: null, startedAtMs: STARTED + 1_000 }, scan)).toBe('mismatch');
+  it('allows a start up to 5 s before the task\'s startedAt', () => {
+    expect(matchProcessIdentity({ commandLine: scanCmd, startedAtMs: STARTED - 4_000 }, scan)).toBe('match');
+    expect(matchProcessIdentity({ commandLine: scanCmd, startedAtMs: STARTED - 6_000 }, scan)).toBe('mismatch');
+  });
+
+  it('never matches with no markers', () => {
+    expect(matchProcessIdentity({ commandLine: scanCmd, startedAtMs: null }, { markers: [] })).toBe('mismatch');
+  });
+
+  it('cannot tell a process whose command line is hidden (another user\'s or elevated)', () => {
+    expect(matchProcessIdentity({ commandLine: null, startedAtMs: STARTED + 1_000 }, scan)).toBe('unreadable');
   });
 
   it('reports a missing process as gone', () => {

@@ -42,7 +42,7 @@ vi.mock('./process-kill.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./process-kill.js')>()),
   isPidAlive: vi.fn(() => false),
   killProcessTree: vi.fn(async () => ({ killed: true })),
-  verifyProcessIdentity: vi.fn(async () => 'mismatch'),
+  verifyProcessIdentity: vi.fn(async () => ({ identity: 'mismatch' as const })),
   getProcessInfos: vi.fn(async () => new Map()),
 }));
 
@@ -224,6 +224,17 @@ describe('reconciling running scans left by another instance', () => {
     expect(db.tasks.get(676)!.status).toBe('failed');
     expect(db.tasks.get(677)!.status).toBe('running');
     expect(pk.killProcessTree).not.toHaveBeenCalled();
+  });
+
+  it('leaves a live PID alone when its command line is hidden (elevated instance)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    addTask(676, { status: 'running', machineId: 'm1', pid: 76680 });
+    vi.mocked(pk.isPidAlive).mockReturnValue(true);
+    vi.mocked(pk.getProcessInfos).mockResolvedValue(new Map([[76680, { commandLine: null, startedAtMs: null }]]));
+    await processQueue();
+    vi.setSystemTime(Date.now() + 6 * 60_000);
+    await processQueue();
+    expect(db.tasks.get(676)!.status).toBe('running');
   });
 
   it('leaves live PIDs alone when the process table cannot be read', async () => {

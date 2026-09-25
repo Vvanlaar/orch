@@ -30,7 +30,7 @@ export interface ExpectedProcess {
   notBeforeMs?: number;
 }
 
-export type ProcessIdentity = 'match' | 'mismatch' | 'gone';
+export type ProcessIdentity = 'match' | 'mismatch' | 'gone' | 'unreadable';
 
 // startedAt is written just before the spawn, from the same clock; this only absorbs rounding.
 const START_SKEW_MS = 5_000;
@@ -38,13 +38,14 @@ const START_SKEW_MS = 5_000;
 /** Pure check of a process against what the task's process must look like. `info` null = no such process. */
 export function matchProcessIdentity(info: ProcessInfo | null, expected: ExpectedProcess): ProcessIdentity {
   if (!info) return 'gone';
-  // Our own children always run as our user, so their command line is readable.
-  if (info.commandLine === null) return 'mismatch';
+  // Hidden command line: another user's or an elevated process, e.g. a scan of an instance
+  // that runs elevated. It can't be told apart from the task's own process.
+  if (info.commandLine === null) return 'unreadable';
   if (expected.notBeforeMs !== undefined && info.startedAtMs !== null && info.startedAtMs < expected.notBeforeMs - START_SKEW_MS) {
     return 'mismatch';
   }
   const cmd = info.commandLine.toLowerCase();
-  return expected.markers.every(m => cmd.includes(m.toLowerCase())) ? 'match' : 'mismatch';
+  return expected.markers.length > 0 && expected.markers.every(m => cmd.includes(m.toLowerCase())) ? 'match' : 'mismatch';
 }
 
 /**
@@ -89,11 +90,12 @@ export async function getProcessInfos(pids: number[]): Promise<Map<number, Proce
   return infos;
 }
 
-export type IdentityCheck = { identity: ProcessIdentity } | { identity: 'unknown'; error: string };
+export type IdentityCheck = { identity: Exclude<ProcessIdentity, 'unreadable'> } | { identity: 'unknown'; error: string };
 
 /**
  * Whether `pid` is still the task's process. A PID recorded before a reboot or restart
- * can since belong to an unrelated program. 'unknown' when the process table can't be read.
+ * can since belong to an unrelated program. 'unknown' when the process table or the
+ * process's command line can't be read.
  */
 export async function verifyProcessIdentity(pid: number, expected: ExpectedProcess): Promise<IdentityCheck> {
   // A task started before the last boot has no surviving process: whatever holds the PID
@@ -102,7 +104,8 @@ export async function verifyProcessIdentity(pid: number, expected: ExpectedProce
     return { identity: isPidAlive(pid) ? 'mismatch' : 'gone' };
   }
   try {
-    return { identity: matchProcessIdentity((await getProcessInfos([pid])).get(pid) ?? null, expected) };
+    const identity = matchProcessIdentity((await getProcessInfos([pid])).get(pid) ?? null, expected);
+    return identity === 'unreadable' ? { identity: 'unknown', error: `command line of PID ${pid} is not readable` } : { identity };
   } catch (err) {
     return { identity: 'unknown', error: err instanceof Error ? err.message : String(err) };
   }

@@ -800,7 +800,8 @@ async function resolveDeadVideoscan(t: Task, why: string): Promise<void> {
 export function expectedTaskProcess(t: Pick<Task, 'id' | 'type'> & { startedAt?: string }): ExpectedProcess {
   const started = t.startedAt ? Date.parse(t.startedAt) : NaN;
   return {
-    // claude-runner passes --dangerously-skip-permissions in both modes; plain 'claude' would also match the user's own sessions.
+    // claude-runner passes --dangerously-skip-permissions on every launch path. It narrows plain
+    // 'claude' but still matches the user's own sessions started with that flag.
     markers: t.type === 'videoscan' ? ['scan.mjs', controlFileName(t.id)] : ['claude', '--dangerously-skip-permissions'],
     ...(Number.isNaN(started) ? {} : { notBeforeMs: started }),
   };
@@ -820,8 +821,9 @@ async function deadScanIds(rows: LeanTask[]): Promise<number[]> {
       log.warn(`Reading the process table failed; assuming live PIDs are their scans: ${err instanceof Error ? err.message : err}`);
     }
   }
+  // An unreadable command line (e.g. an elevated instance's scan) counts as its scan too.
   const reused = infos
-    ? live.filter(t => matchProcessIdentity(infos.get(t.pid!) ?? null, expectedTaskProcess(t)) !== 'match')
+    ? live.filter(t => !['match', 'unreadable'].includes(matchProcessIdentity(infos.get(t.pid!) ?? null, expectedTaskProcess(t))))
     : [];
   return [...rows.filter(t => !live.includes(t)), ...reused].map(t => t.id);
 }
