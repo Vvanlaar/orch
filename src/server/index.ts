@@ -28,6 +28,7 @@ import { runHubspotInvestigateScan, stampCycleCrash } from '../core/hubspot-poll
 import { getEffectiveRepoMapping, getScannedRepos } from '../core/repo-scanner.js';
 import { getAuthenticatedUser, getPull, listPullReviewComments, listOrgRepos } from '../core/github-api.js';
 import { applyStreamingOutput, approveSuggestion, completeTask, createTask, deleteTask, dismissSuggestion, failTask, getAllTasks, getAllTasksWithOutput, getLatestVideoscanWithBatch, getTask, getTasksByIds, getTasksWithPids, pauseTask, pinTask, retryTask, updateTaskContext, updateTaskRepoPath, updateTaskStatus } from '../core/task-queue.js';
+import { checkpointElsewhere, retryRefusal } from '../core/task-pin.js';
 import { initSettings } from '../core/settings.js';
 import { isSupabaseConfigured, MACHINE_ID } from '../core/db/client.js';
 import { dbGetNotifications, dbInsertNotification } from '../core/db/notifications.js';
@@ -453,11 +454,10 @@ app.post('/api/tasks/:id/resume', asyncHandler(async (req, res) => {
     res.status(409).json({ error: 'Scan is still finishing its pause — try again in a moment' });
     return;
   }
-  // The checkpoint is on the disk of the machine that ran the scan, or the one the task is
-  // pinned to; isVideoscanRunning above only sees this machine's subprocesses.
-  const owner = task.machineId || task.context.targetMachineId;
-  if (owner && owner !== MACHINE_ID) {
-    res.status(400).json({ error: `Task is on a different machine (${owner})` });
+  // isVideoscanRunning above only sees this machine's subprocesses.
+  const elsewhere = checkpointElsewhere(task, MACHINE_ID);
+  if (elsewhere) {
+    res.status(400).json({ error: `Task is on a different machine (${elsewhere})` });
     return;
   }
 
@@ -481,7 +481,7 @@ app.post('/api/tasks/:id/resume', asyncHandler(async (req, res) => {
   // A task paused while still pending was never claimed, so the check above can't
   // tell where its checkpoint is. Only pin here once the file is known to be here.
   if (!existsSync(resumeFile)) {
-    res.status(400).json({ error: 'Resume file is not on this machine' });
+    res.status(400).json({ error: `Resume file ${resumeFile} is not on this machine` });
     return;
   }
   await updateTaskContext(id, { resumeFile, targetMachineId: MACHINE_ID });
@@ -544,11 +544,9 @@ app.post('/api/tasks/:id/retry', asyncHandler(async (req, res) => {
     res.status(400).json({ error: 'Can only retry failed tasks' });
     return;
   }
-  // createTask pins a task with a checkpoint to this machine; an unpinned one from
-  // before that existed may have its checkpoint elsewhere
-  const { resumeFile, targetMachineId } = task.context;
-  if (resumeFile && !targetMachineId && !existsSync(resumeFile)) {
-    res.status(400).json({ error: 'Resume file is not on this machine; retry from the machine that has it' });
+  const refusal = retryRefusal(task.context, existsSync);
+  if (refusal) {
+    res.status(400).json({ error: refusal });
     return;
   }
   const newTask = await retryTask(id);
