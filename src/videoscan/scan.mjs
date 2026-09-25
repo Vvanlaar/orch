@@ -799,6 +799,12 @@ export function shouldSkipUrl(url, startUrl) {
     // Draft/preview links (CMS preview tokens) — unpublished, auth-gated, redirect
     // to a login page. Not real public pages; they only pollute failure counts.
     /[?&]preview[-_]token=/i,
+    // State-changing links: a GET here adds to a basket or ends a session.
+    // agnietenhof.nl links /order/add/event/<id> on every show — 226 of 510 pages.
+    /\/(?:order|cart|basket|winkelwagen|winkelmand(?:je)?)\/(?:add|remove|delete)(?:[/?#]|$)/i,
+    /[?&]add[-_]to[-_]cart=/i,
+    /\/(?:logout|log-out|signout|sign-out|uitloggen)(?:[/?#]|$)/i,
+    /[?&]action=logout\b/i,
   ];
   if (skip.some((r) => r.test(url))) return true;
 
@@ -1487,6 +1493,24 @@ function createRateLimitError(reason) {
 // solving the challenge again on each one.
 const ANUBIS_SCRIPT = 'script[src*="/.within.website/"]';
 let anubisCookies = [];
+// What accepting the cookie banner on the first page added (cookies, plus the
+// site's own localStorage for CMPs that keep consent there); seeded into every
+// per-page context so the whole crawl browses with consent.
+let consentState = null;
+
+const cookieKey = (c) => `${c.name}|${c.domain}|${c.path}|${c.value}`;
+
+/** The cookies and localStorage entries that are new or changed after consent, or null. */
+export function pickConsent(cookiesBefore, cookiesAfter, storageBefore, storageAfter) {
+  const seen = new Set(cookiesBefore.map(cookieKey));
+  const cookies = cookiesAfter.filter((c) => !seen.has(cookieKey(c)));
+  const storage = Object.fromEntries(Object.entries(storageAfter).filter(([k, v]) => storageBefore[k] !== v));
+  return cookies.length || Object.keys(storage).length ? { cookies, storage } : null;
+}
+
+function readLocalStorage(page) {
+  return page.evaluate(() => Object.fromEntries(Object.entries(localStorage))).catch(() => ({}));
+}
 
 async function passAnubis(page, timeout) {
   const onChallenge = () => page.$(ANUBIS_SCRIPT).then(Boolean, () => true);
@@ -1648,6 +1672,11 @@ async function scanFirstPageIn(context, url, timeout) {
     }
   } catch {}
 
+  // What the site stored before the banner click, so that only what consent
+  // added is carried over — not session, load-balancer or bot-manager cookies,
+  // which would make every page one visitor again (see withScanContext).
+  const cookiesBefore = await page.context().cookies().catch(() => []);
+  const storageBefore = await readLocalStorage(page);
   if (await acceptCookies(page)) {
     await gotoResilient(page, url, timeout);
     // Re-check redirect after post-consent navigation
@@ -1658,6 +1687,16 @@ async function scanFirstPageIn(context, url, timeout) {
         return { detected: [], links: [], skippedReason: `redirect to ${new URL(dest).hostname}` };
       }
     } catch {}
+    // Every later page gets a fresh context (see withScanContext), so without
+    // this the consent lived on the first page only: agnietenhof.nl sends its
+    // trailer embeds only to a consenting browser, and 510 pages scanned 0 video.
+    const picked = pickConsent(
+      cookiesBefore,
+      await page.context().cookies().catch(() => []),
+      storageBefore,
+      await readLocalStorage(page),
+    );
+    consentState = picked && { ...picked, origin: new URL(page.url()).origin };
     await activateCookiebotConsent(page);
   }
 
@@ -1953,6 +1992,16 @@ async function createScanContext(browser) {
   });
   await context.addInitScript(SHADOW_INIT_SCRIPT);
   await applyResourceBlocking(context);
+  if (consentState) {
+    // A cookie Playwright rejects (expired mid-crawl) must not fail the page
+    if (consentState.cookies.length) await context.addCookies(consentState.cookies).catch(() => {});
+    if (Object.keys(consentState.storage).length) {
+      await context.addInitScript(({ origin, storage }) => {
+        if (location.origin !== origin) return;
+        for (const [k, v] of Object.entries(storage)) try { localStorage.setItem(k, v); } catch {}
+      }, consentState);
+    }
+  }
   if (anubisCookies.length) await context.addCookies(anubisCookies);
   return context;
 }
@@ -2043,7 +2092,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     const dropped = storedQueue.length - restored.length;
     if (dropped > 0) {
       console.log(
-        chalk.yellow(`  Dropped ${dropped} queued URL(s) as crawler-trap output, translated copies or duplicates`),
+        chalk.yellow(`  Dropped ${dropped} queued URL(s) as crawler-trap output, translated copies, state-changing links or duplicates`),
       );
     }
     // Say so out loud when the filter took everything. The run then finds the
@@ -2096,6 +2145,9 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       } else {
         console.log(chalk.gray("  -"));
       }
+      console.log(chalk.gray(consentState
+        ? `  Cookie consent carried to every page (${consentState.cookies.length} cookie(s))`
+        : "  No cookie consent captured — later pages are scanned without it"));
       results.push({ url: firstUrl, players: detected });
 
       // A Set: header and footer both link /contact, and the re-sort puts
