@@ -31,10 +31,10 @@ import { applyStreamingOutput, approveSuggestion, completeTask, createTask, dele
 import { initSettings } from '../core/settings.js';
 import { isSupabaseConfigured, MACHINE_ID } from '../core/db/client.js';
 import { dbGetNotifications, dbInsertNotification } from '../core/db/notifications.js';
-import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
+import { expectedTaskProcess, setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
 import { getVideoscanDir, isDerivedScan, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, pauseVideoscan, findLatestScanFileForDomain, isVideoscanRunning, deleteScans, wrapUpBatch, type ReportOptions } from '../core/videoscan-runner.js';
 import { getClosedBatches, markBatchClosed, markBatchOpen } from '../core/batch-state.js';
-import { isPidAlive, killProcessTree } from '../core/process-kill.js';
+import { isPidAlive, killProcessTree, verifyProcessIdentity } from '../core/process-kill.js';
 import { createSignedUrl, downloadFile } from '../core/db/storage.js';
 import { dbArchiveVideoscans } from '../core/db/videoscans.js';
 import type { TerminalId } from '../core/types.js';
@@ -363,10 +363,16 @@ app.post('/api/tasks/:id/stop', asyncHandler(async (req, res) => {
   let killError: string | undefined;
   if (isLocal) {
     const killed = task.type === 'videoscan' ? killVideoscan(id) : killTask(id);
-    // Fallback when typed-kill no-ops (process spawned by a prior server instance).
+    // Fallback when typed-kill no-ops (process spawned by a prior server instance). The PID
+    // may since belong to an unrelated program; a mismatch means the task's process is gone.
     if (!killed && isPidAlive(task.pid)) {
-      const result = await killProcessTree(task.pid!);
-      if (!result.killed) killError = result.error;
+      const check = await verifyProcessIdentity(task.pid!, expectedTaskProcess(task));
+      if (check.identity === 'match') {
+        const result = await killProcessTree(task.pid!);
+        if (!result.killed) killError = result.error;
+      } else if (check.identity === 'unknown') {
+        killError = `cannot verify PID ${task.pid} belongs to this task (${check.error}); not killed`;
+      }
     }
   }
   const failReason = killError
