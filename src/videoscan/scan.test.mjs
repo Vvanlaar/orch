@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DETECTORS, detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, isTranslatedCopy, translationPrefix, normalizeUrl, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource } from "./scan.mjs";
+import { DETECTORS, detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, pickConsent, isTranslatedCopy, translationPrefix, normalizeUrl, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource } from "./scan.mjs";
 
 const names = (result) => result.map((r) => r.player).sort();
 
@@ -716,6 +716,38 @@ test("crawler trap: the deepest real page in scan history is kept", () => {
   assert.equal(new URL(real).pathname.split("/").filter(Boolean).length, 10);
   assert.equal(isCrawlerTrap(real), false);
   assert.equal(shouldSkipUrl(real), false);
+});
+
+test("state-changing links (add to basket, log out) are skipped", () => {
+  for (const url of [
+    "https://www.agnietenhof.nl/order/add/event/11561",
+    "https://shop.example.nl/cart/add/42?qty=1",
+    "https://www.example.nl/winkelmandje/remove/7",
+    "https://www.example.nl/product/x?add-to-cart=123",
+    "https://www.agnietenhof.nl/logout",
+    "https://www.example.nl/mijn/uitloggen?next=/",
+    "https://www.example.nl/account/sign-out",
+    "https://www.example.nl/wp-login.php?action=logout&_wpnonce=abc",
+  ]) assert.equal(shouldSkipUrl(url), true, url);
+  for (const url of [
+    "https://www.agnietenhof.nl/agenda/the-odyssey-1xwr",
+    "https://www.example.nl/order/bevestiging",
+    "https://www.example.nl/order/add-ons",
+    "https://www.example.nl/nieuws/addendum-bestemmingsplan",
+    "https://www.example.nl/logout-problemen-oplossen",
+  ]) assert.equal(shouldSkipUrl(url), false, url);
+});
+
+test("pickConsent keeps only what accepting the banner added", () => {
+  const session = { name: "PHPSESSID", domain: "www.x.nl", path: "/", value: "s1" };
+  const bot = { name: "__cf_bm", domain: ".x.nl", path: "/", value: "b1" };
+  const before = [session, bot, { name: "cookieConsentLevel", domain: "www.x.nl", path: "/", value: "none" }];
+  const consent = { name: "cookieConsentLevel", domain: "www.x.nl", path: "/", value: "all" };
+  const cmp = { name: "CookieConsent", domain: "www.x.nl", path: "/", value: "{stamp:'x'}" };
+  const picked = pickConsent(before, [session, bot, consent, cmp], { theme: "dark" }, { theme: "dark", consentMode: "granted" });
+  assert.deepEqual(picked, { cookies: [consent, cmp], storage: { consentMode: "granted" } });
+  // nothing added: no consent state at all
+  assert.equal(pickConsent(before, before, {}, {}), null);
 });
 
 test("crawler trap: a segment repeating 3x is real traffic, not a trap", () => {
