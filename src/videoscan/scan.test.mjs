@@ -243,6 +243,24 @@ test("QR-scanner camera preview <video> is NOT a player", () => {
   assert.deepEqual(names(detectFromCorpus('<video class="webcam-feed" autoplay playsinline></video>')), []);
 });
 
+test("video-application recorder <video> is NOT a player", () => {
+  // Recruitee job page: the applicant's own recording surface, hidden until used.
+  const html = '<video tabindex="-1" data-selector="recorder-status" class="ba-videorecorder-video ba-videorecorder-norecorder" ' +
+    'data-video="video" playsinline="" disablepictureinpicture=""></video>';
+  assert.deepEqual(names(detectFromCorpus(html)), []);
+  // a recorder-named video that plays a file is still a video
+  for (const video of [
+    '<video class="recorder-demo" src="/demo.mp4"></video>',
+    '<video class="recorder-demo"><source src="/demo.mp4"></video>',
+    '<video class="recorder-lesson" data-src="/lesson.mp4"></video>',
+    '<video id="RecorderPlayback" controls></video>',
+  ]) assert.deepEqual(names(detectFromCorpus(video)), ["HTML5 native"], video);
+  // and a recorder next to a real video does not hide it, either order
+  const real = '<video class="hero"><source src="/a.mp4"></video>';
+  assert.deepEqual(names(detectFromCorpus(html + real)), ["HTML5 native"]);
+  assert.deepEqual(names(detectFromCorpus(real + html)), ["HTML5 native"]);
+});
+
 test("<video> with an ordinary id/class still detected as HTML5 native", () => {
   assert.deepEqual(names(detectFromCorpus('<video id="hero" class="header-video" autoplay muted><source src="/a.mp4"></video>')), ["HTML5 native"]);
   // a later sibling tag's camera class must not leak into this one
