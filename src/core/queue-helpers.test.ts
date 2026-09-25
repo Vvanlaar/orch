@@ -16,6 +16,16 @@ describe('decideDeadScan', () => {
     expect(decideDeadScan({ ...crawl, latest })).toEqual({ action: 'resume', file: latest.name });
   });
 
+  it('does not resume an older checkpoint of another row of the domain', () => {
+    const latest = file('videoscan-utrecht.nl-INPROGRESS.json', STARTED - 60_000, true);
+    expect(decideDeadScan({ ...crawl, latest })).toEqual({ action: 'fail', reason: 'no checkpoint from this run' });
+  });
+
+  it('resumes the checkpoint this run resumed from, even if it died before its first write', () => {
+    const latest = file('videoscan-utrecht.nl-INPROGRESS.json', STARTED - 60_000, true);
+    expect(decideDeadScan({ ...crawl, resumeFile: latest.name, latest })).toEqual({ action: 'resume', file: latest.name });
+  });
+
   it('completes a finished report that kept the INPROGRESS name of the checkpoint it resumed', () => {
     const latest = file('videoscan-utrecht.nl-INPROGRESS.json', STARTED + 60_000, false);
     expect(decideDeadScan({ ...crawl, latest }).action).toBe('complete');

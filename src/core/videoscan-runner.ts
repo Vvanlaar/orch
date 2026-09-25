@@ -397,7 +397,8 @@ export function readScanFileInfo(name: string): ScanFileInfo | null {
   try {
     const data = JSON.parse(readFileSync(scanPath, 'utf-8'));
     return { name, mtimeMs: statSync(scanPath).mtimeMs, checkpoint: data?.checkpoint === true };
-  } catch {
+  } catch (err) {
+    log.warn(`Scan file ${name} is unreadable: ${err instanceof Error ? err.message : err}`);
     return null;
   }
 }

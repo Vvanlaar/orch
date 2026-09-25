@@ -750,6 +750,7 @@ async function resolveDeadVideoscan(t: Task, why: string): Promise<void> {
     startedAtMs: t.startedAt ? Date.parse(t.startedAt) : null,
     crawlMode: !!t.context.scanUrl && !t.context.urls?.length,
     mergeTarget: t.context.targetFilename,
+    resumeFile: t.context.resumeFile ? path.basename(t.context.resumeFile) : undefined,
   });
 
   if (decision.action === 'complete') {
