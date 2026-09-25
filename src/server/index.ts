@@ -453,11 +453,11 @@ app.post('/api/tasks/:id/resume', asyncHandler(async (req, res) => {
     res.status(409).json({ error: 'Scan is still finishing its pause — try again in a moment' });
     return;
   }
-  // The checkpoint is on the disk of the machine that paused it (pause is local-only),
-  // and isVideoscanRunning above only sees this machine's subprocesses.
-  const isLocal = !task.machineId || task.machineId === MACHINE_ID;
-  if (!isLocal) {
-    res.status(400).json({ error: `Task is on a different machine (${task.machineId})` });
+  // The checkpoint is on the disk of the machine that ran the scan, or the one the task is
+  // pinned to; isVideoscanRunning above only sees this machine's subprocesses.
+  const owner = task.machineId || task.context.targetMachineId;
+  if (owner && owner !== MACHINE_ID) {
+    res.status(400).json({ error: `Task is on a different machine (${owner})` });
     return;
   }
 

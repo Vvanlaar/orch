@@ -47,4 +47,10 @@ describe('checkpoint pinning in the task queue', () => {
     const task = await retryTask(887);
     expect(task?.context.targetMachineId).toBe('desktop');
   });
+
+  it('retryTask pins an unpinned resume task to this machine', async () => {
+    dbGetTask.mockResolvedValue({ id: 886, type: 'videoscan', status: 'failed', repo: 'x', repoPath: 'videoscans', context: resumeCtx, createdAt: '' } as Task);
+    const task = await retryTask(886);
+    expect(task?.context.targetMachineId).toBe('laptop-2');
+  });
 });
