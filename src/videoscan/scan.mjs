@@ -75,7 +75,7 @@ export const DETECTORS = {
       /\bkWidget\s*\./,
       // The container class Kaltura's embed JS renders. The bare /kWidget/i
       // caught it; the anchored form above does not, and on a self-hosted
-      // (custom-domain) Kaltura it is the only marker left.
+      // (custom-domain) Kaltura with external embed JS it can be the only one.
       /\bkWidgetIframeContainer\b/,
       /kaltura-player/i,
     ],
@@ -1864,9 +1864,9 @@ function createAutoTuner(controlFile) {
     throttle.minConcurrency = Math.min(throttle.minConcurrency, throttle.concurrency);
   }
 
-  // A first beat at start: the per-batch one only lands after the first batch
-  // (start page + sitemap), and until then the scan looks dead to anything
-  // that reads heartbeats to decide whether a batch is still running.
+  // A first beat at start: the per-batch one first lands after the start page,
+  // the sitemap step and the first crawl batch, and until then the scan looks
+  // dead to anything that reads heartbeats to decide whether it still runs.
   return { proposeNext, cleanup, beat: writeHeartbeat };
 }
 
@@ -2066,7 +2066,6 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
 
   const throttle = createThrottleState(delay, concurrency);
   const autoTuner = createAutoTuner(controlFile);
-  autoTuner.beat(throttle, domain);
   const retryCount = new Map();
   const MAX_RETRIES = 2;
 
@@ -2138,6 +2137,9 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     console.log(chalk.blue(`\nStarting scan of ${domain}`));
   }
   console.log(chalk.gray(`Max pages: ${maxPages}, Timeout per page: ${timeout}ms, Concurrency: ${concurrency}, Delay: ${delay}ms\n`));
+  // After the resume parse: a corrupt resume file must not leave a heartbeat
+  // behind that reads as a live scan.
+  autoTuner.beat(throttle, domain);
 
   setupInterruptHandler();
 

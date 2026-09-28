@@ -35,7 +35,7 @@ export function readJson(path) {
  * wrap-up never needs to, so a queue left on it is not unfinished work.
  */
 export function isDerivedScan(filename) {
-  const f = filename.toLowerCase();
+  const f = filename.toLowerCase().replace(/[.\s]+$/, '');
   return f.endsWith('-merged.json') || f.endsWith('-summary.json');
 }
 
@@ -124,9 +124,11 @@ export function resolveTarget(target, dir = videoscanDir(), all = listScans(dir)
   const needle = target.toLowerCase();
   // An exact host before any fuzzy match, batch labels included: a substring
   // match on "oss.nl" also takes werkenbijoss.nl (or a batch labelled after
-  // it), and scan-prune --apply would rewrite all of those too.
+  // it), and scan-prune --apply would rewrite all of those too. Hosts only: a
+  // summary's or cross-domain merge's `domain` is its batch label, and matching
+  // that here would return the summary alone, without the batch's members.
   const bare = (d) => d.toLowerCase().replace(/^www\./, '');
-  const exactDomain = all.filter(s => bare(s.domain) === bare(needle));
+  const exactDomain = all.filter(s => !s.isSummary && s.domain.includes('.') && bare(s.domain) === bare(needle));
   if (exactDomain.length) return { kind: 'domain', scans: exactDomain };
   const fuzzy = all.filter(s => s.batchId && (s.batchId.toLowerCase().includes(needle) || (s.batchLabel || '').toLowerCase().includes(needle)));
   if (fuzzy.length) {
@@ -143,6 +145,16 @@ export function resolveTarget(target, dir = videoscanDir(), all = listScans(dir)
   if (domain.length) return { kind: 'domain', scans: domain };
 
   throw new Error(`No scan, batch or domain matches "${target}"`);
+}
+
+/** resolveTarget for the CLI scripts: a bad target is a usage error, not a stack trace. */
+export function resolveTargetOrExit(target, dir, all) {
+  try {
+    return resolveTarget(target, dir, all);
+  } catch (err) {
+    console.error(err.message);
+    process.exit(2);
+  }
 }
 
 export function fmtAge(ms) {

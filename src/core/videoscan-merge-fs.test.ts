@@ -8,7 +8,10 @@ const dir = mkdtempSync(join(tmpdir(), 'orch-merge-'));
 process.env.VIDEOSCAN_DIR = dir;
 const { mergeScans } = await import('./videoscan-runner.js');
 
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+afterAll(() => {
+  rmSync(dir, { recursive: true, force: true });
+  delete process.env.VIDEOSCAN_DIR;
+});
 
 function scan(filename: string, domain: string, scanDate: string, url: string) {
   writeFileSync(join(dir, filename), JSON.stringify({

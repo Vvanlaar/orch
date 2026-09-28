@@ -113,6 +113,9 @@ carry `$(…)` or a quote. Write it to a scratch file with the Write tool, then:
 node .claude/skills/videoscan-validate/scripts/probe-media.mjs <file with the url>
 ```
 
+Exit 0 means a 2xx answer that is not an HTML page — real media. Exit 1 (a 4xx,
+a soft-404 HTML page, a dead host) means the URL does not prove a player.
+
 ## Phase 3 — fix what is wrong
 
 ### 3a. The detector (`src/videoscan/scan.mjs`)
@@ -155,16 +158,19 @@ thousands of pages to correct four rows is not worth it. Prune the
 confirmed-false detections and regenerate:
 
 ```bash
-node .claude/skills/videoscan-validate/scripts/scan-prune.mjs <batch> --player Kaltura --evidence zoekwidget
+node .claude/skills/videoscan-validate/scripts/scan-prune.mjs <batch> --player Kaltura --only-evidence "HTML: kwidget"
 # dry run first; add --apply to write (keeps a .bak per file)
 ```
 
-`--evidence` drops a detection when *any* evidence string matches, so it is
-safe only with a needle a real embed cannot carry (`zoekwidget`, not `kwidget`:
-every real `kWidget.embed` page carries that one too). When the bad marker is
-boilerplate that real embeds carry too (WP Rocket's `youtube-player` CSS), use
-`--only-evidence "HTML: youtube-player,HTML: ytimg.com"` instead: it drops only
-detections whose *every* evidence string is on the list.
+Evidence holds only the text the pattern matched (`HTML: kwidget`), never the
+word around it — so the `zoekwidget1.php` false positive and a real
+`kWidget.embed` stored in an older scan look alike. `--evidence` drops a
+detection when *any* evidence string matches, which would take the real
+embeds too. `--only-evidence` drops only detections whose *every* evidence
+string is on the list, so a real embed that also loaded `kaltura.com` stays;
+exclude the pages a browser check proved real with `--url-excludes`. The same
+flag handles boilerplate that real embeds carry too (WP Rocket's
+`youtube-player` CSS: `--only-evidence "HTML: youtube-player,HTML: ytimg.com"`).
 
 It removes the matching detections, drops pages that had no other player, and
 recomputes `pagesWithVideo` / `uniquePlayers` / `playerSummary` — in every file

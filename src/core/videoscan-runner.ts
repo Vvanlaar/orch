@@ -646,7 +646,7 @@ export interface WrapUpResult {
 
 /**
  * One-click batch finalization:
- *   1. Clear queues on every resumable scan in the batch.
+ *   1. Clear the queue on every scan in the batch that still has one, merges included.
  *   2. Consolidate any same-domain duplicates via mergeScans (archives sources).
  *   3. Produce a cross-domain summary JSON + HTML/PDF report.
  *

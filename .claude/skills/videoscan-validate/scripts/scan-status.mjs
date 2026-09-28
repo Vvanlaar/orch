@@ -6,7 +6,7 @@
 //
 // Exit code 0 always; the verdict is in the output, not the status.
 
-import { listScans, heartbeats, closedBatches, resolveTarget, videoscanDir, fmtAge, isDerivedScan, HEARTBEAT_FRESH_MS } from './lib.mjs';
+import { listScans, heartbeats, closedBatches, resolveTargetOrExit, videoscanDir, fmtAge, isDerivedScan, HEARTBEAT_FRESH_MS } from './lib.mjs';
 
 const target = process.argv[2];
 const dir = videoscanDir();
@@ -43,7 +43,7 @@ if (unfiled.length) {
   console.log('  about to wrap up, finish or stop it first — its exit write lands after the merge.');
 }
 
-const scans = target ? resolveTarget(target, dir, allScans).scans : allScans;
+const scans = target ? resolveTargetOrExit(target, dir, allScans).scans : allScans;
 const batches = new Map();
 for (const s of scans) {
   if (s.unreadable) continue;
