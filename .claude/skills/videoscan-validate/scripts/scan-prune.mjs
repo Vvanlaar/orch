@@ -21,13 +21,23 @@ import { copyFileSync, existsSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { readJson, resolveTarget, videoscanDir } from './lib.mjs';
 
+const SAFE_NAME = /^[A-Za-z0-9._-]+$/;
 const VALUE_FLAGS = new Set(['--player', '--evidence', '--only-evidence', '--url-contains', '--url-excludes']);
 const opts = {};
 let target;
 const args = process.argv.slice(2);
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
-  if (VALUE_FLAGS.has(a)) opts[a.slice(2)] = args[++i];
+  if (VALUE_FLAGS.has(a)) {
+    // A missing or empty value would silently switch that filter off and widen
+    // the prune to every detection of the player — refuse instead.
+    const v = args[++i];
+    if (!v || v.startsWith('--')) {
+      console.error(`${a} needs a non-empty value`);
+      process.exit(2);
+    }
+    opts[a.slice(2)] = v;
+  }
   else if (a === '--apply') opts.apply = true;
   else if (!a.startsWith('--')) target ??= a;
 }
@@ -127,6 +137,12 @@ if (!apply) {
 } else {
   console.log('\nNow regenerate the reports so the HTML/PDF match the JSON:');
   for (const p of planned) {
+    // The filename goes into a shell line someone will paste. Merge labels
+    // reach filenames, so a name outside this set could carry a quote or $().
+    if (!SAFE_NAME.test(p.file)) {
+      console.log(`  (skipped ${JSON.stringify(p.file)}: unsafe characters — regenerate it from the dashboard)`);
+      continue;
+    }
     console.log(`  curl -s -X POST -H "Authorization: Bearer $ORCH_TOKEN" -H 'Content-Type: application/json' \\`);
     console.log(`    -d '{"filename":"${p.file}"}' http://127.0.0.1:3011/api/videoscans/generate-report`);
   }

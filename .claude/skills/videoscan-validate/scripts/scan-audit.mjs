@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Phase 2 — what did this scan claim, and which claims look shaky?
 //
-//   node scan-audit.mjs <file|batch|domain> [--json] [--samples N]
+//   node scan-audit.mjs <file|batch|domain> [--json] [--samples N | --samples=N]
 //
 // Prints, per detected player: page count, what evidence actually fired, which
 // hosts it fired on, sample URLs to open, and a risk verdict. It never decides
@@ -12,19 +12,36 @@ import { join } from 'path';
 import { readJson, resolveTarget, videoscanDir } from './lib.mjs';
 
 const args = process.argv.slice(2);
-const target = args.find(a => !a.startsWith('--'));
-const asJson = args.includes('--json');
-const sampleCount = Number((args.find(a => a.startsWith('--samples=')) || '').split('=')[1]) || 3;
+let target;
+let asJson = false;
+let sampleCount = 3;
+for (let i = 0; i < args.length; i++) {
+  const a = args[i];
+  if (a === '--json') asJson = true;
+  // Both spellings: the space form's value would otherwise be read as the target.
+  else if (a === '--samples') sampleCount = Number(args[++i]) || 3;
+  else if (a.startsWith('--samples=')) sampleCount = Number(a.split('=')[1]) || 3;
+  else if (!a.startsWith('--')) target ??= a;
+}
 if (!target) {
-  console.error('usage: scan-audit.mjs <file|batch|domain> [--json] [--samples=N]');
+  console.error('usage: scan-audit.mjs <file|batch|domain> [--json] [--samples N]');
   process.exit(2);
 }
 
 const dir = videoscanDir();
 const { scans } = resolveTarget(target, dir);
 // A batch summary already contains every member's details — auditing both the
-// summary and its members would double every count.
-const files = scans.some(s => s.isSummary) ? scans.filter(s => s.isSummary) : scans;
+// summary and its members would double every count. Only the NEWEST summary:
+// a re-wrap writes a new one and leaves the old one in place, and summing both
+// doubles everything again. A member newer than that summary means the batch
+// changed after the wrap-up, so the summary is stale: audit the members.
+const summaries = scans.filter(s => s.isSummary);
+const members = scans.filter(s => !s.isSummary);
+const latest = summaries.reduce((a, b) => (!a || b.scanDate > a.scanDate ? b : a), null);
+const stale = latest && members.some(m => m.scanDate > latest.scanDate);
+const files = latest && !stale ? [latest] : members;
+if (stale) console.error(`note: ${latest.filename} predates newer member scans — auditing the members instead`);
+else if (summaries.length > 1) console.error(`note: ${summaries.length} summaries in this batch — auditing the newest, ${latest.filename}`);
 
 const details = [];
 for (const s of files) {
@@ -79,14 +96,16 @@ for (const row of details) {
     try { host = new URL(row.url).host; } catch {}
     e.hosts.set(host, (e.hosts.get(host) || 0) + 1);
     for (const ev of p.evidence || []) {
-      e.evidence.set(evidenceKind(ev), (e.evidence.get(evidenceKind(ev)) || 0) + 1);
+      const kind = evidenceKind(ev);
+      e.evidence.set(kind, (e.evidence.get(kind) || 0) + 1);
     }
   }
 }
 
-// Markers that name the player's own delivery path or its vendor-prefixed
-// class/id namespace (`mejs__container`, `vjs-tech`, `jw-reset`) are hard to hit
-// by accident. A bare dictionary word is not.
+// Markers that name the player's own delivery path or a BEM-style vendor
+// namespace (`mejs__container`, `plyr--video`) are hard to hit by accident. A
+// bare dictionary word is not. Single-dash prefixes (`vjs-`, `jw-`) do not
+// count here: they read as HIGH when they are the only marker.
 const EMBED_SHAPE = /embed|player\.|iframe_api|cdn|\.js\b|data-[a-z]+-(?:id|url)|[a-z]{2,}(?:__|--)|class="|id="/i;
 
 function assess(p) {

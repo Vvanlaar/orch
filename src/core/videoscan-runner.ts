@@ -446,10 +446,17 @@ interface ScanData {
  * every caller that asks "can this be continued?" has to exclude them.
  *
  * Detected by filename because that is what merges and summaries have in common
- * on disk, including the ones written before this flag existed.
+ * on disk, including the ones written before this flag existed. Compared the
+ * way NTFS resolves the name — case-insensitive, trailing dots and spaces
+ * dropped — or `x-merged.JSON` passes the resume guard and opens the merge.
  */
 export function isDerivedScan(filename: string): boolean {
-  return filename.endsWith('-merged.json') || filename.endsWith('-summary.json');
+  const f = diskName(filename);
+  return f.endsWith('-merged.json') || f.endsWith('-summary.json');
+}
+
+function diskName(filename: string): string {
+  return filename.toLowerCase().replace(/[.\s]+$/, '');
 }
 
 /**
@@ -458,7 +465,7 @@ export function isDerivedScan(filename: string): boolean {
  * scan whose sources mergeScans archived, so dropping it would lose the domain.
  */
 export function isBatchSummary(filename: string): boolean {
-  return filename.endsWith('-summary.json');
+  return diskName(filename).endsWith('-summary.json');
 }
 
 export function mergeScansData(scansData: ScanData[]): ScanData {
@@ -548,9 +555,18 @@ export function mergeScans(filenames: string[], label?: string): MergeResult {
   const merged = mergeScansData(scansData);
   if (label) merged.domain = label;
 
-  // Write merged file
+  // Write merged file. The label is caller input: keep it out of the path, or a
+  // "../" in it writes the merge outside the scans dir.
   const ts = merged.scanDate.replace(/[:.]/g, '-').replace('Z', '');
-  const mergedFilename = `videoscan-${merged.domain}-${ts}-merged.json`;
+  const name = merged.domain.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/\.{2,}/g, '.');
+  let mergedFilename = `videoscan-${name}-${ts}-merged.json`;
+  // A source that is itself the newest merge of this domain already has this
+  // name (wrap-up re-merges batch-stamped merges). Writing over it and then
+  // archiving the sources would archive the new merge too; any other file of
+  // that name would be silently overwritten.
+  for (let n = 2; existsSync(join(VIDEOSCAN_DIR, mergedFilename)); n++) {
+    mergedFilename = `videoscan-${name}-${ts}-${n}-merged.json`;
+  }
   writeFileSync(join(VIDEOSCAN_DIR, mergedFilename), JSON.stringify(merged, null, 2));
 
   // Archive source files (move to archived/ subdir)
@@ -671,7 +687,10 @@ async function wrapUpBatchInner(batchId: string): Promise<WrapUpResult> {
 
   const finalized: string[] = [];
   for (const s of initial) {
-    if (s.canResume && finalizeScan(s.filename)) {
+    // Not gated on canResume: that is false for a batch-stamped -merged.json,
+    // whose queue would then outlive the wrap-up. finalizeScan is a no-op on an
+    // empty queue.
+    if (finalizeScan(s.filename)) {
       finalized.push(s.filename);
       await syncScanToSupabase(s.filename);
     }

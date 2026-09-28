@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DETECTORS, detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, pickConsent, isTranslatedCopy, translationPrefix, normalizeUrl, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource } from "./scan.mjs";
+import { DETECTORS, detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, pickConsent, isTranslatedCopy, translationPrefix, normalizeUrl, restoreQueue, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource } from "./scan.mjs";
 
 const names = (result) => result.map((r) => r.player).sort();
 
@@ -472,6 +472,11 @@ test("Kaltura kWidget.addReadyCallback still detected (self-hosted, no kaltura.c
   assert.deepEqual(names(result), ["Kaltura"]);
 });
 
+test("Kaltura's rendered kWidgetIframeContainer detected on a self-hosted embed", () => {
+  const html = `<div class="kWidgetIframeContainer"><iframe src="https://video.uni.nl/p/102/sp/10200/embedIframeJs/uiconf_id/1"></iframe></div>`;
+  assert.deepEqual(names(detectFromCorpus(html)), ["Kaltura"]);
+});
+
 test("a word ending in kWidget is NOT Kaltura (word boundary)", () => {
   assert.deepEqual(names(detectFromCorpus(`<script>zoekWidget.embed({});</script>`)), []);
   assert.deepEqual(names(detectFromCorpus(`<script>mijnkWidget.embed();</script>`)), []);
@@ -703,6 +708,13 @@ test("crawler trap: repeated path segments are rejected", () => {
   assert.equal(shouldSkipUrl(trap), true);
 });
 
+test("crawler trap: a segment repeated 4 times is rejected well inside the depth bound", () => {
+  // The fixture above has 16 segments, so the depth bound rejects it before the
+  // repeat count is ever read. 7 segments here: only the repeat check can fire.
+  assert.equal(isCrawlerTrap("https://example.nl/a/b/a/b/a/b/a"), true);
+  assert.equal(isCrawlerTrap("https://example.nl/a/b/a/b/a"), false);
+});
+
 test("crawler trap: excessive path depth is rejected", () => {
   const deep = "https://example.nl/" + Array.from({ length: 13 }, (_, i) => `s${i}`).join("/");
   assert.equal(isCrawlerTrap(deep), true);
@@ -814,7 +826,7 @@ test("normalizeUrl still strips hash and trailing slash", () => {
 });
 
 test("resume restore: trap URLs and translated copies are filtered, real pagination survives", () => {
-  // The restore pipeline from the --resume branch, run over a queue shaped like
+  // crawlSite's --resume restore, run over a queue shaped like
   // the real one: deep repeated-segment traps plus ?from= re-appended per link.
   const start = "https://waardwijzer.krimpenerwaard.nl/";
   const stored = [
@@ -825,10 +837,7 @@ test("resume restore: trap URLs and translated copies are filtered, real paginat
     // Queued before translated copies were skipped
     "https://waardwijzer.krimpenerwaard.nl/en/is/producten",
   ];
-  const restored = [
-    ...new Set(stored.map((u) => normalizeUrl(u, start)).filter((u) => u && !shouldSkipUrl(u, start))),
-  ];
-  assert.deepEqual(restored, [
+  assert.deepEqual(restoreQueue(stored, start), [
     // Real from= values are preserved; only trap output is dropped.
     "https://waardwijzer.krimpenerwaard.nl/is/producten?view=list&from=162&from=150",
     "https://waardwijzer.krimpenerwaard.nl/is/producten?view=list&from=99&from=150",
@@ -1393,7 +1402,11 @@ test("narrowed vendors still detected on their embed shapes", () => {
   const cases = [
     ['<iframe src="https://platform.vixyvideo.com/p/1/sp/100/embedIframeJs/uiconf_id/2"></iframe>', "Vixy Video"],
     ['<iframe src="https://hihaho.com/embed/1b2c3d4e"></iframe>', "Hihaho"],
-    ['<div data-block=\'{"url":"https:\/\/mediasite.uu.nl\/Mediasite\/Play\/0d1e2f"}\'></div>', "Mediasite"],
+    ['<iframe src="https://mediasite.uu.nl/Mediasite/Play/0d1e2f"></iframe>', "Mediasite"],
+    // String.raw: in a plain JS string "\/" is just "/", and the JSON-escaped
+    // alternative in the pattern would go untested.
+    [String.raw`<div data-block='{"url":"https:\/\/mediasite.uu.nl\/Mediasite\/Play\/0d1e2f"}'></div>`, "Mediasite"],
+    ['<div data-src="https%3A%2F%2Fmediasite.uu.nl%2FMediasite%2FPlay%2F0d1e2f"></div>', "Mediasite"],
     ['<iframe src="https://creators.spotify.com/pod/profile/museum/embed/episodes/ep-1"></iframe>', "Spotify (podcast)"],
     ['<iframe src="https://anchor.fm/museum/embed/episodes/ep-1"></iframe>', "Spotify (podcast)"],
     ['<script src="/typo3conf/ext/opengemeenten_mediaplayer/Resources/Public/player.js"></script>', "OpenGemeenten"],

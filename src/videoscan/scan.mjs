@@ -73,6 +73,10 @@ export const DETECTORS = {
       // Relies on the corpus never being lowercased: extractEncodedMarkup
       // lowercases only for needle tests, the markup it pushes keeps its case.
       /\bkWidget\s*\./,
+      // The container class Kaltura's embed JS renders. The bare /kWidget/i
+      // caught it; the anchored form above does not, and on a self-hosted
+      // (custom-domain) Kaltura it is the only marker left.
+      /\bkWidgetIframeContainer\b/,
       /kaltura-player/i,
     ],
     scripts: [/kaltura\.com/i],
@@ -672,6 +676,23 @@ export function normalizeUrl(url, base) {
   } catch {
     return null;
   }
+}
+
+/**
+ * The --resume queue, re-filtered: it was written by whatever rules were in
+ * force when the scan paused, so a run interrupted before the crawler-trap
+ * bounds existed would otherwise resume straight back into the trap it was
+ * stuck in (one real scan came back with 11,243 queued URLs, 99% trap output).
+ * Normalized as well as filtered: the rules that collapse a re-appended ?from=
+ * at enqueue time have to reach URLs queued before they existed, or the
+ * paginator half of the trap survives the restore.
+ */
+export function restoreQueue(storedQueue, startUrl) {
+  return [
+    ...new Set(
+      storedQueue.map((u) => normalizeUrl(u, startUrl)).filter((u) => u && !shouldSkipUrl(u, startUrl)),
+    ),
+  ];
 }
 
 /**
@@ -1843,7 +1864,10 @@ function createAutoTuner(controlFile) {
     throttle.minConcurrency = Math.min(throttle.minConcurrency, throttle.concurrency);
   }
 
-  return { proposeNext, cleanup };
+  // A first beat at start: the per-batch one only lands after the first batch
+  // (start page + sitemap), and until then the scan looks dead to anything
+  // that reads heartbeats to decide whether a batch is still running.
+  return { proposeNext, cleanup, beat: writeHeartbeat };
 }
 
 function createThrottleState(delay, concurrency) {
@@ -2042,6 +2066,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
 
   const throttle = createThrottleState(delay, concurrency);
   const autoTuner = createAutoTuner(controlFile);
+  autoTuner.beat(throttle, domain);
   const retryCount = new Map();
   const MAX_RETRIES = 2;
 
@@ -2075,43 +2100,33 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       visited = normalizeAll(allUrls);
     }
 
-    // Re-filter the restored queue: it was written by whatever rules were in
-    // force when the scan paused, so a run interrupted before the crawler-trap
-    // bounds existed would otherwise resume straight back into the trap it was
-    // stuck in. (One real scan came back with 11,243 queued URLs, 99% of them
-    // trap output.) Costs one pass over a list we were about to crawl anyway.
-    // Normalize as well as filter: the same rules that collapse a re-appended
-    // ?from= at enqueue time have to be applied to URLs queued before they
-    // existed, or the paginator half of the trap survives the restore.
     const storedQueue = prev._state?.queue || [];
-    const restored = [
-      ...new Set(
-        storedQueue.map((u) => normalizeUrl(u, startUrl)).filter((u) => u && !shouldSkipUrl(u, startUrl)),
-      ),
-    ];
+    const restored = restoreQueue(storedQueue, startUrl);
     const dropped = storedQueue.length - restored.length;
     if (dropped > 0) {
       console.log(
         chalk.yellow(`  Dropped ${dropped} queued URL(s) as crawler-trap output, translated copies, state-changing links or duplicates`),
       );
     }
-    // Say so out loud when the filter took everything. The run then finds the
-    // start URL already visited and finishes with zero pages, which otherwise
-    // looks like an unexplained no-op rather than "the remaining queue was all
-    // trap".
+    // Say so out loud when the filter took everything, and resume nothing: the
+    // start-URL fallback below is for a queue that was empty to begin with. The
+    // resume endpoint seeds https://www.<domain>, which a non-www host never
+    // visited, so falling back here would crawl one stray page.
     if (storedQueue.length > 0 && restored.length === 0) {
       console.log(chalk.yellow("  Every queued URL was trap output or a translated copy — nothing left to resume"));
     }
-    queue = restored.length ? restored : [normalizeUrl(startUrl, startUrl)];
+    queue = restored.length || storedQueue.length ? restored : [normalizeUrl(startUrl, startUrl)];
 
     results = (prev.details || []).map((d) => ({
       url: d.url,
       players: d.players.map((p) => ({ player: p.name, evidence: p.evidence })),
     }));
+    // A Set, not results.find per URL: that was O(visited x details), 15s on a
+    // 35k-page resume. Compared normalized, like `visited`, or a detail stored
+    // under ?x=1&x=1 gets a second, player-less row under its collapsed form.
+    const known = new Set(results.map((r) => normalizeUrl(r.url, startUrl) || r.url));
     for (const v of visited) {
-      if (!results.find((r) => r.url === v)) {
-        results.push({ url: v, players: [] });
-      }
+      if (!known.has(v)) results.push({ url: v, players: [] });
     }
 
     // maxPages is additive when resuming: scan N more pages beyond what's already visited
@@ -2517,6 +2532,7 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
 
   const throttle = createThrottleState(delay, concurrency);
   const autoTuner = createAutoTuner(controlFile);
+  autoTuner.beat(throttle, domain);
   const retryCount = new Map();
   const MAX_RETRIES = 2;
 
