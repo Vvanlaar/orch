@@ -4,7 +4,7 @@
 // re-crawling. Run this ONLY after a browser check proved the pages have no
 // such player.
 //
-//   node scan-prune.mjs <file|batch|domain> --player Kaltura [--evidence kwidget]
+//   node scan-prune.mjs <file|batch|domain> --player Kaltura [--only-evidence "HTML: kwidget"]
 //                       [--only-evidence "HTML: a,HTML: b"] [--url-contains /nieuws]
 //                       [--url-excludes url1,url2] [--apply]
 //
@@ -19,17 +19,32 @@
 
 import { copyFileSync, existsSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { readJson, resolveTarget, videoscanDir } from './lib.mjs';
+import { readJson, resolveTargetOrExit, videoscanDir } from './lib.mjs';
 
+const SAFE_NAME = /^[A-Za-z0-9._-]+$/;
 const VALUE_FLAGS = new Set(['--player', '--evidence', '--only-evidence', '--url-contains', '--url-excludes']);
 const opts = {};
 let target;
 const args = process.argv.slice(2);
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
-  if (VALUE_FLAGS.has(a)) opts[a.slice(2)] = args[++i];
-  else if (a === '--apply') opts.apply = true;
-  else if (!a.startsWith('--')) target ??= a;
+  // --flag=value as well as --flag value. A flag this loop does not know, or a
+  // missing or blank value, would switch its filter off and widen the prune to
+  // every detection of the player — refuse instead.
+  const eq = a.indexOf('=');
+  const flag = a.startsWith('--') && eq > 0 ? a.slice(0, eq) : a;
+  if (VALUE_FLAGS.has(flag)) {
+    const v = flag === a ? args[++i] : a.slice(eq + 1);
+    if (!v?.trim() || VALUE_FLAGS.has(v) || v === '--apply') {
+      console.error(`${flag} needs a non-empty value`);
+      process.exit(2);
+    }
+    opts[flag.slice(2)] = v;
+  } else if (a === '--apply') opts.apply = true;
+  else if (a.startsWith('--')) {
+    console.error(`unknown flag ${a}`);
+    process.exit(2);
+  } else target ??= a;
 }
 const { player, evidence, 'only-evidence': onlyEvidence, 'url-contains': urlContains, 'url-excludes': urlExcludes, apply } = opts;
 const excluded = new Set(urlExcludes?.split(',').map(u => u.trim()).filter(Boolean));
@@ -41,7 +56,7 @@ if (!target || !player) {
 }
 
 const dir = videoscanDir();
-const { scans } = resolveTarget(target, dir);
+const { scans } = resolveTargetOrExit(target, dir);
 
 // Plan every file first, write nothing until all of them parse cleanly — a
 // half-applied prune across a batch is far harder to undo than no prune.
@@ -127,6 +142,12 @@ if (!apply) {
 } else {
   console.log('\nNow regenerate the reports so the HTML/PDF match the JSON:');
   for (const p of planned) {
+    // The filename goes into a shell line someone will paste. Merges written
+    // before labels were sanitized can carry a quote or $() in their name.
+    if (!SAFE_NAME.test(p.file)) {
+      console.log(`  (skipped ${JSON.stringify(p.file)}: unsafe characters — regenerate it from the dashboard)`);
+      continue;
+    }
     console.log(`  curl -s -X POST -H "Authorization: Bearer $ORCH_TOKEN" -H 'Content-Type: application/json' \\`);
     console.log(`    -d '{"filename":"${p.file}"}' http://127.0.0.1:3011/api/videoscans/generate-report`);
   }

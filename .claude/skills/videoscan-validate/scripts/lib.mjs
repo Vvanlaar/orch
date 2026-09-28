@@ -30,6 +30,15 @@ export function readJson(path) {
   return JSON.parse(readFileSync(path, 'utf-8'));
 }
 
+/**
+ * A merge or a summary: the runner (isDerivedScan) never resumes one and
+ * wrap-up never needs to, so a queue left on it is not unfinished work.
+ */
+export function isDerivedScan(filename) {
+  const f = filename.toLowerCase().replace(/[.\s]+$/, '');
+  return f.endsWith('-merged.json') || f.endsWith('-summary.json');
+}
+
 /** Every videoscan-*.json in the dir, cheapest fields only. */
 export function listScans(dir = videoscanDir()) {
   return readdirSync(dir)
@@ -47,7 +56,9 @@ export function listScans(dir = videoscanDir()) {
           queued: d._state?.queue?.length || 0,
           batchId: d.batchId,
           batchLabel: d.batchLabel,
-          isSummary: !!d.isSummary,
+          // The flag is lost when a summary goes through a merge ("+ URLs"), so
+          // the filename counts too — the runner's isBatchSummary reads only that.
+          isSummary: !!d.isSummary || filename.toLowerCase().endsWith('-summary.json'),
           pagesFailed: d.pagesFailed || 0,
           failureRate: d.failureRate || 0,
         };
@@ -58,12 +69,16 @@ export function listScans(dir = videoscanDir()) {
 }
 
 /**
- * Heartbeats newer than 60s mean a scan.mjs subprocess is alive; scan.mjs
- * rewrites its `_heartbeat-<taskId>.json` once per crawl batch and itself
- * treats peers older than 30s as gone. Anything older is a crashed run whose
- * heartbeat was never cleaned up — report it, don't count it as running.
+ * Heartbeats newer than 5 minutes mean a scan.mjs subprocess may be alive.
+ * scan.mjs writes its `_heartbeat-<taskId>.json` at start and then once per
+ * crawl batch, and a batch of slow pages under rate-limit backoff runs well
+ * past a minute — so a short window reads a live crawl as dead and lets
+ * scan-status call a batch ready. Erring long only delays "ready". Anything
+ * older is a crashed run whose heartbeat was never cleaned up.
  */
-export function heartbeats(dir = videoscanDir(), freshMs = 60_000) {
+export const HEARTBEAT_FRESH_MS = 5 * 60_000;
+
+export function heartbeats(dir = videoscanDir(), freshMs = HEARTBEAT_FRESH_MS) {
   const now = Date.now();
   const out = [];
   for (const f of readdirSync(dir)) {
@@ -99,8 +114,7 @@ export function closedBatches(dir = videoscanDir()) {
 }
 
 /** Resolve a batch id, a batch label substring, or a filename to scan files. */
-export function resolveTarget(target, dir = videoscanDir()) {
-  const all = listScans(dir);
+export function resolveTarget(target, dir = videoscanDir(), all = listScans(dir)) {
   const byFile = all.find(s => s.filename === target || s.filename === `videoscan-${target}.json`);
   if (byFile) return { kind: 'file', scans: [byFile] };
 
@@ -108,17 +122,39 @@ export function resolveTarget(target, dir = videoscanDir()) {
   if (exact.length) return { kind: 'batch', batchId: target, scans: exact };
 
   const needle = target.toLowerCase();
-  const fuzzy = all.filter(s => (s.batchId || '').toLowerCase().includes(needle) || (s.batchLabel || '').toLowerCase().includes(needle));
+  // An exact host before any fuzzy match, batch labels included: a substring
+  // match on "oss.nl" also takes werkenbijoss.nl (or a batch labelled after
+  // it), and scan-prune --apply would rewrite all of those too. Hosts only: a
+  // summary's or cross-domain merge's `domain` is its batch label, and matching
+  // that here would return the summary alone, without the batch's members.
+  const bare = (d) => d.toLowerCase().replace(/^www\./, '');
+  const exactDomain = all.filter(s => !s.isSummary && s.domain.includes('.') && bare(s.domain) === bare(needle));
+  if (exactDomain.length) return { kind: 'domain', scans: exactDomain };
+  const fuzzy = all.filter(s => s.batchId && (s.batchId.toLowerCase().includes(needle) || (s.batchLabel || '').toLowerCase().includes(needle)));
   if (fuzzy.length) {
     const ids = [...new Set(fuzzy.map(s => s.batchId))];
     if (ids.length > 1) throw new Error(`"${target}" matches ${ids.length} batches: ${ids.join(', ')}`);
-    return { kind: 'batch', batchId: ids[0], scans: fuzzy };
+    // Every member of that batch, not just the files whose label matched: a
+    // member without batchLabel would otherwise drop out of audit and prune.
+    return { kind: 'batch', batchId: ids[0], scans: all.filter(s => s.batchId === ids[0]) };
   }
 
   const domain = all.filter(s => s.domain.toLowerCase().includes(needle));
+  const hosts = [...new Set(domain.map(s => s.domain))];
+  if (hosts.length > 1) throw new Error(`"${target}" matches ${hosts.length} domains: ${hosts.join(', ')} — pass the exact host`);
   if (domain.length) return { kind: 'domain', scans: domain };
 
   throw new Error(`No scan, batch or domain matches "${target}"`);
+}
+
+/** resolveTarget for the CLI scripts: a bad target is a usage error, not a stack trace. */
+export function resolveTargetOrExit(target, dir, all) {
+  try {
+    return resolveTarget(target, dir, all);
+  } catch (err) {
+    console.error(err.message);
+    process.exit(2);
+  }
 }
 
 export function fmtAge(ms) {

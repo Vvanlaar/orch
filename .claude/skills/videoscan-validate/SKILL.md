@@ -26,8 +26,9 @@ dead hosts, duplicate scan files, and whether the batch is already closed.
 What "done" means:
 
 - **Nothing live.** A running scan is a `_heartbeat-<taskId>.json` newer than
-  60s. Older heartbeats are crashed runs whose file was never cleaned up — they
-  look alarming and mean nothing.
+  5 minutes. scan.mjs writes it at start and once per crawl batch, and a batch
+  of slow pages under backoff can take minutes. Older heartbeats are crashed
+  runs whose file was never cleaned up — they look alarming and mean nothing.
 - **No queue left.** `_state.queue.length > 0` means the crawl stopped early —
   usually because it reached the `--max-pages` its caller passed (the API
   defaults to 50; the dashboard's big crawls are launched with far more). That
@@ -36,8 +37,9 @@ What "done" means:
 - **A live scan in the SAME batch blocks wrap-up.** scan.mjs writes its JSON on
   exit, so a write landing after the merge silently undoes it.
 - **A running scan may not admit which batch it is in.** Only a scan launched
-  as part of a batch carries `batchId`, and an in-progress file often has none
-  at all, so it cannot be matched to the batch from disk. `scan-status.mjs`
+  as part of a batch carries `batchId`, and only in its final JSON — the
+  in-progress checkpoint never has one, so it cannot be matched to the batch
+  from disk. `scan-status.mjs`
   lists those separately and refuses to print "ready" while anything crawls —
   check the hostnames against the batch yourself.
 
@@ -103,11 +105,16 @@ A detection passes when the page yields a real media URL (`.mp4`, `.m3u8`,
 fails when the only match sits in body text, a `data-*` payload, a link href,
 or an unrelated word. `<video>` with an empty `src` is inconclusive: JW Player
 and friends fill it on play — ask the player API instead (`getPlaylist()`), and
-check the media URL over HTTP before calling it real:
+check the media URL over HTTP before calling it real. The URL comes from the
+scanned page, so never paste it into a shell command — a playlist entry can
+carry `$(…)` or a quote. Write it to a scratch file with the Write tool, then:
 
 ```bash
-curl -s -o /dev/null -w "%{http_code} %{content_type}\n" "<media url>"
+node .claude/skills/videoscan-validate/scripts/probe-media.mjs <file with the url>
 ```
+
+Exit 0 means a 2xx answer that is not an HTML page — real media. Exit 1 (a 4xx,
+a soft-404 HTML page, a dead host) means the URL does not prove a player.
 
 ## Phase 3 — fix what is wrong
 
@@ -115,9 +122,11 @@ curl -s -o /dev/null -w "%{http_code} %{content_type}\n" "<media url>"
 
 Players live in one object of `{ patterns: [...], scripts: [...] }`. Read the
 patterns for the player you disproved before writing anything — the shape of
-the false positive decides the fix. Two shapes have bitten this scanner
-already, and the comment beside each surviving pattern records which string
-fooled it:
+the false positive decides the fix. The comment beside each surviving pattern
+records which string fooled it. Besides the two classic shapes below, the
+costliest class is site-wide boilerplate: a CMS brand, a tracking pixel, a CSP
+or preconnect allow-list, a tracker query naming the vendor — one template, so
+every page of the site flags:
 
 - **Unanchored substring.** `/kWidget/i` matched the tail of `zoekwidget1.php`,
   an unrelated search widget. Now `/\bkWidget\s*\./`: word-anchored, followed by
@@ -149,14 +158,19 @@ thousands of pages to correct four rows is not worth it. Prune the
 confirmed-false detections and regenerate:
 
 ```bash
-node .claude/skills/videoscan-validate/scripts/scan-prune.mjs <batch> --player Kaltura --evidence kwidget
+node .claude/skills/videoscan-validate/scripts/scan-prune.mjs <batch> --player Kaltura --only-evidence "HTML: kwidget"
 # dry run first; add --apply to write (keeps a .bak per file)
 ```
 
-`--evidence` drops a detection when *any* evidence string matches. When the
-bad marker is boilerplate that real embeds carry too (WP Rocket's
-`youtube-player` CSS), use `--only-evidence "HTML: youtube-player,HTML: ytimg.com"`
-instead: it drops only detections whose *every* evidence string is on the list.
+Evidence holds only the text the pattern matched (`HTML: kwidget`), never the
+word around it — so the `zoekwidget1.php` false positive and a real
+`kWidget.embed` stored in an older scan look alike. `--evidence` drops a
+detection when *any* evidence string matches, which would take the real
+embeds too. `--only-evidence` drops only detections whose *every* evidence
+string is on the list, so a real embed that also loaded `kaltura.com` stays;
+exclude the pages a browser check proved real with `--url-excludes`. The same
+flag handles boilerplate that real embeds carry too (WP Rocket's
+`youtube-player` CSS: `--only-evidence "HTML: youtube-player,HTML: ytimg.com"`).
 
 It removes the matching detections, drops pages that had no other player, and
 recomputes `pagesWithVideo` / `uniquePlayers` / `playerSummary` — in every file
@@ -179,5 +193,8 @@ plainly what the corrected totals are. Say which numbers overlap (generic
 players on the same `<video>`) and which domains were cut off at the page cap —
 both change how the report reads to a customer.
 
-Commit detector fixes and their tests; the running LAN service only picks them
-up after a merge and rebuild, so say so rather than implying the fix is live.
+Commit detector fixes and their tests. The LAN service spawns
+`src/videoscan/scan.mjs` from the main checkout for every scan, so a fix is
+live for the next scan once it is merged and pulled into `C:\dev\orch` — no
+rebuild or restart (a restart kills running crawls). Say so rather than
+implying the fix is already live.
