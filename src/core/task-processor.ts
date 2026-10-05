@@ -42,7 +42,7 @@ import {
   checkoutPRInWorktree,
   findRemoteForRepo,
 } from './git-ops.js';
-import { runVideoscan, findLatestScanFileForDomain, readPagesScanned, resumeBudget, getVideoscanDir, mergeScans, syncScanToSupabase, generateReport as generateVideoscanReport } from './videoscan-runner.js';
+import { runVideoscan, findLatestScanFileForDomain, scanDomain, readPagesScanned, resumeBudget, getVideoscanDir, mergeScans, syncScanToSupabase, generateReport as generateVideoscanReport } from './videoscan-runner.js';
 import { isPidAlive, killProcessTree } from './process-kill.js';
 import { dbArchiveVideoscans } from './db/videoscans.js';
 import { MACHINE_ID, isSupabaseConfigured } from './db/client.js';
@@ -805,12 +805,11 @@ export async function startProcessor(intervalMs?: number): Promise<void> {
     // Auto-resume orphaned crawl-mode videoscans if a prior scan JSON exists.
     // Explicit-URL mode (context.urls set) has no resumable on-disk state — fail it.
     if (t.type === 'videoscan' && t.context.scanUrl && !t.context.urls) {
-      let domain = '';
-      try { domain = new URL(t.context.scanUrl).hostname.replace(/^www\./, ''); } catch {}
+      const domain = scanDomain(t.context);
       // Only the checkpoint of the run that died. A scan killed before its first
       // checkpoint has none, and the latest file is then an older finished
       // report: resuming that would rewrite it in place as if it were this run.
-      const latest = domain ? findLatestScanFileForDomain(domain) : null;
+      const latest = findLatestScanFileForDomain(domain);
       const resumeName = latest?.includes('-INPROGRESS') ? latest : null;
       if (resumeName) {
         const resumePath = path.join(getVideoscanDir(), resumeName);

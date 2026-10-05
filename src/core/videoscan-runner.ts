@@ -30,6 +30,9 @@ const REPORT_SCRIPT = join(PROJECT_ROOT, 'src/videoscan/report.mjs');
 // Ensure output directory exists
 mkdirSync(VIDEOSCAN_DIR, { recursive: true });
 
+// scan.mjs prints the VIDEOSCAN_JSON line last; a tail is all the runner needs of stdout.
+const STDOUT_TAIL_CHARS = 64 * 1024;
+
 export function getVideoscanDir(): string {
   return VIDEOSCAN_DIR;
 }
@@ -153,7 +156,7 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
 
     proc.stdout?.on('data', (data) => {
       const chunk = data.toString();
-      stdout += chunk;
+      stdout = (stdout + chunk).slice(-STDOUT_TAIL_CHARS);
       claudeEmitter.emit('output', taskId, chunk);
     });
 
@@ -173,9 +176,11 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
       if (tempUrlFile && existsSync(tempUrlFile)) tryUnlink(tempUrlFile);
 
       if (code !== 0) {
-        // Pick by mtime — works for both old-behavior new-timestamp writes and
-        // Part-A in-place resume overwrites.
-        const latest = findLatestScanFileForDomain(scanDomain(options));
+        // Newest file this run wrote (its checkpoint), else the file it was
+        // resuming, which may never have been synced. Not an older report of the
+        // domain: a run that died before its first checkpoint did not write it.
+        const latest = latestScanFile(VIDEOSCAN_DIR, scanDomain(options), { notBeforeMs: startedAtMs })
+          ?? resumeTarget(options, VIDEOSCAN_DIR);
         let syncNote = '';
         if (latest) {
           const sync = await syncScanToSupabase(latest);
@@ -188,9 +193,10 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
 
       let jsonFile = resolveScanJsonFile(stdout, options, VIDEOSCAN_DIR, startedAtMs);
       if (!jsonFile) {
-        log.warn(`Task #${taskId} scan.mjs exited 0 but no JSON file of this run was found; no sync or merge`);
+        // Not a success: a completed task without a JSON line silently drops out
+        // of its batch merge. resolveScanJsonFile has logged it.
         resolved = true;
-        resolve({ success: true }); // scan succeeded but no file found
+        resolve({ success: false, error: 'scan.mjs exited 0 but the JSON file of this run was not found' });
         return;
       }
 
@@ -355,12 +361,21 @@ async function generatePdf(htmlPath: string): Promise<string> {
   return filename;
 }
 
-function latestScanFile(dir: string, domain: string, skip?: (name: string) => boolean, notBeforeMs = 0): string | null {
+/**
+ * Newest scan JSON of a domain. `reportsOnly` leaves out INPROGRESS checkpoints and
+ * derived (merged/summary) files; `notBeforeMs` leaves out files last written earlier.
+ */
+function latestScanFile(
+  dir: string,
+  domain: string,
+  { reportsOnly = false, notBeforeMs = 0 }: { reportsOnly?: boolean; notBeforeMs?: number } = {},
+): string | null {
   if (!domain) return null;
   const prefix = `videoscan-${domain}-`;
+  const wanted = (f: string) => !reportsOnly || !(f.endsWith('-INPROGRESS.json') || isDerivedScan(f));
   try {
     const files = readdirSync(dir)
-      .filter(f => f.startsWith(prefix) && f.endsWith('.json') && !skip?.(f))
+      .filter(f => f.startsWith(prefix) && f.endsWith('.json') && wanted(f))
       .map(f => ({ name: f, mtime: statSync(join(dir, f)).mtimeMs }))
       .filter(f => f.mtime >= notBeforeMs)
       .sort((a, b) => b.mtime - a.mtime);
@@ -379,10 +394,11 @@ export function findLatestScanFileForDomain(domain: string): string | null {
  * concurrent scans that is often another scan's INPROGRESS checkpoint.
  *  1. The `VIDEOSCAN_JSON:` line scan.mjs prints after writing the report.
  *  2. On --resume, scan.mjs writes the report under the resume file's basename in
- *     its cwd (`dir`).
- *  3. Newest final file for this scan's domain written since `notBeforeMs` (the
- *     run's start), so an earlier run's report is never taken. scan.mjs names the
- *     file after the start URL's host (urls[0] in --urls mode), not a post-redirect host.
+ *     its cwd (`dir`). Not in --urls mode, which ignores --resume.
+ *  3. Otherwise the newest report for this scan's domain. scan.mjs names the file
+ *     after the start URL's host (urls[0] in --urls mode), not a post-redirect host.
+ * 2 and 3 are guesses and are logged: the marker is the contract. They only take a
+ * file written since `notBeforeMs` (the run's start), never an earlier run's.
  */
 export function resolveScanJsonFile(
   stdout: string,
@@ -390,17 +406,30 @@ export function resolveScanJsonFile(
   dir: string = VIDEOSCAN_DIR,
   notBeforeMs = 0,
 ): string | undefined {
-  const exists = (name: string) => existsSync(join(dir, name));
-
   const printed = [...stdout.matchAll(/^VIDEOSCAN_JSON: (.+?)\s*$/gm)].pop()?.[1];
-  if (printed && exists(basename(printed))) return basename(printed);
+  if (printed && existsSync(join(dir, basename(printed)))) return basename(printed);
 
-  if (options.resumeFile) {
-    const resumed = basename(options.resumeFile);
-    if (exists(resumed)) return resumed;
+  const domain = scanDomain(options);
+  const resumed = resumeTarget(options, dir);
+  let guess: string | undefined;
+  if (resumed) {
+    if (writtenSince(join(dir, resumed), notBeforeMs)) guess = resumed;
+  } else {
+    guess = latestScanFile(dir, domain, { reportsOnly: true, notBeforeMs }) ?? undefined;
   }
+  log.warn(`scan.mjs output for ${domain || 'unknown domain'} ${printed ? `names a missing file (${printed})` : 'has no VIDEOSCAN_JSON line'}; guessed ${guess ?? 'no file'}`);
+  return guess;
+}
 
-  return latestScanFile(dir, scanDomain(options), f => f.endsWith('-INPROGRESS.json'), notBeforeMs) ?? undefined;
+/** The file a crawl-mode --resume run writes back to, if it is in `dir`. --urls mode ignores --resume. */
+function resumeTarget(options: Pick<VideoscanOptions, 'urls' | 'resumeFile'>, dir: string): string | undefined {
+  if (!options.resumeFile || options.urls?.length) return undefined;
+  const name = basename(options.resumeFile);
+  return existsSync(join(dir, name)) ? name : undefined;
+}
+
+function writtenSince(path: string, notBeforeMs: number): boolean {
+  try { return statSync(path).mtimeMs >= notBeforeMs; } catch { return false; }
 }
 
 /**
@@ -411,10 +440,10 @@ export function mergeTargetFor(jsonFile: string, targetFilename?: string): strin
   return targetFilename && jsonFile !== targetFilename ? targetFilename : undefined;
 }
 
-/** Domain scan.mjs names its files after: the start URL's host (urls[0] in --urls mode). */
-function scanDomain(options: Pick<VideoscanOptions, 'scanUrl' | 'urls'>): string {
+/** Domain scan.mjs names its files after: the start URL's host (urls[0] in --urls mode). '' when there is none. */
+export function scanDomain(options: { scanUrl?: string; urls?: string[] }): string {
   const startUrl = options.urls?.length ? options.urls[0] : options.scanUrl;
-  try { return new URL(startUrl).hostname.replace(/^www\./, ''); } catch { return ''; }
+  try { return new URL(startUrl ?? '').hostname.replace(/^www\./, ''); } catch { return ''; }
 }
 
 /** pagesScanned of a scan JSON, or null when it can't be read. */

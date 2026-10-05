@@ -32,7 +32,7 @@ import { initSettings } from '../core/settings.js';
 import { isSupabaseConfigured, MACHINE_ID } from '../core/db/client.js';
 import { dbGetNotifications, dbInsertNotification } from '../core/db/notifications.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
-import { getVideoscanDir, isDerivedScan, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, pauseVideoscan, findLatestScanFileForDomain, isVideoscanRunning, deleteScans, wrapUpBatch, type ReportOptions } from '../core/videoscan-runner.js';
+import { getVideoscanDir, isDerivedScan, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, pauseVideoscan, findLatestScanFileForDomain, scanDomain, isVideoscanRunning, deleteScans, wrapUpBatch, type ReportOptions } from '../core/videoscan-runner.js';
 import { getClosedBatches, markBatchClosed, markBatchOpen } from '../core/batch-state.js';
 import { isPidAlive, killProcessTree } from '../core/process-kill.js';
 import { createSignedUrl, downloadFile } from '../core/db/storage.js';
@@ -457,10 +457,7 @@ app.post('/api/tasks/:id/resume', asyncHandler(async (req, res) => {
   let resumeFile = task.context.resumeFile;
   if (!resumeFile) {
     // Best-effort recovery: find the latest resumable JSON for this task's domain.
-    const url = task.context.scanUrl || task.context.urls?.[0];
-    let domain: string | undefined;
-    try { domain = url ? new URL(url).hostname.replace(/^www\./, '') : undefined; } catch { /* noop */ }
-    const candidate = domain ? findLatestScanFileForDomain(domain) : null;
+    const candidate = findLatestScanFileForDomain(scanDomain(task.context));
     if (candidate) {
       // findLatestScanFileForDomain returns just the filename; resolve to absolute so
       // it matches the format processVideoscan stores (path.join(VIDEOSCAN_DIR, jsonFile)).

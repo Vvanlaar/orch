@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, utimesSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { mergeTargetFor, resolveScanJsonFile } from './videoscan-runner.js';
+import { mergeTargetFor, resolveScanJsonFile, scanDomain } from './videoscan-runner.js';
 
 let dir: string;
 let clock: number;
@@ -68,6 +68,16 @@ describe('resolveScanJsonFile', () => {
     }, dir)).toBe('videoscan-gouda.nl-INPROGRESS.json');
   });
 
+  it('on resume, does not take a resume file this run never wrote back', () => {
+    touch('videoscan-gouda.nl-INPROGRESS.json');
+    const runStartMs = (clock + 5) * 1000;
+    touch('videoscan-gouda.nl-2026-09-24T12-00-00.json');
+    const options = { scanUrl: 'https://gouda.nl', resumeFile: 'videoscan-gouda.nl-INPROGRESS.json' };
+    expect(resolveScanJsonFile('', options, dir, runStartMs)).toBeUndefined();
+    touch('videoscan-gouda.nl-INPROGRESS.json');
+    expect(resolveScanJsonFile('', options, dir, runStartMs)).toBe('videoscan-gouda.nl-INPROGRESS.json');
+  });
+
   it('without a marker, takes the newest final file of this domain only', () => {
     // #655: gouda.nl got lansingerland.nl's file
     touch(
@@ -101,6 +111,35 @@ describe('resolveScanJsonFile', () => {
       .toBe('videoscan-a.nl-2026-09-24T08-00-00.json');
   });
 
+  it('reads the line scan.mjs itself prints', async () => {
+    // Untyped .mjs: a computed specifier keeps tsc out of it.
+    const scanModule = new URL('../videoscan/scan.mjs', import.meta.url).href;
+    const { jsonMarkerLine } = await import(scanModule);
+    touch('videoscan-gouda.nl-2026-09-24T08-00-00.json', 'videoscan-gouda.nl-2026-09-24T09-00-00.json');
+    const stdout = `${jsonMarkerLine('videoscan-gouda.nl-2026-09-24T08-00-00.json')}\n\n`;
+    expect(resolveScanJsonFile(stdout, { scanUrl: 'https://gouda.nl' }, dir))
+      .toBe('videoscan-gouda.nl-2026-09-24T08-00-00.json');
+  });
+
+  it('in --urls mode, does not fall back to the resume file: scan.mjs ignores --resume there', () => {
+    touch('videoscan-a.nl-2026-09-24T09-00-00.json', 'videoscan-a.nl-2026-09-24T08-00-00.json');
+    expect(resolveScanJsonFile('', {
+      scanUrl: 'https://a.nl',
+      urls: ['https://a.nl/x'],
+      resumeFile: 'videoscan-a.nl-2026-09-24T09-00-00.json',
+    }, dir)).toBe('videoscan-a.nl-2026-09-24T08-00-00.json');
+  });
+
+  it('without a marker, never takes a merged or summary file', () => {
+    touch(
+      'videoscan-gouda.nl-2026-09-24T08-00-00.json',
+      'videoscan-gouda.nl-organisatie-merged.json',
+      'videoscan-gouda.nl-batch-summary.json',
+    );
+    expect(resolveScanJsonFile('', { scanUrl: 'https://gouda.nl' }, dir))
+      .toBe('videoscan-gouda.nl-2026-09-24T08-00-00.json');
+  });
+
   it('returns undefined rather than another scan\'s file', () => {
     touch('videoscan-lansingerland.nl-2026-09-24T08-05-00.json');
     expect(resolveScanJsonFile('', { scanUrl: 'https://gouda.nl' }, dir)).toBeUndefined();
@@ -120,5 +159,17 @@ describe('mergeTargetFor', () => {
 
   it('does not merge without a target', () => {
     expect(mergeTargetFor('videoscan-a.nl-2026-09-24T09-00-00.json')).toBeUndefined();
+  });
+});
+
+describe('scanDomain', () => {
+  it('is the start URL host without www, urls[0] first', () => {
+    expect(scanDomain({ scanUrl: 'https://www.gouda.nl/home' })).toBe('gouda.nl');
+    expect(scanDomain({ scanUrl: 'https://b.nl', urls: ['https://www.a.nl/x'] })).toBe('a.nl');
+  });
+
+  it('is empty without a usable URL', () => {
+    expect(scanDomain({})).toBe('');
+    expect(scanDomain({ scanUrl: 'not a url' })).toBe('');
   });
 });

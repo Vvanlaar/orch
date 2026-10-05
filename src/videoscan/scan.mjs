@@ -2596,10 +2596,15 @@ function generateReport({ domain, results, pagesScanned, _state, rateLimits, bat
   };
   writeFileSync(jsonFile, JSON.stringify(jsonReport, null, 2));
   console.log(chalk.green(`\n  Rapport opgeslagen: ${jsonFile}`));
-  // Machine-readable: videoscan-runner parses this to find the file this scan
-  // wrote. The newest file in the dir can belong to a concurrent scan.
-  console.log(`VIDEOSCAN_JSON: ${jsonFile}`);
+  console.log(jsonMarkerLine(jsonFile));
   console.log("");
+}
+
+// Machine-readable: videoscan-runner (resolveScanJsonFile) parses this line to
+// find the file this scan wrote. The newest file in the dir can belong to a
+// concurrent scan. Plain text, no chalk.
+export function jsonMarkerLine(jsonFile) {
+  return `VIDEOSCAN_JSON: ${jsonFile}`;
 }
 
 // ── Main ────────────────────────────────────────────────────────────
