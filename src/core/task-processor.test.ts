@@ -29,6 +29,7 @@ vi.mock('./videoscan-runner.js', () => ({
   runVideoscan: vi.fn((taskId: number) => new Promise((resolve) => db.finishScan.set(taskId, resolve))),
   controlFileName: (id: number) => `_control-${id}.json`,
   findLatestScanFileForDomain: vi.fn(() => null),
+  scanDomain: (o: { scanUrl?: string; urls?: string[] }) => new URL(o.urls?.[0] ?? o.scanUrl ?? '').hostname.replace(/^www\./, ''),
   readScanFileInfo: vi.fn(() => null),
   readPagesScanned: vi.fn(() => 0),
   resumeBudget: vi.fn(() => ({ maxPages: 50 })),

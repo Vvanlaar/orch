@@ -42,7 +42,7 @@ import {
   checkoutPRInWorktree,
   findRemoteForRepo,
 } from './git-ops.js';
-import { runVideoscan, controlFileName, findLatestScanFileForDomain, readPagesScanned, readScanFileInfo, resumeBudget, getVideoscanDir, mergeScans, syncScanToSupabase, generateReport as generateVideoscanReport, type VideoscanResult } from './videoscan-runner.js';
+import { runVideoscan, controlFileName, findLatestScanFileForDomain, scanDomain, readPagesScanned, readScanFileInfo, resumeBudget, getVideoscanDir, mergeScans, syncScanToSupabase, generateReport as generateVideoscanReport, type VideoscanResult } from './videoscan-runner.js';
 import { createStaleTracker, decideDeadScan, freeSlots, singleFlight, withRetry } from './queue-helpers.js';
 import { getProcessInfos, isPidAlive, killProcessTree, matchProcessIdentity, verifyProcessIdentity, type ExpectedProcess, type ProcessInfo } from './process-kill.js';
 import { dbArchiveVideoscans } from './db/videoscans.js';
@@ -733,10 +733,6 @@ const inFlight = new Map<number, Task['type']>();
 // this machine is still finishing: no PID written yet, or the scan exited and that instance
 // is generating the report / retrying its final write.
 const deadScans = createStaleTracker(5 * 60_000);
-
-function scanDomain(ctx: Task['context']): string {
-  try { return new URL(ctx.scanUrl || ctx.urls?.[0] || '').hostname.replace(/^www\./, ''); } catch { return ''; }
-}
 
 /**
  * Settle a videoscan row that says running while its scan process is gone: completed if
