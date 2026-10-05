@@ -28,11 +28,12 @@ import { runHubspotInvestigateScan, stampCycleCrash } from '../core/hubspot-poll
 import { getEffectiveRepoMapping, getScannedRepos } from '../core/repo-scanner.js';
 import { getAuthenticatedUser, getPull, listPullReviewComments, listOrgRepos } from '../core/github-api.js';
 import { applyStreamingOutput, approveSuggestion, completeTask, createTask, deleteTask, dismissSuggestion, failTask, getAllTasks, getAllTasksWithOutput, getLatestVideoscanWithBatch, getTask, getTasksByIds, getTasksWithPids, pauseTask, pinTask, retryTask, updateTaskContext, updateTaskRepoPath, updateTaskStatus } from '../core/task-queue.js';
+import { checkpointElsewhere, retryRefusal } from '../core/task-pin.js';
 import { initSettings } from '../core/settings.js';
 import { isSupabaseConfigured, MACHINE_ID } from '../core/db/client.js';
 import { dbGetNotifications, dbInsertNotification } from '../core/db/notifications.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
-import { getVideoscanDir, isDerivedScan, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, pauseVideoscan, findLatestScanFileForDomain, isVideoscanRunning, deleteScans, wrapUpBatch, type ReportOptions } from '../core/videoscan-runner.js';
+import { getVideoscanDir, isDerivedScan, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, pauseVideoscan, findScanFileOfRun, isVideoscanRunning, deleteScans, wrapUpBatch, type ReportOptions } from '../core/videoscan-runner.js';
 import { getClosedBatches, markBatchClosed, markBatchOpen } from '../core/batch-state.js';
 import { isPidAlive, killProcessTree } from '../core/process-kill.js';
 import { createSignedUrl, downloadFile } from '../core/db/storage.js';
@@ -425,8 +426,9 @@ app.post('/api/tasks/:id/pause', asyncHandler(async (req, res) => {
 
 // Resume a paused videoscan in-place: flips status back to pending. processQueue picks it up
 // and processVideoscan calls runVideoscan with --resume <ctx.resumeFile>. If the resume file
-// path was never captured (e.g. server died mid-pause), fall back to the latest resumable
-// JSON for that task's domain.
+// path was never captured (e.g. server died mid-pause), fall back to the scan JSON this run
+// wrote for the task's domain. A task paused before it ever ran has nothing to resume and
+// simply starts.
 app.post('/api/tasks/:id/resume', asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id as string);
   // Sampled before the read: a run that finishes recording between the read and the race
@@ -449,34 +451,56 @@ app.post('/api/tasks/:id/resume', asyncHandler(async (req, res) => {
     res.status(400).json({ error: `Task is ${task.status}, not paused` });
     return;
   }
-  // Race guard: pause signals scan.mjs at the next batch boundary, which can take seconds.
-  // If the user clicks Resume while the original subprocess is still finishing its graceful
-  // shutdown, the new pending status would let processQueue spawn a SECOND scan.mjs for the
-  // same task and they'd race to write the JSON. Refuse until the original run is fully
-  // recorded (report, PDF, sync, resumeFile), which is well after scan.mjs has exited.
+  // Paused before any machine claimed it: no subprocess and no checkpoint exist anywhere,
+  // so none of the guards below apply and an existing pin still decides who runs it.
+  if (!task.context.resumeFile && !task.startedAt) {
+    await updateTaskStatus(id, 'pending');
+    triggerUpdate();
+    await broadcastTasks([id]);
+    res.json({ success: true });
+    return;
+  }
+  // Race guard: pause takes effect at scan.mjs's next batch boundary, and the run then still
+  // writes report, PDF, sync and resumeFile, which can take minutes. A Resume before that is
+  // recorded flips the row to pending under the original run, which then no longer sees
+  // 'paused' and marks the task completed without a resumeFile. Refuse until the original
+  // run is fully recorded, which is well after scan.mjs has exited.
   if (inFlightBeforeRead || isVideoscanRunning(id)) {
     res.status(409).json({ error: 'Scan is still finishing its pause (report, PDF and sync can take a few minutes) — try again shortly' });
     return;
   }
+  // isVideoscanRunning above only sees this machine's subprocesses.
+  const elsewhere = checkpointElsewhere(task, MACHINE_ID);
+  if (elsewhere) {
+    res.status(400).json({ error: `Task is on a different machine (${elsewhere})` });
+    return;
+  }
 
   let resumeFile = task.context.resumeFile;
-  if (!resumeFile) {
-    // Best-effort recovery: find the latest resumable JSON for this task's domain.
+  if (!resumeFile && task.startedAt) {
+    // Best-effort recovery: the scan JSON this run wrote for the task's domain.
     const url = task.context.scanUrl || task.context.urls?.[0];
     let domain: string | undefined;
     try { domain = url ? new URL(url).hostname.replace(/^www\./, '') : undefined; } catch { /* noop */ }
-    const candidate = domain ? findLatestScanFileForDomain(domain) : null;
+    const candidate = domain ? findScanFileOfRun(domain, task.startedAt) : null;
     if (candidate) {
-      // findLatestScanFileForDomain returns just the filename; resolve to absolute so
+      // findScanFileOfRun returns just the filename; resolve to absolute so
       // it matches the format processVideoscan stores (path.join(VIDEOSCAN_DIR, jsonFile)).
       resumeFile = path.join(getVideoscanDir(), candidate);
-      await updateTaskContext(id, { resumeFile });
     }
   }
   if (!resumeFile) {
     res.status(400).json({ error: 'No resume file available for this task' });
     return;
   }
+  // An unpinned resume task paused while still pending was never claimed, so
+  // checkpointElsewhere can't tell where its checkpoint is. Only pin here once the
+  // file is known to be here.
+  if (!existsSync(resumeFile)) {
+    res.status(400).json({ error: `Resume file ${path.basename(resumeFile)} is not on this machine` });
+    return;
+  }
+  await updateTaskContext(id, { resumeFile, targetMachineId: MACHINE_ID });
 
   await updateTaskStatus(id, 'pending');
   triggerUpdate();
@@ -534,6 +558,11 @@ app.post('/api/tasks/:id/retry', asyncHandler(async (req, res) => {
   }
   if (task.status !== 'failed') {
     res.status(400).json({ error: 'Can only retry failed tasks' });
+    return;
+  }
+  const refusal = retryRefusal(task.context, existsSync);
+  if (refusal) {
+    res.status(400).json({ error: refusal });
     return;
   }
   const newTask = await retryTask(id);

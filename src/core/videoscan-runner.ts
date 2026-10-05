@@ -10,6 +10,7 @@ import { dbListScans, dbUpsertVideoscan, dbDeleteVideoscans, dbArchiveVideoscans
 import { downloadFile, uploadScanFiles, deleteScanFiles } from './db/storage.js';
 import { reportOptionsToArgs, type ReportOptions } from './report-args.js';
 import { applyStickyReportOptions } from './report-sticky.js';
+import type { ScanFileInfo } from './queue-helpers.js';
 
 export type { ReportOptions };
 
@@ -422,6 +423,40 @@ export function readPagesScanned(scanPath: string): number | null {
   try {
     const n = JSON.parse(readFileSync(scanPath, 'utf-8')).pagesScanned;
     return typeof n === 'number' ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/** mtime and kind of a scan JSON, or null when it is missing or unparseable (e.g. died mid-write). */
+export function readScanFileInfo(name: string): ScanFileInfo | null {
+  const scanPath = join(VIDEOSCAN_DIR, name);
+  try {
+    const data = JSON.parse(readFileSync(scanPath, 'utf-8'));
+    return { name, mtimeMs: statSync(scanPath).mtimeMs, checkpoint: data?.checkpoint === true };
+  } catch (err) {
+    log.warn(`Scan file ${name} is unreadable: ${err instanceof Error ? err.message : err}`);
+    return null;
+  }
+}
+
+/**
+ * Whether a scan JSON was written by the run that started at `startedAt`. An older
+ * scanDate is the finished report of an earlier scan, and a merged or summary file
+ * belongs to no single run: resuming either rewrites it in place as if it were this run.
+ */
+export function scanIsFromRun(filename: string, scanDate: unknown, startedAt: string): boolean {
+  if (isDerivedScan(filename) || typeof scanDate !== 'string') return false;
+  return Date.parse(scanDate) >= Date.parse(startedAt);
+}
+
+/** The latest scan JSON for `domain` if the run started at `startedAt` wrote it, else null. */
+export function findScanFileOfRun(domain: string, startedAt: string): string | null {
+  const name = findLatestScanFileForDomain(domain);
+  if (!name) return null;
+  try {
+    const { scanDate } = JSON.parse(readFileSync(join(VIDEOSCAN_DIR, name), 'utf-8'));
+    return scanIsFromRun(name, scanDate, startedAt) ? name : null;
   } catch {
     return null;
   }
