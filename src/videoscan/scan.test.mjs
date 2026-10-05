@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DETECTORS, detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, normalizeUrl, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource } from "./scan.mjs";
+import { DETECTORS, detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, pickConsent, isTranslatedCopy, translationPrefix, normalizeUrl, restoreQueue, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource } from "./scan.mjs";
 
 const names = (result) => result.map((r) => r.player).sort();
 
@@ -243,6 +243,24 @@ test("QR-scanner camera preview <video> is NOT a player", () => {
   assert.deepEqual(names(detectFromCorpus('<video class="webcam-feed" autoplay playsinline></video>')), []);
 });
 
+test("video-application recorder <video> is NOT a player", () => {
+  // Recruitee job page: the applicant's own recording surface, hidden until used.
+  const html = '<video tabindex="-1" data-selector="recorder-status" class="ba-videorecorder-video ba-videorecorder-norecorder" ' +
+    'data-video="video" playsinline="" disablepictureinpicture=""></video>';
+  assert.deepEqual(names(detectFromCorpus(html)), []);
+  // a recorder-named video that plays a file is still a video
+  for (const video of [
+    '<video class="recorder-demo" src="/demo.mp4"></video>',
+    '<video class="recorder-demo"><source src="/demo.mp4"></video>',
+    '<video class="recorder-lesson" data-src="/lesson.mp4"></video>',
+    '<video id="RecorderPlayback" controls></video>',
+  ]) assert.deepEqual(names(detectFromCorpus(video)), ["HTML5 native"], video);
+  // and a recorder next to a real video does not hide it, either order
+  const real = '<video class="hero"><source src="/a.mp4"></video>';
+  assert.deepEqual(names(detectFromCorpus(html + real)), ["HTML5 native"]);
+  assert.deepEqual(names(detectFromCorpus(real + html)), ["HTML5 native"]);
+});
+
 test("<video> with an ordinary id/class still detected as HTML5 native", () => {
   assert.deepEqual(names(detectFromCorpus('<video id="hero" class="header-video" autoplay muted><source src="/a.mp4"></video>')), ["HTML5 native"]);
   // a later sibling tag's camera class must not leak into this one
@@ -452,6 +470,11 @@ test("Kaltura kWidget.addReadyCallback still detected (self-hosted, no kaltura.c
   const html = `<div id="kaltura_player"></div><script>kWidget.addReadyCallback(function (id) {});</script>`;
   const result = detectFromCorpus(html);
   assert.deepEqual(names(result), ["Kaltura"]);
+});
+
+test("Kaltura's rendered kWidgetIframeContainer detected on a self-hosted embed", () => {
+  const html = `<div class="kWidgetIframeContainer"><iframe src="https://video.uni.nl/p/102/sp/10200/embedIframeJs/uiconf_id/1"></iframe></div>`;
+  assert.deepEqual(names(detectFromCorpus(html)), ["Kaltura"]);
 });
 
 test("a word ending in kWidget is NOT Kaltura (word boundary)", () => {
@@ -685,6 +708,13 @@ test("crawler trap: repeated path segments are rejected", () => {
   assert.equal(shouldSkipUrl(trap), true);
 });
 
+test("crawler trap: a segment repeated 4 times is rejected well inside the depth bound", () => {
+  // The fixture above has 16 segments, so the depth bound rejects it before the
+  // repeat count is ever read. 7 segments here: only the repeat check can fire.
+  assert.equal(isCrawlerTrap("https://example.nl/a/b/a/b/a/b/a"), true);
+  assert.equal(isCrawlerTrap("https://example.nl/a/b/a/b/a"), false);
+});
+
 test("crawler trap: excessive path depth is rejected", () => {
   const deep = "https://example.nl/" + Array.from({ length: 13 }, (_, i) => `s${i}`).join("/");
   assert.equal(isCrawlerTrap(deep), true);
@@ -698,6 +728,38 @@ test("crawler trap: the deepest real page in scan history is kept", () => {
   assert.equal(new URL(real).pathname.split("/").filter(Boolean).length, 10);
   assert.equal(isCrawlerTrap(real), false);
   assert.equal(shouldSkipUrl(real), false);
+});
+
+test("state-changing links (add to basket, log out) are skipped", () => {
+  for (const url of [
+    "https://www.agnietenhof.nl/order/add/event/11561",
+    "https://shop.example.nl/cart/add/42?qty=1",
+    "https://www.example.nl/winkelmandje/remove/7",
+    "https://www.example.nl/product/x?add-to-cart=123",
+    "https://www.agnietenhof.nl/logout",
+    "https://www.example.nl/mijn/uitloggen?next=/",
+    "https://www.example.nl/account/sign-out",
+    "https://www.example.nl/wp-login.php?action=logout&_wpnonce=abc",
+  ]) assert.equal(shouldSkipUrl(url), true, url);
+  for (const url of [
+    "https://www.agnietenhof.nl/agenda/the-odyssey-1xwr",
+    "https://www.example.nl/order/bevestiging",
+    "https://www.example.nl/order/add-ons",
+    "https://www.example.nl/nieuws/addendum-bestemmingsplan",
+    "https://www.example.nl/logout-problemen-oplossen",
+  ]) assert.equal(shouldSkipUrl(url), false, url);
+});
+
+test("pickConsent keeps only what accepting the banner added", () => {
+  const session = { name: "PHPSESSID", domain: "www.x.nl", path: "/", value: "s1" };
+  const bot = { name: "__cf_bm", domain: ".x.nl", path: "/", value: "b1" };
+  const before = [session, bot, { name: "cookieConsentLevel", domain: "www.x.nl", path: "/", value: "none" }];
+  const consent = { name: "cookieConsentLevel", domain: "www.x.nl", path: "/", value: "all" };
+  const cmp = { name: "CookieConsent", domain: "www.x.nl", path: "/", value: "{stamp:'x'}" };
+  const picked = pickConsent(before, [session, bot, consent, cmp], { theme: "dark" }, { theme: "dark", consentMode: "granted" });
+  assert.deepEqual(picked, { cookies: [consent, cmp], storage: { consentMode: "granted" } });
+  // nothing added: no consent state at all
+  assert.equal(pickConsent(before, before, {}, {}), null);
 });
 
 test("crawler trap: a segment repeating 3x is real traffic, not a trap", () => {
@@ -763,8 +825,8 @@ test("normalizeUrl still strips hash and trailing slash", () => {
   assert.equal(normalizeUrl("https://example.nl/pad/#sectie", "https://example.nl/"), "https://example.nl/pad");
 });
 
-test("resume restore: trap URLs are filtered, real pagination survives", () => {
-  // The restore pipeline from the --resume branch, run over a queue shaped like
+test("resume restore: trap URLs and translated copies are filtered, real pagination survives", () => {
+  // crawlSite's --resume restore, run over a queue shaped like
   // the real one: deep repeated-segment traps plus ?from= re-appended per link.
   const start = "https://waardwijzer.krimpenerwaard.nl/";
   const stored = [
@@ -772,16 +834,116 @@ test("resume restore: trap URLs are filtered, real pagination survives", () => {
     "https://waardwijzer.krimpenerwaard.nl/is/producten?view=list&from=162&from=150",
     "https://waardwijzer.krimpenerwaard.nl/is/producten?view=list&from=99&from=150",
     "https://waardwijzer.krimpenerwaard.nl/is/organisaties?size=12&from=372",
+    // Queued before translated copies were skipped
+    "https://waardwijzer.krimpenerwaard.nl/en/is/producten",
   ];
-  const restored = [
-    ...new Set(stored.map((u) => normalizeUrl(u, start)).filter((u) => u && !shouldSkipUrl(u))),
-  ];
-  assert.deepEqual(restored, [
+  assert.deepEqual(restoreQueue(stored, start), [
     // Real from= values are preserved; only trap output is dropped.
     "https://waardwijzer.krimpenerwaard.nl/is/producten?view=list&from=162&from=150",
     "https://waardwijzer.krimpenerwaard.nl/is/producten?view=list&from=99&from=150",
     "https://waardwijzer.krimpenerwaard.nl/is/organisaties?size=12&from=372",
   ]);
+});
+
+// ── Translated copies ───────────────────────────────────────────────
+// hilversum.nl spent 2,169 of a 3,000-page crawl on /es/ /bg/ /ro/ /pt/ copies.
+
+test("translated copies: language-prefixed pages are skipped, region/script forms too", () => {
+  const start = "https://hilversum.nl/";
+  for (const url of [
+    "https://hilversum.nl/es/vivir/aparcamiento",
+    "https://hilversum.nl/bg/wonen",
+    "https://hilversum.nl/ro",
+    "https://hilversum.nl/pt/",
+    "https://visitvlissingen.nl/de/entertainment-agenda",
+    "https://visitvlissingen.nl/fr/spotlights/market45",
+    "https://www.sociaalteamhouten.nl/uk/activiteiten/energiebalans-18-2",
+    "https://www.sociaalteamhouten.nl/ar/cookies",
+    "https://www.amstelveenvoorelkaar.nl/en/over-ons",
+    "https://x.nl/pt-br/sobre",
+    "https://x.nl/en-GB/about",
+    "https://x.nl/en_gb/about",
+    "https://x.nl/es-419/inicio",
+    "https://x.nl/zh-Hans/guanyu",
+  ]) {
+    assert.equal(shouldSkipUrl(url, start), true, url);
+  }
+  assert.equal(translationPrefix("https://x.nl/en_GB/about"), "en-gb");
+});
+
+test("translated copies: Dutch pages, /nl/ and Dutch region forms are kept", () => {
+  const start = "https://hilversum.nl/";
+  for (const url of [
+    "https://hilversum.nl/",
+    "https://hilversum.nl/wonen/parkeren",
+    "https://www.rijksmuseum.nl/nl/bezoek",
+    "https://samen.noordwijk.nl/nl-NL/projecten",
+    "https://x.nl/nl-be/wonen",
+  ]) {
+    assert.equal(shouldSkipUrl(url, start), false, url);
+  }
+});
+
+test("translated copies: a path that merely starts with a code is kept", () => {
+  for (const url of [
+    "https://x.nl/english-lessons",
+    "https://x.nl/debat",
+    "https://x.nl/esports",
+    "https://x.nl/Engels/cursus",
+    "https://www.harderwijk.nl/de-wolf", // region-looking, but not a region or script
+    "https://www.ing.nl/de-ing/over-ons",
+    // Codes that are Dutch paths on real sites, so not listed
+    "https://waardwijzer.krimpenerwaard.nl/is/product/154586",
+    "https://www.agnietenhof.nl/my/tickets",
+    "https://www.utrecht.nl/th",
+    // Only the first segment counts, and a code in a later one is a page
+    "https://x.nl/nieuws/en/overig",
+  ]) {
+    assert.equal(shouldSkipUrl(url, "https://x.nl/"), false, url);
+  }
+});
+
+test("translated copies: hosts and query strings are left alone", () => {
+  assert.equal(shouldSkipUrl("https://en.x.nl/wonen", "https://x.nl/"), false);
+  assert.equal(shouldSkipUrl("https://x.nl/wonen?lang=en", "https://x.nl/"), false);
+});
+
+test("translated copies: a scan started under a language prefix keeps that language", () => {
+  const start = "https://www.rijksmuseum.nl/en/visit";
+  assert.equal(shouldSkipUrl("https://www.rijksmuseum.nl/en/collection", start), false);
+  assert.equal(shouldSkipUrl("https://www.rijksmuseum.nl/EN/collection", start), false);
+  assert.equal(shouldSkipUrl("https://www.rijksmuseum.nl/nl/collectie", start), false);
+  assert.equal(shouldSkipUrl("https://www.rijksmuseum.nl/de/besuchen", start), true);
+  // The prefix must match: pt-br asked for Brazilian Portuguese, not /pt/
+  assert.equal(isTranslatedCopy("https://x.nl/pt-br/sobre", "https://x.nl/pt_BR/"), false);
+  assert.equal(isTranslatedCopy("https://x.nl/pt/sobre", "https://x.nl/pt-br/"), true);
+  // No start URL: every translation prefix is skipped
+  assert.equal(isTranslatedCopy("https://x.nl/en/about"), true);
+});
+
+test("urlSection strips a Dutch region prefix and a translation prefix alike", () => {
+  assert.equal(urlSection("https://x.nl/nl-be/wonen/huur").section, "wonen");
+  assert.equal(urlSection("https://x.nl/pt-br/viver/aluguel").section, "viver");
+  assert.equal(urlSection("https://x.nl/debat/raad/2024").section, "debat");
+});
+
+test("discoverSitemapUrls drops translated copies and skips a translation's sitemap", async (t) => {
+  const fetched = [];
+  const bodies = {
+    "https://x.nl/robots.txt": "Sitemap: https://x.nl/index.xml",
+    "https://x.nl/index.xml":
+      "<sitemapindex><loc>https://x.nl/nl.xml</loc><loc>https://x.nl/es/sitemap.xml</loc></sitemapindex>",
+    "https://x.nl/nl.xml":
+      "<urlset><loc>https://x.nl/wonen</loc><loc>https://x.nl/en/living</loc><loc>https://x.nl/nl/nieuws</loc></urlset>",
+    "https://x.nl/es/sitemap.xml": "<urlset><loc>https://x.nl/es/vivir</loc></urlset>",
+  };
+  t.mock.method(globalThis, "fetch", async (url) => {
+    fetched.push(url);
+    return url in bodies ? new Response(bodies[url]) : new Response("", { status: 404 });
+  });
+  const urls = await discoverSitemapUrls("https://x.nl/", "x.nl");
+  assert.deepEqual(urls.sort(), ["https://x.nl/nl/nieuws", "https://x.nl/wonen"]);
+  assert.ok(!fetched.includes("https://x.nl/es/sitemap.xml"));
 });
 
 // ── Company Webcast / iBabs (bestuurlijkeinformatie.nl meeting portals) ──
@@ -1139,6 +1301,29 @@ test("Spotify embeds still detected — open.spotify.com and podcasters", () => 
   assert.deepEqual(names(detectFromCorpus("<p>x</p>", "", [pod])), ["Spotify (podcast)"]);
 });
 
+test("Facebook watch link (href + data-href) is NOT a player", () => {
+  // trefhetinoss.nl blog: the anchor repeats its target in data-href, which
+  // survives stripAnchorHrefs.
+  const html = '<p>en <a href="https://www.facebook.com/watch/?v=997502637312348" target="_blank" ' +
+    'data-href="https://www.facebook.com/watch/?v=997502637312348">hoe ga je er mee om</a>?</p>';
+  assert.deepEqual(names(detectFromCorpus(html)), []);
+  // A site-wide SDK (like button) does not turn the link into a video either.
+  assert.deepEqual(names(detectFromCorpus(html, "", ["https://connect.facebook.net/nl_NL/sdk.js"])), []);
+  // Nor does a look-alike class.
+  assert.deepEqual(names(detectFromCorpus('<div class="fb-video-teaser"></div>')), []);
+});
+
+test("Facebook video embeds still detected — plugin iframe and fb-video div", () => {
+  const detected = (html) => assert.deepEqual(names(detectFromCorpus(html)), ["Facebook Video"], html);
+  detected('<iframe src="https://www.facebook.com/plugins/video.php?href=https%3A%2F%2Fwww.facebook.com%2Fwatch%2F%3Fv%3D1"></iframe>');
+  detected('<iframe data-src="https://www.facebook.com/v18.0/plugins/video.php?href=x"></iframe>');
+  detected('{"html":"<iframe src=\\"https:\\/\\/www.facebook.com\\/plugins\\/video.php?href=x\\"><\\/iframe>"}');
+  detected('<div class="fb-video" data-href="https://www.facebook.com/watch/?v=1"></div>');
+  detected('<div class="wp-block-embed fb-video" data-href="https://www.facebook.com/watch/?v=1"></div>');
+  detected("<div class='fb-video'></div>");
+  detected('{"html":"<div class=\\"fb-video\\"><\\/div>"}');
+});
+
 // ── Host allow-lists: a CSP or preconnect names vendors, embeds nothing ─
 const WERKENBIJOSS_CSP =
   `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; frame-src 'self' ` +
@@ -1217,7 +1402,11 @@ test("narrowed vendors still detected on their embed shapes", () => {
   const cases = [
     ['<iframe src="https://platform.vixyvideo.com/p/1/sp/100/embedIframeJs/uiconf_id/2"></iframe>', "Vixy Video"],
     ['<iframe src="https://hihaho.com/embed/1b2c3d4e"></iframe>', "Hihaho"],
-    ['<div data-block=\'{"url":"https:\/\/mediasite.uu.nl\/Mediasite\/Play\/0d1e2f"}\'></div>', "Mediasite"],
+    ['<iframe src="https://mediasite.uu.nl/Mediasite/Play/0d1e2f"></iframe>', "Mediasite"],
+    // String.raw: in a plain JS string "\/" is just "/", and the JSON-escaped
+    // alternative in the pattern would go untested.
+    [String.raw`<div data-block='{"url":"https:\/\/mediasite.uu.nl\/Mediasite\/Play\/0d1e2f"}'></div>`, "Mediasite"],
+    ['<div data-src="https%3A%2F%2Fmediasite.uu.nl%2FMediasite%2FPlay%2F0d1e2f"></div>', "Mediasite"],
     ['<iframe src="https://creators.spotify.com/pod/profile/museum/embed/episodes/ep-1"></iframe>', "Spotify (podcast)"],
     ['<iframe src="https://anchor.fm/museum/embed/episodes/ep-1"></iframe>', "Spotify (podcast)"],
     ['<script src="/typo3conf/ext/opengemeenten_mediaplayer/Resources/Public/player.js"></script>', "OpenGemeenten"],

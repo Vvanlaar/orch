@@ -128,7 +128,8 @@ wss.on('error', (err) => log.error('WebSocket server error', err));
 // Reject path-traversal / nested-path filenames. Returns the same string on success.
 function validateScanFilename(filename: unknown): string | null {
   if (typeof filename !== 'string' || !filename) return null;
-  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) return null;
+  // ':' too: on NTFS `x.json::$DATA` opens x.json, slipping past name-based guards
+  if (filename.includes('..') || filename.includes('/') || filename.includes('\\') || filename.includes(':')) return null;
   return filename;
 }
 
