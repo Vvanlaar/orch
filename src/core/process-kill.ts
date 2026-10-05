@@ -29,6 +29,8 @@ export interface ExpectedProcess {
   markers: string[];
   /** The task's start: its process can't have been created before this. */
   notBeforeMs?: number;
+  /** Its process can't have been created after this. */
+  notAfterMs?: number;
 }
 
 export type ProcessIdentity = 'match' | 'mismatch' | 'gone' | 'unreadable';
@@ -46,6 +48,7 @@ export function matchProcessIdentity(info: ProcessInfo | null, expected: Expecte
   if (expected.notBeforeMs !== undefined && info.startedAtMs !== null && info.startedAtMs < expected.notBeforeMs - START_SKEW_MS) {
     return 'mismatch';
   }
+  if (expected.notAfterMs !== undefined && info.startedAtMs !== null && info.startedAtMs > expected.notAfterMs) return 'mismatch';
   const cmd = info.commandLine.toLowerCase();
   return expected.markers.length > 0 && expected.markers.every(m => cmd.includes(m.toLowerCase())) ? 'match' : 'mismatch';
 }

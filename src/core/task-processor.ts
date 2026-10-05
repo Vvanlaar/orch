@@ -797,14 +797,22 @@ async function resolveDeadVideoscan(t: Task, why: string): Promise<void> {
   void autoMergeBatchIfDone(t.context);
 }
 
+const SERVER_STARTED_MS = Date.now() - Math.round(process.uptime() * 1000);
+
 /** What a live process must look like to be this task's; a recorded PID may have been reused since. */
 export function expectedTaskProcess(t: Pick<Task, 'id' | 'type'> & { startedAt?: string }): ExpectedProcess {
   const started = t.startedAt ? Date.parse(t.startedAt) : NaN;
+  const notBefore = Number.isNaN(started) ? {} : { notBeforeMs: started };
+  if (t.type === 'videoscan') return { markers: ['scan.mjs', controlFileName(t.id)], ...notBefore };
   return {
     // claude-runner passes --dangerously-skip-permissions on every launch path. It narrows plain
     // 'claude' but still matches the user's own sessions started with that flag.
-    markers: t.type === 'videoscan' ? ['scan.mjs', controlFileName(t.id)] : ['claude', '--dangerously-skip-permissions'],
-    ...(Number.isNaN(started) ? {} : { notBeforeMs: started }),
+    markers: ['claude', '--dangerously-skip-permissions'],
+    ...notBefore,
+    // Those markers name no task, so bound the creation time from above as well. A process
+    // this server didn't spawn but that is still the task's was spawned by an earlier
+    // instance; anything created since this server started is a later session on a reused PID.
+    notAfterMs: SERVER_STARTED_MS,
   };
 }
 

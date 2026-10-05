@@ -293,8 +293,10 @@ describe('expectedTaskProcess', () => {
     expect(expectedTaskProcess({ id: 7, type: 'videoscan' })).toEqual({ markers: ['scan.mjs', '_control-7.json'] });
   });
 
-  it('expects the claude CLI for other task types', () => {
-    expect(expectedTaskProcess({ id: 7, type: 'pr-review', startedAt: 'not a date' }))
-      .toEqual({ markers: ['claude', '--dangerously-skip-permissions'] });
+  it('expects the claude CLI for other task types, created before this server started', () => {
+    const expected = expectedTaskProcess({ id: 7, type: 'pr-review', startedAt: 'not a date' });
+    expect(expected).toEqual({ markers: ['claude', '--dangerously-skip-permissions'], notAfterMs: expect.any(Number) });
+    const serverStart = Date.now() - process.uptime() * 1000;
+    expect(Math.abs(expected.notAfterMs! - serverStart)).toBeLessThan(1_000);
   });
 });

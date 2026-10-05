@@ -34,6 +34,15 @@ describe('matchProcessIdentity', () => {
     expect(matchProcessIdentity({ commandLine: scanCmd, startedAtMs: STARTED - 6_000 }, scan)).toBe('mismatch');
   });
 
+  it('rejects a later claude session that reused the PID after the server started', () => {
+    const SERVER_STARTED = STARTED + 3_600_000;
+    const claude = { markers: ['claude', '--dangerously-skip-permissions'], notBeforeMs: STARTED, notAfterMs: SERVER_STARTED };
+    const cmd = String.raw`C:\WINDOWS\system32\cmd.exe /d /s /c "claude --dangerously-skip-permissions"`;
+    expect(matchProcessIdentity({ commandLine: cmd, startedAtMs: STARTED + 1_000 }, claude)).toBe('match');
+    expect(matchProcessIdentity({ commandLine: cmd, startedAtMs: SERVER_STARTED }, claude)).toBe('match');
+    expect(matchProcessIdentity({ commandLine: cmd, startedAtMs: SERVER_STARTED + 1 }, claude)).toBe('mismatch');
+  });
+
   it('never matches with no markers', () => {
     expect(matchProcessIdentity({ commandLine: scanCmd, startedAtMs: null }, { markers: [] })).toBe('mismatch');
   });
