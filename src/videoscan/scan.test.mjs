@@ -1017,5 +1017,7 @@ test("reportFilename: resume of INPROGRESS checkpoint mints a timestamped name, 
   assert.equal(reportFilename("example.nl", null, now), fresh);
   assert.equal(reportFilename("example.nl", String.raw`C:\scans\videoscan-example.nl-INPROGRESS.json`, now), fresh);
   assert.equal(reportFilename("example.nl", "/scans/videoscan-example.nl-INPROGRESS.json", now), fresh);
+  // NTFS opens the checkpoint under any casing
+  assert.equal(reportFilename("example.nl", "/scans/videoscan-example.nl-inprogress.json", now), fresh);
   assert.equal(reportFilename("example.nl", "/scans/videoscan-example.nl-2026-09-01T08-00-00.json", now), "videoscan-example.nl-2026-09-01T08-00-00.json");
 });

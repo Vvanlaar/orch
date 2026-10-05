@@ -1839,10 +1839,10 @@ async function createScanContext(browser) {
 // Periodically persist crawl state so a long crawl killed mid-run (session
 // teardown, OOM, Ctrl-C) can be continued with --resume. The shape matches what
 // the resume path reads (_state.visited/queue + details). Written to a stable
-// INPROGRESS name; deleted on clean completion (the final timestamped report
-// supersedes it).
+// INPROGRESS name; deleted once the final report is on disk (see main).
+const CHECKPOINT_SUFFIX = "-INPROGRESS.json";
 function checkpointPath(domain) {
-  return `videoscan-${domain}-INPROGRESS.json`;
+  return `videoscan-${domain}${CHECKPOINT_SUFFIX}`;
 }
 function writeCheckpoint(domain, results, visited, queue) {
   try {
@@ -2153,7 +2153,6 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
 
   await browser.close();
   autoTuner.cleanup();
-  try { unlinkSync(checkpointPath(domain)); } catch { /* no checkpoint to clean */ }
 
   return {
     domain,
@@ -2395,10 +2394,11 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
 
 // On --resume of a real report, overwrite the source file so a scan-chain stays
 // in one entry. Otherwise (fresh scan, or resume of an INPROGRESS checkpoint,
-// which crawlSite has already deleted and a later scan would reuse) mint a
-// timestamped name.
+// which is deleted after this run and reused by the next scan of the domain)
+// mint a timestamped name. Lowercased like NTFS resolves it, or a resume of
+// `...-inprogress.json` is written back onto the checkpoint.
 export function reportFilename(domain, resumeFile, now = new Date()) {
-  if (resumeFile && !basename(resumeFile).endsWith("-INPROGRESS.json")) return basename(resumeFile);
+  if (resumeFile && !basename(resumeFile).toLowerCase().endsWith(CHECKPOINT_SUFFIX.toLowerCase())) return basename(resumeFile);
   const ts = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
   return `videoscan-${domain}-${ts}.json`;
 }
@@ -2651,6 +2651,9 @@ async function main() {
   try {
     const scanResult = await crawlSite(url, { maxPages, timeout, resumeFile, concurrency, delay, sitemap, maxSitemapUrls, controlFile });
     generateReport({ ...scanResult, batchId, batchLabel, resumeFile });
+    // Only now that the report is written: until then the checkpoint is the
+    // only copy of the crawl, and a failed write must leave it resumable.
+    try { unlinkSync(checkpointPath(scanResult.domain)); } catch { /* no checkpoint to clean */ }
   } catch (err) {
     console.error(chalk.red(`Scan mislukt: ${err.message}`));
     process.exit(1);

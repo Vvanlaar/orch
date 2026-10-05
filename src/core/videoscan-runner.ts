@@ -1,6 +1,6 @@
 import { spawn, ChildProcess } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
-import { join, dirname, basename } from 'path';
+import { join, dirname } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { chromium } from 'playwright';
 import { claudeEmitter } from './claude-runner.js';
@@ -171,10 +171,11 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
       // Clean up temp URL file
       if (tempUrlFile && existsSync(tempUrlFile)) tryUnlink(tempUrlFile);
 
+      const domain = (() => { try { return new URL(options.scanUrl).hostname.replace(/^www\./, ''); } catch { return ''; } })();
+
       if (code !== 0) {
         // Pick by mtime — works for both old-behavior new-timestamp writes and
         // Part-A in-place resume overwrites.
-        const domain = (() => { try { return new URL(options.scanUrl).hostname.replace(/^www\./, ''); } catch { return ''; } })();
         const latest = domain ? findLatestScanFileForDomain(domain) : null;
         let syncNote = '';
         if (latest) {
@@ -194,7 +195,8 @@ export async function runVideoscan(taskId: number, options: VideoscanOptions): P
         return;
       }
 
-      if (options.resumeFile) await dropSpentCheckpoint(basename(options.resumeFile), jsonFile, taskId);
+      // Explicit-URL scans write no checkpoint
+      if (domain && !options.urls?.length) await dropSpentCheckpoint(domain, taskId);
 
       // If targetFilename set, merge new scan into existing scan
       if (options.targetFilename) {
@@ -356,15 +358,20 @@ async function generatePdf(htmlPath: string): Promise<string> {
   return filename;
 }
 
+/** The name scan.mjs gives a crawl's checkpoint (checkpointPath there). */
+export function checkpointFilename(domain: string): string {
+  return `videoscan-${domain}-INPROGRESS.json`;
+}
+
 /**
- * A resume from the INPROGRESS checkpoint writes its report under a fresh name
- * and scan.mjs deletes the checkpoint JSON, but a crash-time sync may have left
- * a Supabase row (and html/pdf) under the checkpoint name. Drop those so the
- * dashboard doesn't list a dead, un-resumable entry. Only once the JSON is
- * really gone: a still-present checkpoint is live resume state.
+ * A crashed crawl's checkpoint is synced so the dashboard shows the partial
+ * result. Once a later run of that domain completes, scan.mjs deletes the
+ * checkpoint JSON, which leaves that Supabase row (and any html/pdf) as a dead,
+ * un-resumable entry: drop them. Only once the JSON is really gone: a
+ * still-present checkpoint is live resume state.
  */
-async function dropSpentCheckpoint(checkpoint: string, reportFile: string, taskId: number): Promise<void> {
-  if (!checkpoint.endsWith('-INPROGRESS.json') || checkpoint === reportFile) return;
+export async function dropSpentCheckpoint(domain: string, taskId: number): Promise<void> {
+  const checkpoint = checkpointFilename(domain);
   if (existsSync(join(VIDEOSCAN_DIR, checkpoint))) return;
   try {
     await deleteScans([checkpoint]);
