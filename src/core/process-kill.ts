@@ -9,8 +9,9 @@ export function isPidAlive(pid: number | undefined | null): boolean {
     // signal 0 doesn't deliver — it just probes reachability
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    // EPERM: the process exists but we may not signal it (another user, or elevated).
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
   }
 }
 
