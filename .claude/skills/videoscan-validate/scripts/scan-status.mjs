@@ -4,9 +4,10 @@
 //   node scan-status.mjs                 # every open batch + everything live
 //   node scan-status.mjs <batch|domain>  # one target
 //
-// Exit code 0 always; the verdict is in the output, not the status.
+// Exit code 0; the verdict is in the output, not the status. Exit 2 only for a
+// target that matches nothing, or several batches or domains.
 
-import { listScans, heartbeats, closedBatches, resolveTarget, videoscanDir, fmtAge } from './lib.mjs';
+import { listScans, heartbeats, closedBatches, resolveTargetOrExit, videoscanDir, fmtAge, isDerivedScan, HEARTBEAT_FRESH_MS } from './lib.mjs';
 
 const target = process.argv[2];
 const dir = videoscanDir();
@@ -18,7 +19,7 @@ const closed = closedBatches(dir);
 console.log(`videoscans dir: ${dir}\n`);
 
 console.log('── Running scans ──');
-if (!live.length) console.log('  none (no heartbeat newer than 60s)');
+if (!live.length) console.log(`  none (no heartbeat newer than ${HEARTBEAT_FRESH_MS / 60_000}m)`);
 for (const h of live) console.log(`  LIVE   task ${h.taskId}  ${h.hostname}  conc=${h.concurrency}  (${fmtAge(h.ageMs)} ago)`);
 // Heartbeats are only deleted on a clean exit, so years of crashed runs pile up.
 // The recent ones may still be today's problem; the rest are archaeology.
@@ -27,10 +28,9 @@ const recentStale = stale.filter(h => (h.ageMs ?? Infinity) < RECENT);
 for (const h of recentStale) console.log(`  stale  task ${h.taskId ?? '?'}  ${h.hostname ?? h.file}  last beat ${fmtAge(h.ageMs)} ago — crashed or killed, heartbeat never cleaned up`);
 if (stale.length > recentStale.length) console.log(`  (+${stale.length - recentStale.length} heartbeat files older than a day — long-dead runs, ignore)`);
 
-// A scan only carries its batch id if it was launched as part of one, and an
-// ad-hoc run never gets one at all — so a live crawl can be invisible to the
-// batch it belongs to until it exits and writes its final JSON. List them
-// separately rather than pretending they are filed.
+// An in-progress checkpoint never carries a batch id (scan.mjs writes it only
+// into the final JSON), so a live crawl is invisible to the batch it belongs to
+// until it exits. List them separately rather than pretending they are filed.
 const allScans = listScans(dir);
 const unfiled = allScans.filter(s => !s.batchId && s.filename.includes('INPROGRESS'));
 if (unfiled.length) {
@@ -44,7 +44,7 @@ if (unfiled.length) {
   console.log('  about to wrap up, finish or stop it first — its exit write lands after the merge.');
 }
 
-const scans = target ? resolveTarget(target, dir).scans : allScans;
+const scans = target ? resolveTargetOrExit(target, dir, allScans).scans : allScans;
 const batches = new Map();
 for (const s of scans) {
   if (s.unreadable) continue;
@@ -58,7 +58,9 @@ for (const [id, b] of [...batches].sort((a, b) => b[1].scans.length - a[1].scans
   if (!target && id === '(ungrouped)') continue;
   const members = b.scans.filter(s => !s.isSummary);
   const summary = b.scans.find(s => s.isSummary);
-  const resumable = members.filter(s => s.queued > 0);
+  // A merge's queue is a union of its sources' leftovers: the server refuses to
+  // resume it, so it is not work anyone can finish before wrapping up.
+  const resumable = members.filter(s => s.queued > 0 && !isDerivedScan(s.filename));
   const empty = members.filter(s => s.pagesScanned === 0);
   const liveHere = live.filter(h => members.some(s => s.domain === h.hostname));
   const isClosed = closed.includes(id);
@@ -75,9 +77,10 @@ for (const [id, b] of [...batches].sort((a, b) => b[1].scans.length - a[1].scans
   for (const s of empty) blockers.push(`${s.domain} scanned 0 pages — dead host or blocked`);
   for (const s of members.filter(s => s.failureRate > 0.2)) blockers.push(`${s.domain} failed ${Math.round(s.failureRate * 100)}% of requests`);
 
-  const dupes = [...new Map(members.map(s => [s.domain, 0])).keys()]
-    .filter(d => members.filter(s => s.domain === d).length > 1);
-  for (const d of dupes) blockers.push(`${d} has ${members.filter(s => s.domain === d).length} scan files — wrap-up will merge them`);
+  // Same grouping as wrap-up, which skips 0-page scans when merging.
+  const perDomain = new Map();
+  for (const s of members) if (s.domain && s.pagesScanned > 0) perDomain.set(s.domain, (perDomain.get(s.domain) || 0) + 1);
+  for (const [d, n] of perDomain) if (n > 1) blockers.push(`${d} has ${n} scan files — wrap-up will merge them`);
 
   if (blockers.length) {
     for (const b2 of blockers) console.log(`  · ${b2}`);

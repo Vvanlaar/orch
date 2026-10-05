@@ -11,6 +11,12 @@ import { acquire } from "./wake-lock.mjs";
 // Each detector checks page HTML + network requests for a specific player.
 // Returns { found: boolean, details: string[] }
 
+// Facebook video markup, shared by the detector and its social confirmer:
+// the plugin iframe (optionally versioned, slashes escaped or URL-encoded) and
+// an fb-video div anywhere in the class list, any quoting.
+const FB_VIDEO_PLUGIN = /facebook\.com(?:\\*\/|%2F)(?:v[\d.]+(?:\\*\/|%2F))?plugins(?:\\*\/|%2F)video\.php/i;
+const FB_VIDEO_CLASS = /class\s*=\s*\\*["'][^"']*(?<![\w-])fb-video(?![\w-])/i;
+
 export const DETECTORS = {
   // ── Enterprise / OVP ────────────────────────────────────────────
   "Blue Billywig": {
@@ -67,6 +73,10 @@ export const DETECTORS = {
       // Relies on the corpus never being lowercased: extractEncodedMarkup
       // lowercases only for needle tests, the markup it pushes keeps its case.
       /\bkWidget\s*\./,
+      // The container class Kaltura's embed JS renders. The bare /kWidget/i
+      // caught it; the anchored form above does not, and on a self-hosted
+      // (custom-domain) Kaltura with external embed JS it can be the only one.
+      /\bkWidgetIframeContainer\b/,
       /kaltura-player/i,
     ],
     scripts: [/kaltura\.com/i],
@@ -175,12 +185,27 @@ export const DETECTORS = {
     // empty and the SDK builds the iframe, so before render the marker is the
     // only in-page signal. \b after it rejects suffixed variants (CwcLive),
     // which the portal does not emit.
+    // The SDK alone is not a player: steenwijkerland.nl/bis loads
+    // /sdk/player/client.js on all 1153 pages, and 6 of them name a recording
+    // as body text ("Geluidsverslag: http://player.companywebcast.com/…").
+    // So the player host and the SDK's own embed iframe (/sdk/player/?id=…,
+    // lansingerland.nl) count only as a src-like attribute value (src,
+    // data-src, data-src-cmplz, data-lazy-src, data-video-url; slashes may be
+    // JSON-escaped or URL-encoded), never as text or a share/copy attribute.
     patterns: [
       /data-video-type=["']?Cwc\b/i,
-      /sdk\.companywebcast\.com\/sdk\//i,
-      /player\.companywebcast\.com/i,
+      /(?:\bsrc[\w-]*|data-video-url)\s*=\s*\\*["']?\s*(?:https?:|https?%3A)?(?:\\*\/|%2F){2}player\.companywebcast\.com/i,
+      /(?:\bsrc[\w-]*|data-video-url)\s*=\s*\\*["']?\s*(?:https?:|https?%3A)?(?:\\*\/|%2F){2}sdk\.companywebcast\.com(?:\\*\/|%2F)sdk(?:\\*\/|%2F)player(?:\\*\/|%2F)?(?:\?|%3F|#|index)/i,
     ],
-    scripts: [/sdk\.companywebcast\.com\/sdk\//i, /player\.companywebcast\.com/i],
+    // Queries are stripped before these run, so the ?id= embed iframe is
+    // /sdk/player/ and client.js no longer matches.
+    scripts: [/player\.companywebcast\.com/i, /sdk\.companywebcast\.com\/sdk\/player\/?$/i],
+  },
+  // Dutch hosting platform; its iframe player runs video.js inside, so without
+  // this entry the only trace was a network-only Video.js hit (breda.nl/milieustation).
+  StreamPartner: {
+    patterns: [/streampartner\.nl\/player\.php/i],
+    scripts: [/streampartner\.nl\/player\.php/i, /streampartner\.nl\/video_opensource\//i],
   },
   iBabs: {
     patterns: [
@@ -235,14 +260,22 @@ export const DETECTORS = {
       // As an element's class/id, not bare /youtube-player/: WP Rocket's inline
       // CSS '.rll-youtube-player{…}' ships on every page of the site.
       /(?:class|id)=["'][^"']*\byoutube-player\b/i,
+      // IFrame API player built in script (new YT.Player(el, {videoId: "…"})): until
+      // a click or consent creates the iframe, the loader is its only request.
+      // Scoped to the YT.Player call: other players' configs have a videoId too.
+      /\bYT\.Player\s*\([\s\S]{0,300}?\bvideoId\s*:\s*["'][\w-]{11}["']/,
     ],
-    scripts: [/youtube\.com/i, /ytimg\.com/i],
+    // Not the IFrame API loader (iframe_api → www-widgetapi.js): almelobuurtsamen.nl
+    // and actiefhoogeveen.nl load it on every page (1880 pages) with no player.
+    // An actual embed requests /embed/, its thumbnails (ytimg) or the player itself.
+    scripts: [/youtube(?:-nocookie)?\.com\/(?!iframe_api|player_api|s\/player\/[^/]+\/www-widgetapi)/i, /ytimg\.com/i],
   },
   Vimeo: {
     patterns: [
       // A path after the host: a bare player.vimeo.com is a cookie-banner domain
-      // list (gouda.nl, 1550 pages), CSP or preconnect, never an embed.
-      /player\.vimeo\.com\/\w/i,
+      // list (gouda.nl, 1550 pages), CSP or preconnect, never an embed. The slash
+      // may be JSON-escaped (\/) or URL-encoded (%2F) in a consent placeholder.
+      /player\.vimeo\.com(?:\\*\/|%2F)\w/i,
       /vimeo\.com\/video/i,
       // Event / showcase embeds are iframe srcs in their own right, and the
       // removed link pattern never covered them (no digits after the slash).
@@ -250,10 +283,16 @@ export const DETECTORS = {
       // NB: no bare /vimeo\.com\/\d+/ — same trap as the youtu.be link shape
       // above: a share/watch URL, never an embed src. It fired on pages that
       // only linked to a Vimeo recording from body text or a JSON payload.
-      /vimeocdn\.com/i,
+      // Path required for the same reason: CookieYes lists providers as
+      // "player.vimeo.com|highcharts.com|vimeocdn.com" (defryskemarren.nl, 1235 pages).
+      /vimeocdn\.com(?:\\*\/|%2F)\w/i,
       /data-vimeo-id/i,
       /data-vimeo-url/i,
-      /vimeo-player/i,
+      // A tag or an attribute token (class/className/id/data-module…, also
+      // JSON-escaped or entity-encoded), not prose: werkenbijcapelleaandenijssel.nl's
+      // cookie modal says "ingesloten Vimeo-players" on every page. The value
+      // scan is capped at 200 chars so a run of ?id= in text cannot backtrack.
+      /(?:<|\\u003c|&lt;|\b(?:class(?:Name)?|id|data-(?:module|component|js|type))\\*["']?\s*[=:]\s*(?:\\*["']|&quot;)?[^"'<>]{0,200}?)vimeo-player\b/i,
     ],
     scripts: [/player\.vimeo\.com/i, /vimeocdn\.com/i],
   },
@@ -292,10 +331,12 @@ export const DETECTORS = {
   },
   "Facebook Video": {
     patterns: [
-      /facebook\.com\/plugins\/video\.php/i,
-      /facebook\.com\/watch/i,
-      /class="fb-video/i,
+      FB_VIDEO_PLUGIN,
+      FB_VIDEO_CLASS,
     ],
+    // NB: no bare /facebook\.com\/watch/ — that is the share-link shape. A blog
+    // link on trefhetinoss.nl kept it in data-href="…/watch/?v=…" (stripAnchorHrefs
+    // drops only href). Embeds go through plugins/video.php or an fb-video div.
     scripts: [/connect\.facebook\.net\/.+\/sdk\.js/i],
   },
   "X (Twitter)": {
@@ -490,7 +531,14 @@ export const DETECTORS = {
     scripts: [/(?:^|\/)shaka-player(?:\.compiled)?(?:\.min)?\.js/i],
   },
   "HTML5 native": {
-    patterns: [/<video[\s>]/i, /<source[^>]+type="video/i],
+    // A camera viewfinder is a <video> too: zevenaardoet.nl ships an empty
+    // <video id="QrScanVideoPreview"> for its QR scanner on every page (70 hits),
+    // and Recruitee job pages (werkenbijgemeentekrimpenerwaard.nl) a hidden
+    // <video class="ba-videorecorder-video"> for video applications.
+    // Skipped only when its own id/class names a camera or recorder AND nothing
+    // says it plays a file: no src/data-src, no controls, no <source> child. So
+    // <video class="security-camera-promo" src="…"> still counts.
+    patterns: [/<video(?!(?=[^>]*(?<![\w-])(?:id|class)\s*=\s*["']?[^"'>]*(?:qr[-_]?(?:scan|code|reader)|camera|webcam|recorder))(?![^>]*\s(?:data-)?src\s*=)(?![^>]*\scontrols\b)(?![^>]*>\s*<source\b))[\s>]/i, /<source[^>]+type="video/i],
     scripts: [],
   },
   Cincopa: {
@@ -522,7 +570,7 @@ const DETECTOR_TIER = {
   "Blue Billywig": 1, Brightcove: 1, "JW Player": 1, Kaltura: 1,
   Wistia: 1, Vidyard: 1, Flowplayer: 1, Panopto: 1, PingVP: 1,
   Hihaho: 1, "Ivory Media Player": 1, OpenGemeenten: 1, Rijksoverheidsplayer: 1, "Vixy Video": 1,
-  "Company Webcast": 1, iBabs: 1,
+  "Company Webcast": 1, iBabs: 1, StreamPartner: 1,
   // Tier 2: Major platforms
   YouTube: 2, Vimeo: 2, DailyMotion: 2, TikTok: 2, Instagram: 2,
   "Facebook Video": 2, "X (Twitter)": 2, LinkedIn: 2, Twitch: 2,
@@ -559,8 +607,8 @@ const SOCIAL_VIDEO_CONFIRMERS = {
         /pbs\.twimg\.com\/(ext_tw_video_thumb|amplify_video_thumb)/i.test(r)
     ),
   "Facebook Video": (html, net) =>
-    /class="[^"]*fb-video/i.test(html) ||
-    /facebook\.com\/(plugins\/video\.php|watch)/i.test(html) ||
+    FB_VIDEO_CLASS.test(html) ||
+    FB_VIDEO_PLUGIN.test(html) ||
     net.some((r) => /video\.xx\.fbcdn\.net/i.test(r) || /fbcdn\.net\/.+\.mp4/i.test(r)),
   LinkedIn: (html, net) =>
     net.some((r) => /dms\.licdn\.com\/playlist/i.test(r) || /dms\.licdn\.com\/.+\.mp4/i.test(r)) ||
@@ -631,6 +679,23 @@ export function normalizeUrl(url, base) {
 }
 
 /**
+ * The --resume queue, re-filtered: it was written by whatever rules were in
+ * force when the scan paused, so a run interrupted before the crawler-trap
+ * bounds existed would otherwise resume straight back into the trap it was
+ * stuck in (one real scan came back with 11,243 queued URLs, 99% trap output).
+ * Normalized as well as filtered: the rules that collapse a re-appended ?from=
+ * at enqueue time have to reach URLs queued before they existed, or the
+ * paginator half of the trap survives the restore.
+ */
+export function restoreQueue(storedQueue, startUrl) {
+  return [
+    ...new Set(
+      storedQueue.map((u) => normalizeUrl(u, startUrl)).filter((u) => u && !shouldSkipUrl(u, startUrl)),
+    ),
+  ];
+}
+
+/**
  * True when a URL's shape marks it as crawler-trap output rather than a real
  * page — excessive path depth, one path segment repeated over and over, or a
  * query key stacked up past anything a real multi-value parameter uses.
@@ -673,7 +738,79 @@ function isSameDomain(url, domain) {
   }
 }
 
-export function shouldSkipUrl(url) {
+// Translated copies. Dutch sites serve a (usually machine-) translated copy of
+// every page under a language prefix, and the language switcher links it from
+// every page, so each copy looks like a new page to the crawler. hilversum.nl
+// spent 2,169 of a 3,000-page budget on /es/ /bg/ /ro/ /pt/; almelo.nl,
+// visitvlissingen.nl (/de/ /en/ /fr/), sociaalteamhouten.nl (/en/ /uk/ /ar/
+// /fr/ /tr/) and amstelveenvoorelkaar.nl (/ar/) do the same. The copies cost
+// Dutch coverage and count a video twice.
+//
+// Only the FIRST path segment is checked, and only as a whole segment: /en/…,
+// /pt-br/…, /zh_Hans/… are copies; /english-lessons, /debat, /esports, /de-wolf
+// (harderwijk.nl) and /de-ing (ing.nl) are pages. Hosts (en.example.nl) and
+// query strings (?lang=en) are left alone. /de/ and /en/ are also Dutch words
+// (article, "and"), but as a whole first segment they are German and English
+// copies on every site in the scan history (13k /de/ URLs on 27 sites, 72k /en/
+// on 59) — some keep the Dutch slug (amstelveenvoorelkaar.nl/en/over-ons).
+//
+// Languages come from the 634k URLs in this repo's scan history plus the usual
+// municipal translation-widget targets (refugee/migrant languages). Dutch (nl,
+// nl-nl, nl-be) is never listed. Codes deliberately NOT listed because the
+// segment is a Dutch path there:
+//   is  (Icelandic) — /is/ is the product path of the "wijzer" social-domain
+//       platform: waardwijzer.krimpenerwaard.nl, velsenwijzer.nl, cjgzeist.nl… (25k URLs)
+//   my  (Burmese)   — /my/ account area on agnietenhof.nl, posthuistheater.nl
+//   th  (Thai)      — utrecht.nl/th is a Dutch shortlink
+//   id, eu, hr, ms  — too likely an identifier route, EU pages, HR, a medical term
+// Listed but worth watching: so (Somali) is also "speciaal onderwijs" on school
+// sites and it (Italian) an ICT section; neither shows up that way in the history.
+// Frisian (fy, and friesmuseum.nl's own /frl/) and Papiamento (rijksmuseum.nl
+// /pap/) are listed: those are copies of the Dutch page too.
+const TRANSLATION_LANGS = new Set([
+  "en", "de", "fr", "es", "pt", "it", "pl", "bg", "ro", "tr", "ar", "uk", "ru",
+  "zh", "ja", "ko", "el", "hu", "sk", "cs", "sl", "lt", "lv", "et", "fi", "da",
+  "sv", "no", "nb", "ca", "gl", "sq", "vi", "so", "ti", "am", "fa", "ps", "ku",
+  "fy", "frl", "pap",
+]);
+// A base code, optionally with a region (en-gb, pt_BR, es-419) or script
+// (zh-hans). Scripts are listed, not [a-z]{4}, so /de-wolf stays a page.
+const LANG_SEGMENT = /^([a-z]{2,3})(?:[-_](?:[a-z]{2}|\d{3}|hans|hant|latn|cyrl))?$/;
+
+// The base language of a path segment that is a language prefix — Dutch or a
+// listed translation — else null. Case-insensitive: /en-GB/, /pt_BR/.
+function segmentLang(segment) {
+  const m = LANG_SEGMENT.exec(segment.toLowerCase());
+  return m && (m[1] === "nl" || TRANSLATION_LANGS.has(m[1])) ? m[1] : null;
+}
+
+/**
+ * The translation prefix a URL lives under ("es", "pt-br"), or null when its
+ * first path segment is not a non-Dutch language code.
+ */
+export function translationPrefix(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  const first = parsed.pathname.split("/")[1] || "";
+  const lang = segmentLang(first);
+  return lang && lang !== "nl" ? first.toLowerCase().replace("_", "-") : null;
+}
+
+/**
+ * True when `url` is a translated copy the crawl should not visit. A scan
+ * started under a language prefix asked for that language, so the start URL's
+ * own prefix is kept; without a start URL every translation prefix is skipped.
+ */
+export function isTranslatedCopy(url, startUrl) {
+  const prefix = translationPrefix(url);
+  return prefix !== null && prefix !== (startUrl ? translationPrefix(startUrl) : null);
+}
+
+export function shouldSkipUrl(url, startUrl) {
   const skip = [
     /\.(pdf|zip|png|jpg|jpeg|gif|svg|webp|mp4|mp3|wav|doc|docx|xls|xlsx|ppt|pptx|css|js|xbri|xbrl|xml|csv)(\?|$)/i,
     /mailto:/i,
@@ -683,10 +820,18 @@ export function shouldSkipUrl(url) {
     // Draft/preview links (CMS preview tokens) — unpublished, auth-gated, redirect
     // to a login page. Not real public pages; they only pollute failure counts.
     /[?&]preview[-_]token=/i,
+    // State-changing links: a GET here adds to a basket or ends a session.
+    // agnietenhof.nl links /order/add/event/<id> on every show — 226 of 510 pages.
+    /\/(?:order|cart|basket|winkelwagen|winkelmand(?:je)?)\/(?:add|remove|delete)(?:[/?#]|$)/i,
+    /[?&]add[-_]to[-_]cart=/i,
+    /\/(?:logout|log-out|signout|sign-out|uitloggen)(?:[/?#]|$)/i,
+    /[?&]action=logout\b/i,
   ];
   if (skip.some((r) => r.test(url))) return true;
 
   if (isCrawlerTrap(url)) return true;
+
+  if (isTranslatedCopy(url, startUrl)) return true;
 
   // Pagination: skip ?page=N unless it's a listing/archive path where
   // pagination is the only way to reach older items.
@@ -732,7 +877,7 @@ export async function discoverSitemapUrls(startUrl, domain, { maxUrls = 5000, fe
       if (urls.length >= maxUrls) break;
       // Normalize scheme to match the site's protocol (sitemaps often use http://)
       const normalized = normalizeUrl(loc.replace(/^https?:/, targetProtocol), startUrl);
-      if (normalized && isSameDomain(normalized, domain) && !shouldSkipUrl(normalized)) urls.push(normalized);
+      if (normalized && isSameDomain(normalized, domain) && !shouldSkipUrl(normalized, startUrl)) urls.push(normalized);
     }
     return urls;
   }
@@ -761,8 +906,11 @@ export async function discoverSitemapUrls(startUrl, domain, { maxUrls = 5000, fe
       const locs = parseLocs(xml);
       if (/<sitemapindex\b/i.test(xml)) {
         for (const loc of locs) {
-          // Only follow sub-sitemaps on the same domain to avoid arbitrary outbound fetches
-          if (isSameDomain(loc.replace(/^https?:/, targetProtocol), domain)) next.push(loc);
+          // Only follow sub-sitemaps on the same domain to avoid arbitrary outbound
+          // fetches, and not a translation's (/es/sitemap.xml): every URL in it
+          // would be dropped, so it only spends the fetch budget
+          const sameProtocol = loc.replace(/^https?:/, targetProtocol);
+          if (isSameDomain(sameProtocol, domain) && !isTranslatedCopy(sameProtocol, startUrl)) next.push(loc);
         }
       } else {
         const urls = toUrls(spreadPick(locs, locs.length));
@@ -874,11 +1022,9 @@ const VIDEO_LIKELY_PATHS = [
   /academy/i, /training/i, /demo/i, /tutorial/i, /case/i,
 ];
 
-// A language prefix is not a section: /nl/wonen and /nl/nieuws are two.
-const LANG_SEGMENT = /^(nl|en|de|fr|fy|es|it|pl|tr|ar|nl-nl|nl-be|fr-be|en-gb|en-us)$/i;
-
 // Section = first path segment under which the page sits. A top-level page
-// (/contact, /nieuws itself) has no section of its own and shares "".
+// (/contact, /nieuws itself) has no section of its own and shares "". A
+// language prefix (segmentLang) is not a section: /nl/wonen and /nl/nieuws are two.
 export function urlSection(url) {
   let u;
   try {
@@ -887,7 +1033,7 @@ export function urlSection(url) {
     return { section: "", depth: 0, path: "" };
   }
   let segs = u.pathname.split("/").filter(Boolean);
-  if (segs.length && LANG_SEGMENT.test(segs[0])) segs = segs.slice(1);
+  if (segs.length && segmentLang(segs[0])) segs = segs.slice(1);
   return { section: segs.length > 1 ? segs[0].toLowerCase() : "", depth: segs.length, path: u.pathname + u.search };
 }
 
@@ -1368,6 +1514,24 @@ function createRateLimitError(reason) {
 // solving the challenge again on each one.
 const ANUBIS_SCRIPT = 'script[src*="/.within.website/"]';
 let anubisCookies = [];
+// What accepting the cookie banner on the first page added (cookies, plus the
+// site's own localStorage for CMPs that keep consent there); seeded into every
+// per-page context so the whole crawl browses with consent.
+let consentState = null;
+
+const cookieKey = (c) => `${c.name}|${c.domain}|${c.path}|${c.value}`;
+
+/** The cookies and localStorage entries that are new or changed after consent, or null. */
+export function pickConsent(cookiesBefore, cookiesAfter, storageBefore, storageAfter) {
+  const seen = new Set(cookiesBefore.map(cookieKey));
+  const cookies = cookiesAfter.filter((c) => !seen.has(cookieKey(c)));
+  const storage = Object.fromEntries(Object.entries(storageAfter).filter(([k, v]) => storageBefore[k] !== v));
+  return cookies.length || Object.keys(storage).length ? { cookies, storage } : null;
+}
+
+function readLocalStorage(page) {
+  return page.evaluate(() => Object.fromEntries(Object.entries(localStorage))).catch(() => ({}));
+}
 
 async function passAnubis(page, timeout) {
   const onChallenge = () => page.$(ANUBIS_SCRIPT).then(Boolean, () => true);
@@ -1529,6 +1693,11 @@ async function scanFirstPageIn(context, url, timeout) {
     }
   } catch {}
 
+  // What the site stored before the banner click, so that only what consent
+  // added is carried over — not session, load-balancer or bot-manager cookies,
+  // which would make every page one visitor again (see withScanContext).
+  const cookiesBefore = await page.context().cookies().catch(() => []);
+  const storageBefore = await readLocalStorage(page);
   if (await acceptCookies(page)) {
     await gotoResilient(page, url, timeout);
     // Re-check redirect after post-consent navigation
@@ -1539,6 +1708,16 @@ async function scanFirstPageIn(context, url, timeout) {
         return { detected: [], links: [], skippedReason: `redirect to ${new URL(dest).hostname}` };
       }
     } catch {}
+    // Every later page gets a fresh context (see withScanContext), so without
+    // this the consent lived on the first page only: agnietenhof.nl sends its
+    // trailer embeds only to a consenting browser, and 510 pages scanned 0 video.
+    const picked = pickConsent(
+      cookiesBefore,
+      await page.context().cookies().catch(() => []),
+      storageBefore,
+      await readLocalStorage(page),
+    );
+    consentState = picked && { ...picked, origin: new URL(page.url()).origin };
     await activateCookiebotConsent(page);
   }
 
@@ -1685,7 +1864,10 @@ function createAutoTuner(controlFile) {
     throttle.minConcurrency = Math.min(throttle.minConcurrency, throttle.concurrency);
   }
 
-  return { proposeNext, cleanup };
+  // A first beat at start: the per-batch one first lands after the start page,
+  // the sitemap step and the first crawl batch, and until then the scan looks
+  // dead to anything that reads heartbeats to decide whether it still runs.
+  return { proposeNext, cleanup, beat: writeHeartbeat };
 }
 
 function createThrottleState(delay, concurrency) {
@@ -1834,6 +2016,16 @@ async function createScanContext(browser) {
   });
   await context.addInitScript(SHADOW_INIT_SCRIPT);
   await applyResourceBlocking(context);
+  if (consentState) {
+    // A cookie Playwright rejects (expired mid-crawl) must not fail the page
+    if (consentState.cookies.length) await context.addCookies(consentState.cookies).catch(() => {});
+    if (Object.keys(consentState.storage).length) {
+      await context.addInitScript(({ origin, storage }) => {
+        if (location.origin !== origin) return;
+        for (const [k, v] of Object.entries(storage)) try { localStorage.setItem(k, v); } catch {}
+      }, consentState);
+    }
+  }
   if (anubisCookies.length) await context.addCookies(anubisCookies);
   return context;
 }
@@ -1907,43 +2099,33 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       visited = normalizeAll(allUrls);
     }
 
-    // Re-filter the restored queue: it was written by whatever rules were in
-    // force when the scan paused, so a run interrupted before the crawler-trap
-    // bounds existed would otherwise resume straight back into the trap it was
-    // stuck in. (One real scan came back with 11,243 queued URLs, 99% of them
-    // trap output.) Costs one pass over a list we were about to crawl anyway.
-    // Normalize as well as filter: the same rules that collapse a re-appended
-    // ?from= at enqueue time have to be applied to URLs queued before they
-    // existed, or the paginator half of the trap survives the restore.
     const storedQueue = prev._state?.queue || [];
-    const restored = [
-      ...new Set(
-        storedQueue.map((u) => normalizeUrl(u, startUrl)).filter((u) => u && !shouldSkipUrl(u)),
-      ),
-    ];
+    const restored = restoreQueue(storedQueue, startUrl);
     const dropped = storedQueue.length - restored.length;
     if (dropped > 0) {
       console.log(
-        chalk.yellow(`  Dropped ${dropped} queued URL(s) as crawler-trap output or duplicates`),
+        chalk.yellow(`  Dropped ${dropped} queued URL(s) as crawler-trap output, translated copies, state-changing links or duplicates`),
       );
     }
-    // Say so out loud when the filter took everything. The run then finds the
-    // start URL already visited and finishes with zero pages, which otherwise
-    // looks like an unexplained no-op rather than "the remaining queue was all
-    // trap".
+    // Say so out loud when the filter took everything, and resume nothing: the
+    // start-URL fallback below is for a queue that was empty to begin with. The
+    // resume endpoint seeds https://www.<domain>, which a non-www host never
+    // visited, so falling back here would crawl one stray page.
     if (storedQueue.length > 0 && restored.length === 0) {
-      console.log(chalk.yellow("  Every queued URL was trap output — nothing left to resume"));
+      console.log(chalk.yellow("  Every queued URL was trap output or a translated copy — nothing left to resume"));
     }
-    queue = restored.length ? restored : [normalizeUrl(startUrl, startUrl)];
+    queue = restored.length || storedQueue.length ? restored : [normalizeUrl(startUrl, startUrl)];
 
     results = (prev.details || []).map((d) => ({
       url: d.url,
       players: d.players.map((p) => ({ player: p.name, evidence: p.evidence })),
     }));
+    // A Set, not results.find per URL: that was O(visited x details), 15s on a
+    // 35k-page resume. Compared normalized, like `visited`, or a detail stored
+    // under ?x=1&x=1 gets a second, player-less row under its collapsed form.
+    const known = new Set(results.map((r) => normalizeUrl(r.url, startUrl) || r.url));
     for (const v of visited) {
-      if (!results.find((r) => r.url === v)) {
-        results.push({ url: v, players: [] });
-      }
+      if (!known.has(v)) results.push({ url: v, players: [] });
     }
 
     // maxPages is additive when resuming: scan N more pages beyond what's already visited
@@ -1955,6 +2137,9 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     console.log(chalk.blue(`\nStarting scan of ${domain}`));
   }
   console.log(chalk.gray(`Max pages: ${maxPages}, Timeout per page: ${timeout}ms, Concurrency: ${concurrency}, Delay: ${delay}ms\n`));
+  // After the resume parse: a corrupt resume file must not leave a heartbeat
+  // behind that reads as a live scan.
+  autoTuner.beat(throttle, domain);
 
   setupInterruptHandler();
 
@@ -1977,18 +2162,38 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       } else {
         console.log(chalk.gray("  -"));
       }
+      console.log(chalk.gray(consentState
+        ? `  Cookie consent carried to every page (${consentState.cookies.length} cookie(s))`
+        : "  No cookie consent captured — later pages are scanned without it"));
       results.push({ url: firstUrl, players: detected });
 
       // A Set: header and footer both link /contact, and the re-sort puts
       // identical URLs side by side, so both copies would land in one batch
       const newLinks = new Set();
+      // A site that exists only under a language prefix (root redirects to
+      // /en/, no Dutch version) gives no page to follow once translations are
+      // skipped, so note the first copy to say so below. A link back to the
+      // start URL doesn't count: it may be the one that redirected.
+      let crawlable = false;
+      let translatedCopy = null;
       for (const link of links) {
         const norm = normalizeUrl(link, firstUrl);
-        if (norm && !visited.has(norm) && !queue.includes(norm) && isSameDomain(norm, domain) && !shouldSkipUrl(norm)) {
-          newLinks.add(norm);
+        if (!norm || norm === firstUrl || !isSameDomain(norm, domain)) continue;
+        if (shouldSkipUrl(norm, startUrl)) {
+          if (!translatedCopy && isTranslatedCopy(norm, startUrl)) translatedCopy = norm;
+          continue;
         }
+        crawlable = true;
+        if (!visited.has(norm) && !queue.includes(norm)) newLinks.add(norm);
       }
       for (const link of newLinks) queue.push(link);
+      if (!crawlable && translatedCopy) {
+        const copy = new URL(translatedCopy);
+        const segment = copy.pathname.split("/")[1];
+        console.log(
+          chalk.yellow(`  First page links only to translated copies (/${segment}/…), which are skipped; to scan that language, start at ${copy.origin}/${segment}/`),
+        );
+      }
     } catch (err) {
       if (err._rateLimit) {
         onRateLimit(throttle, firstUrl, err._rateLimit);
@@ -2090,7 +2295,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
         // Add discovered links to queue
         for (const link of links) {
           const norm = normalizeUrl(link, url);
-          if (norm && !visited.has(norm) && !queuedSet.has(norm) && isSameDomain(norm, domain) && !shouldSkipUrl(norm)) {
+          if (norm && !visited.has(norm) && !queuedSet.has(norm) && isSameDomain(norm, domain) && !shouldSkipUrl(norm, startUrl)) {
             queuedSet.add(norm);
             queue.push(norm);
           }
@@ -2212,6 +2417,30 @@ function stripHostAllowLists(html) {
     .replace(RESOURCE_HINT_LINK, "");
 }
 
+// A stylesheet is not a player. Video.js injects <style class="vjs-styles-defaults">
+// with `.video-js {…}` on load, and themes inline `.mejs-container{…}`: both sat on
+// every page of gemeenteraad.denhelder.nl (221) and jeugdhulprijnmond.nl (153)
+// without a single <video>. Same for <link rel="stylesheet" href="…/video-js.min.css">.
+const STYLESHEET_LINK =
+  /<link\b[^>]*\brel\s*=\s*(?:"[^"]*\bstylesheet\b[^"]*"|'[^']*\bstylesheet\b[^']*'|stylesheet\b)[^>]*>/gi;
+
+// The body may not contain "<": a "<style>" inside a script string (or JSON's
+// escaped "<\/style>") must not swallow everything up to the next real </style>,
+// players included. CSS with a literal "<" just stays, as before.
+function stripStylesheets(html) {
+  return html.replace(/<style(?=[\s>])[^>]*>[^<]*<\/style>/gi, "").replace(STYLESHEET_LINK, "");
+}
+
+// Generic player libraries are often loaded site-wide (jeugdhulprijnmond.nl loads
+// video.js on every page). Loading the library is not a player — neither the request
+// nor its <script src>/<link> tag, both of which name it. These players need a match
+// in the markup with those tags removed: the element a real player leaves in the
+// rendered DOM (<video class="video-js">, .mejs-container). Trade-off: a player inside
+// an iframe, whose only trace here is the iframe's script request, is not counted.
+const NEEDS_MARKUP = new Set(["Video.js", "MediaElement.js"]);
+const stripAssetTags = (html) =>
+  html.replace(/<script\b[^>]*\bsrc\s*=[^>]*>/gi, "").replace(/<link\b[^>]*>/gi, "");
+
 // `scripts` patterns see scheme + host + path only. Trackers carry the page URL,
 // title and referrer in their query (GA's dl/dt, pixel ?url=), and bundlers put
 // random base64 there: Google's pagead/1p-user-list?random=… and Drupal's
@@ -2250,9 +2479,10 @@ function networkEvidence(url, match) {
 }
 
 export function detectPlayers(html, networkRequests) {
-  const searchable = stripAnchorHrefs(stripHostAllowLists(stripDownlevelConditionals(html)));
+  const searchable = stripAnchorHrefs(stripStylesheets(stripHostAllowLists(stripDownlevelConditionals(html))));
   const requestPaths = networkRequests.map(stripQuery);
   const found = [];
+  let markupOnly;
 
   for (const [player, config] of Object.entries(DETECTORS)) {
     const matches = [];
@@ -2278,6 +2508,10 @@ export function detectPlayers(html, networkRequests) {
       }
     }
 
+    if (NEEDS_MARKUP.has(player)) {
+      markupOnly ??= stripAssetTags(searchable);
+      if (!config.patterns.some((p) => p.test(markupOnly))) continue;
+    }
     if (matches.length > 0) {
       found.push({ player, evidence: matches });
     }
@@ -2300,6 +2534,7 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
 
   const throttle = createThrottleState(delay, concurrency);
   const autoTuner = createAutoTuner(controlFile);
+  autoTuner.beat(throttle, domain);
   const retryCount = new Map();
   const MAX_RETRIES = 2;
 

@@ -22,6 +22,11 @@ describe('isDerivedScan', () => {
     expect(isDerivedScan('videoscan-digi-import-burgerzaken-2026-09-03T09-55-31-103-summary.json')).toBe(true);
   });
 
+  it('matches the way NTFS resolves the name', () => {
+    expect(isDerivedScan('videoscan-x-2026-09-16T06-11-14-344-merged.JSON')).toBe(true);
+    expect(isDerivedScan('videoscan-x-2026-09-16T06-11-14-344-summary.json. ')).toBe(true);
+  });
+
   it('leaves a real crawl resumable', () => {
     expect(isDerivedScan('videoscan-trefhetinoss.nl-2026-09-02T11-25-39.json')).toBe(false);
     // "-merged"/"-summary" only count as the filename suffix, not anywhere in it.
