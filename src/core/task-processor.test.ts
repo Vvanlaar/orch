@@ -27,6 +27,7 @@ vi.mock('./claude-runner.js', () => ({ claudeEmitter: new EventEmitter(), steerT
 
 vi.mock('./videoscan-runner.js', () => ({
   runVideoscan: vi.fn((taskId: number) => new Promise((resolve) => db.finishScan.set(taskId, resolve))),
+  holdVideoscan: () => () => {},
   controlFileName: (id: number) => `_control-${id}.json`,
   findLatestScanFileForDomain: vi.fn(() => null),
   scanDomain: (o: { scanUrl?: string; urls?: string[] }) => new URL(o.urls?.[0] ?? o.scanUrl ?? '').hostname.replace(/^www\./, ''),
@@ -285,6 +286,17 @@ describe('killStrayTaskProcess (/stop fallback)', () => {
   it('refuses to kill a PID it cannot verify', async () => {
     vi.mocked(pk.verifyProcessIdentity).mockResolvedValue({ identity: 'unknown', error: 'powershell failed' });
     expect(await killStrayTaskProcess(task())).toContain('cannot verify PID 4242');
+    expect(pk.killProcessTree).not.toHaveBeenCalled();
+  });
+
+  it('reports a claude process created after this server started as still alive, not as stopped', async () => {
+    // What verifyProcessIdentity answers for a process the real matcher finds ambiguous.
+    vi.mocked(pk.verifyProcessIdentity).mockImplementation(async (pid, expected) => {
+      const young = { commandLine: 'cmd.exe /d /s /c "claude --print --dangerously-skip-permissions -"', startedAtMs: Date.now() };
+      return pk.matchProcessIdentity(young, expected) === 'ambiguous' ? { identity: 'unknown', error: `PID ${pid} is ambiguous` } : { identity: 'match' };
+    });
+    const claudeTask = addTask(700, { type: 'pr-review', status: 'running', machineId: 'm1', pid: 4242, startedAt: new Date(Date.now() - 60_000).toISOString() });
+    expect(await killStrayTaskProcess(claudeTask)).toContain('cannot verify PID 4242');
     expect(pk.killProcessTree).not.toHaveBeenCalled();
   });
 });

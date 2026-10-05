@@ -427,6 +427,9 @@ app.post('/api/tasks/:id/pause', asyncHandler(async (req, res) => {
 // simply starts.
 app.post('/api/tasks/:id/resume', asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id as string);
+  // Sampled before the read: a run that finishes recording between the read and the race
+  // guard below would pass the guard with a task read from before resumeFile was written.
+  const inFlightBeforeRead = isVideoscanRunning(id);
   const task = await getTask(id);
   if (!task) {
     res.status(404).json({ error: 'Task not found' });
@@ -453,15 +456,16 @@ app.post('/api/tasks/:id/resume', asyncHandler(async (req, res) => {
     res.json({ success: true });
     return;
   }
-  // Race guard: pause signals scan.mjs at the next batch boundary, which can take seconds.
-  // If the user clicks Resume while the original subprocess is still finishing its graceful
-  // shutdown, the new pending status would let processQueue spawn a SECOND scan.mjs for the
-  // same task and they'd race to write the JSON. Refuse until the original has fully exited.
-  if (isVideoscanRunning(id)) {
-    res.status(409).json({ error: 'Scan is still finishing its pause — try again in a moment' });
+  // Race guard: pause takes effect at scan.mjs's next batch boundary, and the run then still
+  // writes report, PDF, sync and resumeFile, which can take minutes. A Resume before that is
+  // recorded flips the row to pending under the original run, which then no longer sees
+  // 'paused' and marks the task completed without a resumeFile. Refuse until the original
+  // run is fully recorded, which is well after scan.mjs has exited.
+  if (inFlightBeforeRead || isVideoscanRunning(id)) {
+    res.status(409).json({ error: 'Scan is still finishing its pause (report, PDF and sync can take a few minutes) — try again shortly' });
     return;
   }
-  // isVideoscanRunning above only sees this machine's subprocesses.
+  // isVideoscanRunning above only sees this machine's runs.
   const elsewhere = checkpointElsewhere(task, MACHINE_ID);
   if (elsewhere) {
     res.status(400).json({ error: `Task is on a different machine (${elsewhere})` });

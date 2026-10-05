@@ -42,7 +42,7 @@ import {
   checkoutPRInWorktree,
   findRemoteForRepo,
 } from './git-ops.js';
-import { runVideoscan, controlFileName, findLatestScanFileForDomain, scanDomain, readPagesScanned, readScanFileInfo, resumeBudget, getVideoscanDir, mergeScans, syncScanToSupabase, generateReport as generateVideoscanReport, type VideoscanResult } from './videoscan-runner.js';
+import { runVideoscan, holdVideoscan, controlFileName, findLatestScanFileForDomain, scanDomain, readPagesScanned, readScanFileInfo, resumeBudget, getVideoscanDir, mergeScans, syncScanToSupabase, generateReport as generateVideoscanReport, type VideoscanResult } from './videoscan-runner.js';
 import { createStaleTracker, decideDeadScan, freeSlots, singleFlight, withRetry } from './queue-helpers.js';
 import { getProcessInfos, isPidAlive, killProcessTree, matchProcessIdentity, verifyProcessIdentity, type ExpectedProcess, type ProcessInfo } from './process-kill.js';
 import { dbArchiveVideoscans } from './db/videoscans.js';
@@ -377,39 +377,48 @@ async function processVideoscan(task: Task): Promise<void> {
   clearStreamingOutput(task.id);
   notifyUpdate(task.id);
 
-  let result: VideoscanResult;
+  // Held past runVideoscan until the row has this run's outcome. Resume refuses a
+  // held task; released any earlier, it could flip the row to pending before the
+  // paused check below reads it, which would then complete the task the user just
+  // resumed instead of recording its resumeFile.
+  const release = holdVideoscan(task.id);
   try {
-    result = await runVideoscan(task.id, {
-      scanUrl: ctx.scanUrl || ctx.urls?.[0] || '',
-      maxPages: ctx.maxPages,
-      resumeFile: ctx.resumeFile,
-      delay: ctx.delay,
-      urls: ctx.urls,
-      targetFilename: ctx.targetFilename,
-      batchId: ctx.batchId,
-      batchLabel: ctx.batchLabel,
-    });
-  } catch (err) {
-    result = { success: false, error: err instanceof Error ? err.message : String(err) };
-  }
-
-  // If the user paused this task while runVideoscan was in flight, the row will
-  // already say 'paused'. Don't override that with completed/failed — just record
-  // the JSON filename so the resume endpoint knows where to pick up from.
-  if (await isPaused(task.id)) {
-    if (result.jsonFile) {
-      const resumePath = path.join(getVideoscanDir(), result.jsonFile);
-      await updateTaskContext(task.id, { resumeFile: resumePath });
+    let result: VideoscanResult;
+    try {
+      result = await runVideoscan(task.id, {
+        scanUrl: ctx.scanUrl || ctx.urls?.[0] || '',
+        maxPages: ctx.maxPages,
+        resumeFile: ctx.resumeFile,
+        delay: ctx.delay,
+        urls: ctx.urls,
+        targetFilename: ctx.targetFilename,
+        batchId: ctx.batchId,
+        batchLabel: ctx.batchLabel,
+      });
+    } catch (err) {
+      result = { success: false, error: err instanceof Error ? err.message : String(err) };
     }
-    log.info(`Task #${task.id} paused; subprocess exited${result.jsonFile ? ` (resume file: ${result.jsonFile})` : ''}${result.error ? ` (${result.error})` : ''}`);
-  } else if (result.success) {
-    const parts = [`Scan complete`];
-    if (result.jsonFile) parts.push(`JSON: ${result.jsonFile}`);
-    if (result.htmlFile) parts.push(`Report: ${result.htmlFile}`);
-    if (result.pdfFile) parts.push(`PDF: ${result.pdfFile}`);
-    await completeTask(task.id, parts.join('\n'));
-  } else {
-    await failTask(task.id, result.error || 'Videoscan failed');
+
+    // If the user paused this task while runVideoscan was in flight, the row will
+    // already say 'paused'. Don't override that with completed/failed — just record
+    // the JSON filename so the resume endpoint knows where to pick up from.
+    if (await isPaused(task.id)) {
+      if (result.jsonFile) {
+        const resumePath = path.join(getVideoscanDir(), result.jsonFile);
+        await updateTaskContext(task.id, { resumeFile: resumePath });
+      }
+      log.info(`Task #${task.id} paused; subprocess exited${result.jsonFile ? ` (resume file: ${result.jsonFile})` : ''}${result.error ? ` (${result.error})` : ''}`);
+    } else if (result.success) {
+      const parts = [`Scan complete`];
+      if (result.jsonFile) parts.push(`JSON: ${result.jsonFile}`);
+      if (result.htmlFile) parts.push(`Report: ${result.htmlFile}`);
+      if (result.pdfFile) parts.push(`PDF: ${result.pdfFile}`);
+      await completeTask(task.id, parts.join('\n'));
+    } else {
+      await failTask(task.id, result.error || 'Videoscan failed');
+    }
+  } finally {
+    release();
   }
   notifyUpdate(task.id);
   await autoMergeBatchIfDone(ctx);
@@ -805,17 +814,19 @@ export function expectedTaskProcess(t: Pick<Task, 'id' | 'type'> & { startedAt?:
     // 'claude' but still matches the user's own sessions started with that flag.
     markers: ['claude', '--dangerously-skip-permissions'],
     ...notBefore,
-    // Those markers name no task, so bound the creation time from above as well. A process
-    // this server didn't spawn but that is still the task's was spawned by an earlier
-    // instance; anything created since this server started is a later session on a reused PID.
+    // Those markers name no task. A matching process created since this server started is
+    // either a later session on a reused PID or the task's own, run by another instance on
+    // this machine: ambiguous, so it is neither killed nor reported gone. Creation times are
+    // only known on Windows; elsewhere the markers alone decide.
     notAfterMs: SERVER_STARTED_MS,
   };
 }
 
 /**
- * Kill a task's process left by a prior server instance. The PID may since belong to an
- * unrelated program: only a verified match is killed, and a mismatch means the task's
- * process is gone. Returns why the process may still be alive, or undefined.
+ * Kill a task's process that this server instance has no handle on. The PID may since
+ * belong to an unrelated program: only a verified match is killed, and a mismatch means the
+ * task's process is gone. Returns why the process may still be alive (kill failed, or it
+ * can't be verified), or undefined.
  */
 export async function killStrayTaskProcess(t: Task): Promise<string | undefined> {
   if (!isPidAlive(t.pid)) return undefined;
@@ -842,7 +853,7 @@ async function deadScanIds(rows: LeanTask[]): Promise<number[]> {
   }
   // An unreadable command line (e.g. an elevated instance's scan) counts as its scan too.
   const reused = infos
-    ? live.filter(t => !['match', 'unreadable'].includes(matchProcessIdentity(infos.get(t.pid!) ?? null, expectedTaskProcess(t))))
+    ? live.filter(t => ['mismatch', 'gone'].includes(matchProcessIdentity(infos.get(t.pid!) ?? null, expectedTaskProcess(t))))
     : [];
   return [...rows.filter(t => !live.includes(t)), ...reused].map(t => t.id);
 }

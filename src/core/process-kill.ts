@@ -29,13 +29,17 @@ export interface ExpectedProcess {
   markers: string[];
   /** The task's start: its process can't have been created before this. */
   notBeforeMs?: number;
-  /** Its process can't have been created after this. */
+  /**
+   * A process created after this can't be vouched for by its command line alone. For
+   * markers that name no task: a matching process that young is `ambiguous`.
+   */
   notAfterMs?: number;
 }
 
-export type ProcessIdentity = 'match' | 'mismatch' | 'gone' | 'unreadable';
+/** `unreadable` and `ambiguous` both mean: alive, and it may or may not be the task's. */
+export type ProcessIdentity = 'match' | 'mismatch' | 'gone' | 'unreadable' | 'ambiguous';
 
-// startedAt is written just before the spawn, from the same clock; this only absorbs rounding.
+// startedAt is written before the spawn, from the same clock; this only absorbs rounding.
 const START_SKEW_MS = 5_000;
 const BOOT_CLOCK_MARGIN_MS = 10 * 60_000;
 
@@ -48,9 +52,10 @@ export function matchProcessIdentity(info: ProcessInfo | null, expected: Expecte
   if (expected.notBeforeMs !== undefined && info.startedAtMs !== null && info.startedAtMs < expected.notBeforeMs - START_SKEW_MS) {
     return 'mismatch';
   }
-  if (expected.notAfterMs !== undefined && info.startedAtMs !== null && info.startedAtMs > expected.notAfterMs) return 'mismatch';
   const cmd = info.commandLine.toLowerCase();
-  return expected.markers.length > 0 && expected.markers.every(m => cmd.includes(m.toLowerCase())) ? 'match' : 'mismatch';
+  if (!expected.markers.length || !expected.markers.every(m => cmd.includes(m.toLowerCase()))) return 'mismatch';
+  if (expected.notAfterMs !== undefined && info.startedAtMs !== null && info.startedAtMs > expected.notAfterMs) return 'ambiguous';
+  return 'match';
 }
 
 /**
@@ -95,12 +100,12 @@ export async function getProcessInfos(pids: number[]): Promise<Map<number, Proce
   return infos;
 }
 
-export type IdentityCheck = { identity: Exclude<ProcessIdentity, 'unreadable'> } | { identity: 'unknown'; error: string };
+export type IdentityCheck = { identity: Exclude<ProcessIdentity, 'unreadable' | 'ambiguous'> } | { identity: 'unknown'; error: string };
 
 /**
  * Whether `pid` is still the task's process. A PID recorded before a reboot or restart
  * can since belong to an unrelated program. 'unknown' when the process table or the
- * process's command line can't be read.
+ * process's command line can't be read, or the process matches but is `ambiguous`.
  */
 export async function verifyProcessIdentity(pid: number, expected: ExpectedProcess): Promise<IdentityCheck> {
   // A task started before the last boot has no surviving process: whatever holds the PID
@@ -111,7 +116,9 @@ export async function verifyProcessIdentity(pid: number, expected: ExpectedProce
   }
   try {
     const identity = matchProcessIdentity((await getProcessInfos([pid])).get(pid) ?? null, expected);
-    return identity === 'unreadable' ? { identity: 'unknown', error: `command line of PID ${pid} is not readable` } : { identity };
+    if (identity === 'unreadable') return { identity: 'unknown', error: `command line of PID ${pid} is not readable` };
+    if (identity === 'ambiguous') return { identity: 'unknown', error: `PID ${pid} runs a matching command but was created too late to be told apart from another session` };
+    return { identity };
   } catch (err) {
     return { identity: 'unknown', error: err instanceof Error ? err.message : String(err) };
   }

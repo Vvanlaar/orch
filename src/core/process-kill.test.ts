@@ -34,13 +34,17 @@ describe('matchProcessIdentity', () => {
     expect(matchProcessIdentity({ commandLine: scanCmd, startedAtMs: STARTED - 6_000 }, scan)).toBe('mismatch');
   });
 
-  it('rejects a later claude session that reused the PID after the server started', () => {
+  it('cannot tell a matching process created after notAfterMs: a later session on a reused PID, or the task\'s own', () => {
     const SERVER_STARTED = STARTED + 3_600_000;
     const claude = { markers: ['claude', '--dangerously-skip-permissions'], notBeforeMs: STARTED, notAfterMs: SERVER_STARTED };
     const cmd = String.raw`C:\WINDOWS\system32\cmd.exe /d /s /c "claude --dangerously-skip-permissions"`;
     expect(matchProcessIdentity({ commandLine: cmd, startedAtMs: STARTED + 1_000 }, claude)).toBe('match');
     expect(matchProcessIdentity({ commandLine: cmd, startedAtMs: SERVER_STARTED }, claude)).toBe('match');
-    expect(matchProcessIdentity({ commandLine: cmd, startedAtMs: SERVER_STARTED + 1 }, claude)).toBe('mismatch');
+    expect(matchProcessIdentity({ commandLine: cmd, startedAtMs: SERVER_STARTED + 1 }, claude)).toBe('ambiguous');
+    // Creation time unknown (non-Windows): the markers alone decide.
+    expect(matchProcessIdentity({ commandLine: cmd, startedAtMs: null }, claude)).toBe('match');
+    // An unrelated program is a mismatch whenever it was created.
+    expect(matchProcessIdentity({ commandLine: 'notepad.exe', startedAtMs: SERVER_STARTED + 1 }, claude)).toBe('mismatch');
   });
 
   it('never matches with no markers', () => {
@@ -64,6 +68,12 @@ describe('verifyProcessIdentity (real process table)', () => {
     expect(info?.commandLine).toBeTruthy();
     expect(await verifyProcessIdentity(process.pid, self)).toEqual({ identity: 'match' });
     expect(await verifyProcessIdentity(process.pid, { markers: ['scan.mjs', '_control-676.json'] })).toEqual({ identity: 'mismatch' });
+  }, 30_000);
+
+  // Creation times are only read on Windows.
+  it.runIf(process.platform === 'win32')('cannot verify a matching process created after notAfterMs', async () => {
+    expect(await verifyProcessIdentity(process.pid, { ...self, notAfterMs: 0 })).toEqual({ identity: 'unknown', error: expect.stringContaining('created too late') });
+    expect(await verifyProcessIdentity(process.pid, { ...self, notAfterMs: Date.now() })).toEqual({ identity: 'match' });
   }, 30_000);
 
   it('rejects any live process for a task started before the last boot, without querying', async () => {
