@@ -810,6 +810,21 @@ export function isTranslatedCopy(url, startUrl) {
   return prefix !== null && prefix !== (startUrl ? translationPrefix(startUrl) : null);
 }
 
+// Login pages: raad.rijssen-holten.nl links login?redirect=<doc> beside every
+// document, half of a 1,925-page crawl. In 573,656 scanned URLs, 1,650 of the
+// 1,664 login URLs with a player only repeated the page they redirect to; the
+// other 14 were rijksmuseum.nl's site-wide template on the login form.
+// Matched on the path only: ?next=/login on a content page is not a login page.
+const LOGIN_PATH = /\/(?:login|log-in|signin|sign-in|inloggen)(?:\.(?:php|aspx?|html?))?(?:\/|$)/i;
+
+function isLoginPage(url) {
+  try {
+    return LOGIN_PATH.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
 export function shouldSkipUrl(url, startUrl) {
   const skip = [
     /\.(pdf|zip|png|jpg|jpeg|gif|svg|webp|mp4|mp3|wav|doc|docx|xls|xlsx|ppt|pptx|css|js|xbri|xbrl|xml|csv)(\?|$)/i,
@@ -828,6 +843,8 @@ export function shouldSkipUrl(url, startUrl) {
     /[?&]action=logout\b/i,
   ];
   if (skip.some((r) => r.test(url))) return true;
+
+  if (isLoginPage(url)) return true;
 
   if (isCrawlerTrap(url)) return true;
 
@@ -1645,13 +1662,34 @@ async function scanPageIn(context, url, timeout) {
   const shadow = await extractShadowDomMarkup(page);
   const corpus = [html, encoded, shadow].filter(Boolean).join("\n");
   const detected = await detectWithConsent(page, corpus, networkRequests);
-
-  // Extract links for further crawling
-  const links = await page.evaluate(() =>
-    Array.from(document.querySelectorAll("a[href]"), (a) => a.href)
-  );
+  const links = await collectLinks(page);
 
   return { detected, links };
+}
+
+// Filter controls rendered as links: each one adds a facet to the current URL,
+// so following them crawls every combination. visitrijssenholten.nl queued
+// 11,153 URLs like /alle-routes/rondwandeling/50-100km/5-10km after 1,832 pages,
+// every one an <a role="checkbox" aria-checked>. Navigation links don't carry a
+// checked state in practice, so the role or aria-checked alone marks the control.
+const FILTER_CONTROL_ROLES = new Set(["checkbox", "radio", "switch", "menuitemcheckbox", "menuitemradio"]);
+
+export function isFilterControl({ role, ariaChecked }) {
+  // role may list fallbacks ("checkbox button"); the first token is the one in force
+  const primaryRole = (role || "").trim().split(/\s+/)[0].toLowerCase();
+  return FILTER_CONTROL_ROLES.has(primaryRole) || ariaChecked != null;
+}
+
+// Links to crawl next, minus filter controls.
+async function collectLinks(page) {
+  const anchors = await page.evaluate(() =>
+    Array.from(document.querySelectorAll("a[href]"), (a) => ({
+      href: a.href,
+      role: a.getAttribute("role"),
+      ariaChecked: a.getAttribute("aria-checked"),
+    }))
+  );
+  return anchors.filter((a) => !isFilterControl(a)).map((a) => a.href);
 }
 
 // First page: accept cookies before scanning (re-navigates if cookies accepted)
@@ -1737,9 +1775,7 @@ async function scanFirstPageIn(context, url, timeout) {
   const shadow = await extractShadowDomMarkup(page);
   const corpus = [html, encoded, shadow].filter(Boolean).join("\n");
   const detected = await detectWithConsent(page, corpus, networkRequests);
-  const links = await page.evaluate(() =>
-    Array.from(document.querySelectorAll("a[href]"), (a) => a.href)
-  );
+  const links = await collectLinks(page);
 
   return { detected, links };
 }
@@ -2104,7 +2140,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     const dropped = storedQueue.length - restored.length;
     if (dropped > 0) {
       console.log(
-        chalk.yellow(`  Dropped ${dropped} queued URL(s) as crawler-trap output, translated copies, state-changing links or duplicates`),
+        chalk.yellow(`  Dropped ${dropped} queued URL(s) as crawler-trap output, translated copies, state-changing links, login pages or duplicates`),
       );
     }
     // Say so out loud when the filter took everything, and resume nothing: the

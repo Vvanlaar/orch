@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DETECTORS, detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, pickConsent, isTranslatedCopy, translationPrefix, normalizeUrl, restoreQueue, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource } from "./scan.mjs";
+import { DETECTORS, detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, isFilterControl, pickConsent, isTranslatedCopy, translationPrefix, normalizeUrl, restoreQueue, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource } from "./scan.mjs";
 
 const names = (result) => result.map((r) => r.player).sort();
 
@@ -748,6 +748,40 @@ test("state-changing links (add to basket, log out) are skipped", () => {
     "https://www.example.nl/nieuws/addendum-bestemmingsplan",
     "https://www.example.nl/logout-problemen-oplossen",
   ]) assert.equal(shouldSkipUrl(url), false, url);
+});
+
+test("login pages are skipped", () => {
+  for (const url of [
+    "https://raad.rijssen-holten.nl/login?redirect=https%3A%2F%2Fraad.rijssen-holten.nl%2Fvergaderstukken%2Fx",
+    "https://www.rijksmuseum.nl/nl/inloggen?redirectUrl=https://www.rijksmuseum.nl/nl/pers",
+    "https://www.agnietenhof.nl/my/signin",
+    "https://www.example.nl/account/log-in/",
+    "https://www.example.nl/sign-in#form",
+    "https://www.example.nl/Account/Login.aspx?ReturnUrl=%2F",
+  ]) assert.equal(shouldSkipUrl(url), true, url);
+  for (const url of [
+    "https://www.example.nl/nieuws/item?next=/login",
+    "https://www.example.nl/inloggen-met-digid-uitleg",
+    "https://www.example.nl/nieuws/login-problemen-opgelost",
+    "https://www.example.nl/blogin",
+    "https://www.example.nl/loginformatie",
+  ]) assert.equal(shouldSkipUrl(url), false, url);
+});
+
+test("filter controls rendered as links are not followed", () => {
+  // visitrijssenholten.nl facet links
+  assert.equal(isFilterControl({ role: "checkbox", ariaChecked: "false" }), true);
+  assert.equal(isFilterControl({ role: "Radio ", ariaChecked: null }), true);
+  assert.equal(isFilterControl({ role: null, ariaChecked: "true" }), true);
+  assert.equal(isFilterControl({ role: null, ariaChecked: "" }), true);
+  assert.equal(isFilterControl({ role: "checkbox button", ariaChecked: null }), true);
+  for (const role of ["switch", "menuitemcheckbox", "menuitemradio"]) {
+    assert.equal(isFilterControl({ role, ariaChecked: null }), true, role);
+  }
+  // ordinary navigation
+  assert.equal(isFilterControl({ role: null, ariaChecked: null }), false);
+  assert.equal(isFilterControl({ role: "button", ariaChecked: null }), false);
+  assert.equal(isFilterControl({ role: "menuitem", ariaChecked: null }), false);
 });
 
 test("pickConsent keeps only what accepting the banner added", () => {
