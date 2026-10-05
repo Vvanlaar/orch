@@ -52,9 +52,36 @@ export function getVideoscanControlFile(taskId: number): string | undefined {
   return controlFiles.get(taskId);
 }
 
-/** True while a scan.mjs subprocess for this task is still alive on this machine. */
+// Holds per task on a run that is not fully recorded yet. Counted: runVideoscan and
+// its caller each take one.
+const runHolds = new Map<number, number>();
+
+/**
+ * Keeps a task's run counted as in flight until the returned release is called.
+ * runVideoscan holds one until its promise settles; a caller that still has to
+ * record the result (status, resumeFile) holds its own across that.
+ */
+export function holdVideoscan(taskId: number): () => void {
+  runHolds.set(taskId, (runHolds.get(taskId) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const left = (runHolds.get(taskId) ?? 1) - 1;
+    if (left > 0) runHolds.set(taskId, left);
+    else runHolds.delete(taskId);
+  };
+}
+
+/**
+ * True while a run of this task is in flight on this machine: until runVideoscan
+ * has settled and every other holder has released, not just while scan.mjs is
+ * alive. After scan.mjs exits the run still merges, writes the report and PDF and
+ * syncs, which takes seconds to minutes; a resume accepted in that window is
+ * swallowed when the first run records its result.
+ */
 export function isVideoscanRunning(taskId: number): boolean {
-  return runningProcesses.has(taskId);
+  return runHolds.has(taskId);
 }
 
 /**
@@ -96,6 +123,16 @@ export interface VideoscanOptions {
 }
 
 export async function runVideoscan(taskId: number, options: VideoscanOptions): Promise<VideoscanResult> {
+  // Held until scanAndReport settles, whichever of its resolve() paths it takes.
+  const release = holdVideoscan(taskId);
+  try {
+    return await scanAndReport(taskId, options);
+  } finally {
+    release();
+  }
+}
+
+async function scanAndReport(taskId: number, options: VideoscanOptions): Promise<VideoscanResult> {
   const scanScript = join(PROJECT_ROOT, 'src/videoscan/scan.mjs');
 
   if (!existsSync(scanScript)) {

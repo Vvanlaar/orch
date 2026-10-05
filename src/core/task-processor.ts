@@ -42,7 +42,7 @@ import {
   checkoutPRInWorktree,
   findRemoteForRepo,
 } from './git-ops.js';
-import { runVideoscan, findLatestScanFileForDomain, scanDomain, readPagesScanned, readScanFileInfo, resumeBudget, getVideoscanDir, mergeScans, syncScanToSupabase, generateReport as generateVideoscanReport, type VideoscanResult } from './videoscan-runner.js';
+import { runVideoscan, holdVideoscan, findLatestScanFileForDomain, scanDomain, readPagesScanned, readScanFileInfo, resumeBudget, getVideoscanDir, mergeScans, syncScanToSupabase, generateReport as generateVideoscanReport, type VideoscanResult } from './videoscan-runner.js';
 import { createStaleTracker, decideDeadScan, freeSlots, singleFlight, withRetry } from './queue-helpers.js';
 import { isPidAlive, killProcessTree } from './process-kill.js';
 import { dbArchiveVideoscans } from './db/videoscans.js';
@@ -377,39 +377,48 @@ async function processVideoscan(task: Task): Promise<void> {
   clearStreamingOutput(task.id);
   notifyUpdate(task.id);
 
-  let result: VideoscanResult;
+  // Held past runVideoscan until the row has this run's outcome. Resume refuses a
+  // held task; released any earlier, it could flip the row to pending before the
+  // paused check below reads it, which would then complete the task the user just
+  // resumed instead of recording its resumeFile.
+  const release = holdVideoscan(task.id);
   try {
-    result = await runVideoscan(task.id, {
-      scanUrl: ctx.scanUrl || ctx.urls?.[0] || '',
-      maxPages: ctx.maxPages,
-      resumeFile: ctx.resumeFile,
-      delay: ctx.delay,
-      urls: ctx.urls,
-      targetFilename: ctx.targetFilename,
-      batchId: ctx.batchId,
-      batchLabel: ctx.batchLabel,
-    });
-  } catch (err) {
-    result = { success: false, error: err instanceof Error ? err.message : String(err) };
-  }
-
-  // If the user paused this task while runVideoscan was in flight, the row will
-  // already say 'paused'. Don't override that with completed/failed — just record
-  // the JSON filename so the resume endpoint knows where to pick up from.
-  if (await isPaused(task.id)) {
-    if (result.jsonFile) {
-      const resumePath = path.join(getVideoscanDir(), result.jsonFile);
-      await updateTaskContext(task.id, { resumeFile: resumePath });
+    let result: VideoscanResult;
+    try {
+      result = await runVideoscan(task.id, {
+        scanUrl: ctx.scanUrl || ctx.urls?.[0] || '',
+        maxPages: ctx.maxPages,
+        resumeFile: ctx.resumeFile,
+        delay: ctx.delay,
+        urls: ctx.urls,
+        targetFilename: ctx.targetFilename,
+        batchId: ctx.batchId,
+        batchLabel: ctx.batchLabel,
+      });
+    } catch (err) {
+      result = { success: false, error: err instanceof Error ? err.message : String(err) };
     }
-    log.info(`Task #${task.id} paused; subprocess exited${result.jsonFile ? ` (resume file: ${result.jsonFile})` : ''}${result.error ? ` (${result.error})` : ''}`);
-  } else if (result.success) {
-    const parts = [`Scan complete`];
-    if (result.jsonFile) parts.push(`JSON: ${result.jsonFile}`);
-    if (result.htmlFile) parts.push(`Report: ${result.htmlFile}`);
-    if (result.pdfFile) parts.push(`PDF: ${result.pdfFile}`);
-    await completeTask(task.id, parts.join('\n'));
-  } else {
-    await failTask(task.id, result.error || 'Videoscan failed');
+
+    // If the user paused this task while runVideoscan was in flight, the row will
+    // already say 'paused'. Don't override that with completed/failed — just record
+    // the JSON filename so the resume endpoint knows where to pick up from.
+    if (await isPaused(task.id)) {
+      if (result.jsonFile) {
+        const resumePath = path.join(getVideoscanDir(), result.jsonFile);
+        await updateTaskContext(task.id, { resumeFile: resumePath });
+      }
+      log.info(`Task #${task.id} paused; subprocess exited${result.jsonFile ? ` (resume file: ${result.jsonFile})` : ''}${result.error ? ` (${result.error})` : ''}`);
+    } else if (result.success) {
+      const parts = [`Scan complete`];
+      if (result.jsonFile) parts.push(`JSON: ${result.jsonFile}`);
+      if (result.htmlFile) parts.push(`Report: ${result.htmlFile}`);
+      if (result.pdfFile) parts.push(`PDF: ${result.pdfFile}`);
+      await completeTask(task.id, parts.join('\n'));
+    } else {
+      await failTask(task.id, result.error || 'Videoscan failed');
+    }
+  } finally {
+    release();
   }
   notifyUpdate(task.id);
   await autoMergeBatchIfDone(ctx);
