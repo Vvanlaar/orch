@@ -841,6 +841,12 @@ export function shouldSkipUrl(url, startUrl) {
     /[?&]add[-_]to[-_]cart=/i,
     /\/(?:logout|log-out|signout|sign-out|uitloggen)(?:[/?#]|$)/i,
     /[?&]action=logout\b/i,
+    // OpenGemeenten "translate this page" link on every page: one proxy URL per
+    // page (?tx_opengemeententranslategoogle[url]=<base64>), and it answers with
+    // an HTTP error. 4,157 in scan history, 0 with a player; nieuwegein.nl spent
+    // 1,376 of a 2,823-page crawl on them, schouwen-duiveland.nl 776 of 1,565.
+    /\/google-translate-informatie(?:[/?#]|$)/i,
+    /[?&]tx_opengemeententranslategoogle/i,
   ];
   if (skip.some((r) => r.test(url))) return true;
 

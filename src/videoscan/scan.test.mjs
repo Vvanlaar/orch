@@ -768,6 +768,19 @@ test("login pages are skipped", () => {
   ]) assert.equal(shouldSkipUrl(url), false, url);
 });
 
+test("OpenGemeenten google-translate proxy links are skipped", () => {
+  for (const url of [
+    "https://www.nieuwegein.nl/google-translate-informatie?tx_opengemeententranslategoogle%5Burl%5D=aHR0cHM6Ly93d3cubmlldXdlZ2Vpbi5ubC9hZnZhbA%3D%3D",
+    "https://www.schouwen-duiveland.nl/google-translate-informatie",
+    // the parameter alone, on another path, raw brackets as normalizeUrl leaves them
+    "https://www.example.nl/vertalen?tx_opengemeententranslategoogle[url]=aHR0cA==",
+  ]) assert.equal(shouldSkipUrl(url), true, url);
+  for (const url of [
+    "https://www.nieuwegein.nl/afval", // the page that carries the link is still crawled
+    "https://www.example.nl/nieuws/google-translate-informatie-avond",
+  ]) assert.equal(shouldSkipUrl(url), false, url);
+});
+
 test("filter controls rendered as links are not followed", () => {
   // visitrijssenholten.nl facet links
   assert.equal(isFilterControl({ role: "checkbox", ariaChecked: "false" }), true);
