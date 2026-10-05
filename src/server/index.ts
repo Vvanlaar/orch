@@ -429,6 +429,9 @@ app.post('/api/tasks/:id/pause', asyncHandler(async (req, res) => {
 // JSON for that task's domain.
 app.post('/api/tasks/:id/resume', asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id as string);
+  // Sampled before the read: a run that finishes recording between the read and the race
+  // guard below would pass the guard with a task read from before resumeFile was written.
+  const inFlightBeforeRead = isVideoscanRunning(id);
   const task = await getTask(id);
   if (!task) {
     res.status(404).json({ error: 'Task not found' });
@@ -449,9 +452,10 @@ app.post('/api/tasks/:id/resume', asyncHandler(async (req, res) => {
   // Race guard: pause signals scan.mjs at the next batch boundary, which can take seconds.
   // If the user clicks Resume while the original subprocess is still finishing its graceful
   // shutdown, the new pending status would let processQueue spawn a SECOND scan.mjs for the
-  // same task and they'd race to write the JSON. Refuse until the original has fully exited.
-  if (isVideoscanRunning(id)) {
-    res.status(409).json({ error: 'Scan is still finishing its pause — try again in a moment' });
+  // same task and they'd race to write the JSON. Refuse until the original run is fully
+  // recorded (report, PDF, sync, resumeFile), which is well after scan.mjs has exited.
+  if (inFlightBeforeRead || isVideoscanRunning(id)) {
+    res.status(409).json({ error: 'Scan is still finishing its pause (report, PDF and sync can take a few minutes) — try again shortly' });
     return;
   }
 

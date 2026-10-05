@@ -42,7 +42,7 @@ import {
   checkoutPRInWorktree,
   findRemoteForRepo,
 } from './git-ops.js';
-import { runVideoscan, findLatestScanFileForDomain, readPagesScanned, resumeBudget, getVideoscanDir, mergeScans, syncScanToSupabase, generateReport as generateVideoscanReport } from './videoscan-runner.js';
+import { runVideoscan, holdVideoscan, findLatestScanFileForDomain, readPagesScanned, resumeBudget, getVideoscanDir, mergeScans, syncScanToSupabase, generateReport as generateVideoscanReport } from './videoscan-runner.js';
 import { isPidAlive, killProcessTree } from './process-kill.js';
 import { dbArchiveVideoscans } from './db/videoscans.js';
 import { MACHINE_ID, isSupabaseConfigured } from './db/client.js';
@@ -364,6 +364,10 @@ async function processVideoscan(task: Task): Promise<void> {
   clearStreamingOutput(task.id);
   notifyUpdate(task.id);
 
+  // Held past runVideoscan until the row has this run's outcome. Resume refuses a
+  // held task; released any earlier, it could re-queue the task before resumeFile
+  // is written, and the status check below would then complete the resumed run.
+  const release = holdVideoscan(task.id);
   try {
     const result = await runVideoscan(task.id, {
       scanUrl: ctx.scanUrl || ctx.urls?.[0] || '',
@@ -406,6 +410,8 @@ async function processVideoscan(task: Task): Promise<void> {
     } else {
       log.warn(`Task #${task.id} paused; runVideoscan threw (${error}) — leaving status as paused`);
     }
+  } finally {
+    release();
   }
   notifyUpdate(task.id);
 
