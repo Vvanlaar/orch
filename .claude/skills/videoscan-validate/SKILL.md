@@ -113,8 +113,11 @@ carry `$(…)` or a quote. Write it to a scratch file with the Write tool, then:
 node .claude/skills/videoscan-validate/scripts/probe-media.mjs <file with the url>
 ```
 
-Exit 0 means a 2xx answer that is not an HTML page — real media. Exit 1 (a 4xx,
-a soft-404 HTML page, a dead host) means the URL does not prove a player.
+Exit 0 means a 2xx answer with a media content-type (video, audio, an HLS or
+DASH manifest) — real media. Exit 1 (a 4xx, an HTML or JSON error page, no
+content-type, a dead host) means the URL does not prove a player. Exit 2 means
+it refused: bad input, or a URL (or a redirect) pointing at this machine or the
+LAN — treat that as unproven too, and say why.
 
 ## Phase 3 — fix what is wrong
 
@@ -162,9 +165,10 @@ node .claude/skills/videoscan-validate/scripts/scan-prune.mjs <batch> --player K
 # dry run first; add --apply to write (keeps a .bak per file)
 ```
 
-Evidence holds only the text the pattern matched (`HTML: kwidget`), never the
-word around it — so the `zoekwidget1.php` false positive and a real
-`kWidget.embed` stored in an older scan look alike. `--evidence` drops a
+HTML evidence holds only the text the pattern matched (`HTML: kwidget` from
+`zoekwidget1.php`, `HTML: kWidget` from a real `kWidget.embed`), never the word
+around it, and scan-prune matches case-insensitively — so to the prune the false
+positive and a real embed look alike. `--evidence` drops a
 detection when *any* evidence string matches, which would take the real
 embeds too. `--only-evidence` drops only detections whose *every* evidence
 string is on the list, so a real embed that also loaded `kaltura.com` stays;

@@ -4,7 +4,8 @@
 //   node scan-status.mjs                 # every open batch + everything live
 //   node scan-status.mjs <batch|domain>  # one target
 //
-// Exit code 0 always; the verdict is in the output, not the status.
+// Exit code 0; the verdict is in the output, not the status. Exit 2 only for a
+// target that matches nothing, or several batches or domains.
 
 import { listScans, heartbeats, closedBatches, resolveTargetOrExit, videoscanDir, fmtAge, isDerivedScan, HEARTBEAT_FRESH_MS } from './lib.mjs';
 

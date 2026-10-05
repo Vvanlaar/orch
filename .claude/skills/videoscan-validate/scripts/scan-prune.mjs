@@ -4,13 +4,14 @@
 // re-crawling. Run this ONLY after a browser check proved the pages have no
 // such player.
 //
-//   node scan-prune.mjs <file|batch|domain> --player Kaltura [--only-evidence "HTML: kwidget"]
-//                       [--only-evidence "HTML: a,HTML: b"] [--url-contains /nieuws]
-//                       [--url-excludes url1,url2] [--apply]
+//   node scan-prune.mjs <file|batch|domain> --player Kaltura
+//                       [--evidence zoekwidget | --only-evidence "HTML: a,HTML: b"]
+//                       [--url-contains /nieuws] [--url-excludes url1,url2] [--apply]
 //
 // --evidence drops a detection when ANY evidence string contains it.
 // --only-evidence drops it only when EVERY evidence string contains one of the
-// comma-separated needles — for boilerplate that real embeds also carry.
+// comma-separated needles — for markers that real embeds also carry.
+// Each flag at most once; a value may also be given as --flag=value.
 // --url-excludes keeps the listed pages (comma-separated, exact URLs) — for the
 // few real embeds a browser check found among a template-wide false positive.
 //
@@ -22,6 +23,18 @@ import { join } from 'path';
 import { readJson, resolveTargetOrExit, videoscanDir } from './lib.mjs';
 
 const SAFE_NAME = /^[A-Za-z0-9._-]+$/;
+
+function usage(msg) {
+  console.error(msg);
+  process.exit(2);
+}
+function flagName(a) {
+  const eq = a.indexOf('=');
+  return a.startsWith('--') && eq > 0 ? a.slice(0, eq) : a;
+}
+function isFlag(v) {
+  return v === '--apply' || VALUE_FLAGS.has(flagName(v));
+}
 const VALUE_FLAGS = new Set(['--player', '--evidence', '--only-evidence', '--url-contains', '--url-excludes']);
 const opts = {};
 let target;
@@ -31,24 +44,27 @@ for (let i = 0; i < args.length; i++) {
   // --flag=value as well as --flag value. A flag this loop does not know, or a
   // missing or blank value, would switch its filter off and widen the prune to
   // every detection of the player — refuse instead.
-  const eq = a.indexOf('=');
-  const flag = a.startsWith('--') && eq > 0 ? a.slice(0, eq) : a;
+  const flag = flagName(a);
   if (VALUE_FLAGS.has(flag)) {
-    const v = flag === a ? args[++i] : a.slice(eq + 1);
-    if (!v?.trim() || VALUE_FLAGS.has(v) || v === '--apply') {
-      console.error(`${flag} needs a non-empty value`);
-      process.exit(2);
-    }
+    const v = flag === a ? args[++i] : a.slice(flag.length + 1);
+    // A value that is itself a flag means this one got none: taking it would
+    // drop that flag's filter (--url-excludes --only-evidence=x prunes all).
+    if (!v?.trim() || isFlag(v)) usage(`${flag} needs a non-empty value`);
+    if (opts[flag.slice(2)] !== undefined) usage(`${flag} given twice — the second would replace the first`);
     opts[flag.slice(2)] = v;
   } else if (a === '--apply') opts.apply = true;
-  else if (a.startsWith('--')) {
-    console.error(`unknown flag ${a}`);
-    process.exit(2);
-  } else target ??= a;
+  else if (a.startsWith('--')) usage(`unknown flag ${a}`);
+  // An unquoted value splits into extra words; dropping them would quietly
+  // widen the filter (--only-evidence HTML: kwidget keeps only "HTML:").
+  else if (target !== undefined) usage(`unexpected argument ${JSON.stringify(a)} — quote values with spaces`);
+  else target = a;
 }
 const { player, evidence, 'only-evidence': onlyEvidence, 'url-contains': urlContains, 'url-excludes': urlExcludes, apply } = opts;
 const excluded = new Set(urlExcludes?.split(',').map(u => u.trim()).filter(Boolean));
 const onlyNeedles = onlyEvidence?.split(',').map(n => n.trim().toLowerCase()).filter(Boolean);
+// A list of only commas passes the blank check above but filters nothing.
+if (urlExcludes !== undefined && !excluded.size) usage('--url-excludes lists no URL');
+if (onlyEvidence !== undefined && !onlyNeedles.length) usage('--only-evidence lists no needle');
 
 if (!target || !player) {
   console.error('usage: scan-prune.mjs <file|batch|domain> --player <name> [--evidence <substr>] [--only-evidence <a,b>] [--url-contains <substr>] [--url-excludes <url,url>] [--apply]');

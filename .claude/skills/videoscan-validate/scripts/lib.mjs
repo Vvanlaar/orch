@@ -124,16 +124,17 @@ export function resolveTarget(target, dir = videoscanDir(), all = listScans(dir)
   const needle = target.toLowerCase();
   // An exact host before any fuzzy match, batch labels included: a substring
   // match on "oss.nl" also takes werkenbijoss.nl (or a batch labelled after
-  // it), and scan-prune --apply would rewrite all of those too. Hosts only: a
-  // summary's or cross-domain merge's `domain` is its batch label, and matching
-  // that here would return the summary alone, without the batch's members.
+  // it), and scan-prune --apply would rewrite all of those too. Hosts only
+  // (a dot in the name): a summary's `domain` is its batch label and a
+  // cross-domain merge's is its merge label, and matching those here would
+  // return that one file without the batch's members.
   const bare = (d) => d.toLowerCase().replace(/^www\./, '');
   const exactDomain = all.filter(s => !s.isSummary && s.domain.includes('.') && bare(s.domain) === bare(needle));
   if (exactDomain.length) return { kind: 'domain', scans: exactDomain };
   const fuzzy = all.filter(s => s.batchId && (s.batchId.toLowerCase().includes(needle) || (s.batchLabel || '').toLowerCase().includes(needle)));
   if (fuzzy.length) {
     const ids = [...new Set(fuzzy.map(s => s.batchId))];
-    if (ids.length > 1) throw new Error(`"${target}" matches ${ids.length} batches: ${ids.join(', ')}`);
+    if (ids.length > 1) throw new TargetError(`"${target}" matches ${ids.length} batches: ${ids.join(', ')}`);
     // Every member of that batch, not just the files whose label matched: a
     // member without batchLabel would otherwise drop out of audit and prune.
     return { kind: 'batch', batchId: ids[0], scans: all.filter(s => s.batchId === ids[0]) };
@@ -141,17 +142,24 @@ export function resolveTarget(target, dir = videoscanDir(), all = listScans(dir)
 
   const domain = all.filter(s => s.domain.toLowerCase().includes(needle));
   const hosts = [...new Set(domain.map(s => s.domain))];
-  if (hosts.length > 1) throw new Error(`"${target}" matches ${hosts.length} domains: ${hosts.join(', ')} — pass the exact host`);
+  if (hosts.length > 1) throw new TargetError(`"${target}" matches ${hosts.length} domains: ${hosts.join(', ')} — pass the exact host`);
   if (domain.length) return { kind: 'domain', scans: domain };
 
-  throw new Error(`No scan, batch or domain matches "${target}"`);
+  throw new TargetError(`No scan, batch or domain matches "${target}"`);
 }
 
-/** resolveTarget for the CLI scripts: a bad target is a usage error, not a stack trace. */
+/** A target that names nothing, or too much — the user's error, not the script's. */
+class TargetError extends Error {}
+
+/**
+ * resolveTarget for the CLI scripts: a bad target is a usage error, not a stack
+ * trace. Anything else (a missing scans dir, a bug) still throws with its stack.
+ */
 export function resolveTargetOrExit(target, dir, all) {
   try {
     return resolveTarget(target, dir, all);
   } catch (err) {
+    if (!(err instanceof TargetError)) throw err;
     console.error(err.message);
     process.exit(2);
   }

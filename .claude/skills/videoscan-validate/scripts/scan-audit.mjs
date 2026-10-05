@@ -31,10 +31,11 @@ if (!target) {
 const dir = videoscanDir();
 const { scans } = resolveTargetOrExit(target, dir);
 // A batch summary already contains every member's details — auditing both the
-// summary and its members would double every count. Only the NEWEST summary:
-// a re-wrap after a newer member scan or a label change writes a new one beside
-// the old, and summing both doubles everything again. A member newer than that summary means the batch
-// changed after the wrap-up, so the summary is stale: audit the members.
+// summary and its members would double every count. Only the NEWEST summary: a
+// re-wrap after a newer member scan or a label change writes a new one beside
+// the old, and summing both doubles everything again. A member newer than that
+// summary means the batch changed after the wrap-up, so the summary is stale:
+// audit the members.
 const summaries = scans.filter(s => s.isSummary);
 const members = scans.filter(s => !s.isSummary);
 const latest = summaries.reduce((a, b) => (!a || b.scanDate > a.scanDate ? b : a), null);
