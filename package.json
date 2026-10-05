@@ -15,7 +15,7 @@
     "rebuild": "pnpm clean && pnpm build",
     "build:dashboard": "vite build src/dashboard",
     "start": "node dist/server/index.js",
-    "test": "vitest run && node --test src/videoscan/scan.test.mjs",
+    "test": "pnpm test:videoscan && vitest run",
     "test:watch": "vitest",
     "test:videoscan": "node --test src/videoscan/scan.test.mjs",
     "check": "svelte-check --tsconfig ./src/dashboard/tsconfig.json",
