@@ -33,7 +33,7 @@ import { initSettings } from '../core/settings.js';
 import { isSupabaseConfigured, MACHINE_ID } from '../core/db/client.js';
 import { dbGetNotifications, dbInsertNotification } from '../core/db/notifications.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
-import { getVideoscanDir, isDerivedScan, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, pauseVideoscan, findLatestScanFileForDomain, isVideoscanRunning, deleteScans, wrapUpBatch, type ReportOptions } from '../core/videoscan-runner.js';
+import { getVideoscanDir, isDerivedScan, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, pauseVideoscan, findScanFileOfRun, isVideoscanRunning, deleteScans, wrapUpBatch, type ReportOptions } from '../core/videoscan-runner.js';
 import { getClosedBatches, markBatchClosed, markBatchOpen } from '../core/batch-state.js';
 import { isPidAlive, killProcessTree } from '../core/process-kill.js';
 import { createSignedUrl, downloadFile } from '../core/db/storage.js';
@@ -425,8 +425,9 @@ app.post('/api/tasks/:id/pause', asyncHandler(async (req, res) => {
 
 // Resume a paused videoscan in-place: flips status back to pending. processQueue picks it up
 // and processVideoscan calls runVideoscan with --resume <ctx.resumeFile>. If the resume file
-// path was never captured (e.g. server died mid-pause), fall back to the latest resumable
-// JSON for that task's domain.
+// path was never captured (e.g. server died mid-pause), fall back to the scan JSON this run
+// wrote for the task's domain. A task paused before it ever ran has nothing to resume and
+// simply starts.
 app.post('/api/tasks/:id/resume', asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id as string);
   const task = await getTask(id);
@@ -446,6 +447,15 @@ app.post('/api/tasks/:id/resume', asyncHandler(async (req, res) => {
     res.status(400).json({ error: `Task is ${task.status}, not paused` });
     return;
   }
+  // Paused before any machine claimed it: no subprocess and no checkpoint exist anywhere,
+  // so none of the guards below apply and an existing pin still decides who runs it.
+  if (!task.context.resumeFile && !task.startedAt) {
+    await updateTaskStatus(id, 'pending');
+    triggerUpdate();
+    await broadcastTasks([id]);
+    res.json({ success: true });
+    return;
+  }
   // Race guard: pause signals scan.mjs at the next batch boundary, which can take seconds.
   // If the user clicks Resume while the original subprocess is still finishing its graceful
   // shutdown, the new pending status would let processQueue spawn a SECOND scan.mjs for the
@@ -462,14 +472,14 @@ app.post('/api/tasks/:id/resume', asyncHandler(async (req, res) => {
   }
 
   let resumeFile = task.context.resumeFile;
-  if (!resumeFile) {
-    // Best-effort recovery: find the latest resumable JSON for this task's domain.
+  if (!resumeFile && task.startedAt) {
+    // Best-effort recovery: the scan JSON this run wrote for the task's domain.
     const url = task.context.scanUrl || task.context.urls?.[0];
     let domain: string | undefined;
     try { domain = url ? new URL(url).hostname.replace(/^www\./, '') : undefined; } catch { /* noop */ }
-    const candidate = domain ? findLatestScanFileForDomain(domain) : null;
+    const candidate = domain ? findScanFileOfRun(domain, task.startedAt) : null;
     if (candidate) {
-      // findLatestScanFileForDomain returns just the filename; resolve to absolute so
+      // findScanFileOfRun returns just the filename; resolve to absolute so
       // it matches the format processVideoscan stores (path.join(VIDEOSCAN_DIR, jsonFile)).
       resumeFile = path.join(getVideoscanDir(), candidate);
     }
@@ -478,10 +488,11 @@ app.post('/api/tasks/:id/resume', asyncHandler(async (req, res) => {
     res.status(400).json({ error: 'No resume file available for this task' });
     return;
   }
-  // A task paused while still pending was never claimed, so the check above can't
-  // tell where its checkpoint is. Only pin here once the file is known to be here.
+  // An unpinned resume task paused while still pending was never claimed, so
+  // checkpointElsewhere can't tell where its checkpoint is. Only pin here once the
+  // file is known to be here.
   if (!existsSync(resumeFile)) {
-    res.status(400).json({ error: `Resume file ${resumeFile} is not on this machine` });
+    res.status(400).json({ error: `Resume file ${path.basename(resumeFile)} is not on this machine` });
     return;
   }
   await updateTaskContext(id, { resumeFile, targetMachineId: MACHINE_ID });

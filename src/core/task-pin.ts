@@ -27,5 +27,5 @@ export function checkpointElsewhere(task: Pick<Task, 'machineId' | 'context'>, m
 export function retryRefusal(context: TaskContext, fileExists: (path: string) => boolean): string | null {
   const { resumeFile, targetMachineId } = context;
   if (!resumeFile || targetMachineId || fileExists(resumeFile)) return null;
-  return `Resume file ${resumeFile} is not on this machine; retry from the machine that has it`;
+  return `Resume file ${resumeFile} is not on this machine; retry from the machine that has it, or start a new scan if none does`;
 }
