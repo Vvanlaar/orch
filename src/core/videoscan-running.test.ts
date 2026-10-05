@@ -17,8 +17,10 @@ const dir = mkdtempSync(join(tmpdir(), 'orch-running-'));
 process.env.VIDEOSCAN_DIR = dir;
 const { runVideoscan, isVideoscanRunning, holdVideoscan, killVideoscan } = await import('./videoscan-runner.js');
 
-// The scan JSON the run "wrote": post-processing syncs it, which is the slow part.
-writeFileSync(join(dir, 'videoscan-x.nl-2026-01-01T00-00-00.json'), JSON.stringify({ domain: 'x.nl', _state: { queue: ['https://x.nl/a'] } }));
+// The scan JSON of the run: post-processing syncs it, which is the slow part. The runner only
+// takes a file the run names (stdout marker) or resumes, not just any file of the domain.
+const SCAN_JSON = 'videoscan-x.nl-2026-01-01T00-00-00.json';
+writeFileSync(join(dir, SCAN_JSON), JSON.stringify({ domain: 'x.nl', _state: { queue: ['https://x.nl/a'] } }));
 
 afterAll(() => {
   rmSync(dir, { recursive: true, force: true });
@@ -55,6 +57,7 @@ describe('isVideoscanRunning', () => {
     const run = runVideoscan(1, { scanUrl: 'https://x.nl/' });
     expect(isVideoscanRunning(1)).toBe(true);
 
+    scan.stdout.emit('data', `VIDEOSCAN_JSON: ${SCAN_JSON}\n`);
     scan.emit('close', 0);
     expect(isVideoscanRunning(1)).toBe(true);
     report.emit('close', 0);
@@ -69,7 +72,7 @@ describe('isVideoscanRunning', () => {
   it('stays true through the post-crash sync after a non-zero exit', async () => {
     const [scan] = procs(1);
     const finishSync = holdSync();
-    const run = runVideoscan(2, { scanUrl: 'https://x.nl/' });
+    const run = runVideoscan(2, { scanUrl: 'https://x.nl/', resumeFile: join(dir, SCAN_JSON) });
 
     scan.emit('close', 1);
     await vi.waitFor(() => expect(uploadScanFiles).toHaveBeenCalled());

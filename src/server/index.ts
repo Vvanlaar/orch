@@ -33,7 +33,7 @@ import { initSettings } from '../core/settings.js';
 import { isSupabaseConfigured, MACHINE_ID } from '../core/db/client.js';
 import { dbGetNotifications, dbInsertNotification } from '../core/db/notifications.js';
 import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
-import { getVideoscanDir, isDerivedScan, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, pauseVideoscan, findScanFileOfRun, isVideoscanRunning, deleteScans, wrapUpBatch, type ReportOptions } from '../core/videoscan-runner.js';
+import { getVideoscanDir, isDerivedScan, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, pauseVideoscan, findScanFileOfRun, scanDomain, isVideoscanRunning, deleteScans, wrapUpBatch, type ReportOptions } from '../core/videoscan-runner.js';
 import { getClosedBatches, markBatchClosed, markBatchOpen } from '../core/batch-state.js';
 import { isPidAlive, killProcessTree } from '../core/process-kill.js';
 import { createSignedUrl, downloadFile } from '../core/db/storage.js';
@@ -479,9 +479,7 @@ app.post('/api/tasks/:id/resume', asyncHandler(async (req, res) => {
   let resumeFile = task.context.resumeFile;
   if (!resumeFile && task.startedAt) {
     // Best-effort recovery: the scan JSON this run wrote for the task's domain.
-    const url = task.context.scanUrl || task.context.urls?.[0];
-    let domain: string | undefined;
-    try { domain = url ? new URL(url).hostname.replace(/^www\./, '') : undefined; } catch { /* noop */ }
+    const domain = scanDomain(task.context);
     const candidate = domain ? findScanFileOfRun(domain, task.startedAt) : null;
     if (candidate) {
       // findScanFileOfRun returns just the filename; resolve to absolute so
