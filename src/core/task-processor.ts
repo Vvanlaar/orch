@@ -42,9 +42,9 @@ import {
   checkoutPRInWorktree,
   findRemoteForRepo,
 } from './git-ops.js';
-import { runVideoscan, holdVideoscan, findLatestScanFileForDomain, scanDomain, readPagesScanned, readScanFileInfo, resumeBudget, getVideoscanDir, mergeScans, syncScanToSupabase, generateReport as generateVideoscanReport, type VideoscanResult } from './videoscan-runner.js';
+import { runVideoscan, holdVideoscan, controlFileName, findLatestScanFileForDomain, scanDomain, readPagesScanned, readScanFileInfo, resumeBudget, getVideoscanDir, mergeScans, syncScanToSupabase, generateReport as generateVideoscanReport, type VideoscanResult } from './videoscan-runner.js';
 import { createStaleTracker, decideDeadScan, freeSlots, singleFlight, withRetry } from './queue-helpers.js';
-import { isPidAlive, killProcessTree } from './process-kill.js';
+import { getProcessInfos, isPidAlive, killProcessTree, matchProcessIdentity, verifyProcessIdentity, type ExpectedProcess, type ProcessInfo } from './process-kill.js';
 import { dbArchiveVideoscans } from './db/videoscans.js';
 import { MACHINE_ID, isSupabaseConfigured } from './db/client.js';
 import { dbSubscribeTaskChanges, type LeanTask } from './db/tasks.js';
@@ -802,6 +802,62 @@ async function resolveDeadVideoscan(t: Task, why: string): Promise<void> {
   void autoMergeBatchIfDone(t.context);
 }
 
+const SERVER_STARTED_MS = Date.now() - Math.round(process.uptime() * 1000);
+
+/** What a live process must look like to be this task's; a recorded PID may have been reused since. */
+export function expectedTaskProcess(t: Pick<Task, 'id' | 'type'> & { startedAt?: string }): ExpectedProcess {
+  const started = t.startedAt ? Date.parse(t.startedAt) : NaN;
+  const notBefore = Number.isNaN(started) ? {} : { notBeforeMs: started };
+  if (t.type === 'videoscan') return { markers: ['scan.mjs', controlFileName(t.id)], ...notBefore };
+  return {
+    // claude-runner passes --dangerously-skip-permissions on every launch path. It narrows plain
+    // 'claude' but still matches the user's own sessions started with that flag.
+    markers: ['claude', '--dangerously-skip-permissions'],
+    ...notBefore,
+    // Those markers name no task. A matching process created since this server started is
+    // either a later session on a reused PID or the task's own, run by another instance on
+    // this machine: ambiguous, so it is neither killed nor reported gone. Creation times are
+    // only known on Windows; elsewhere the markers alone decide.
+    notAfterMs: SERVER_STARTED_MS,
+  };
+}
+
+/**
+ * Kill a task's process that this server instance has no handle on. The PID may since
+ * belong to an unrelated program: only a verified match is killed, and a mismatch means the
+ * task's process is gone. Returns why the process may still be alive (kill failed, or it
+ * can't be verified), or undefined.
+ */
+export async function killStrayTaskProcess(t: Task): Promise<string | undefined> {
+  if (!isPidAlive(t.pid)) return undefined;
+  const check = await verifyProcessIdentity(t.pid!, expectedTaskProcess(t));
+  if (check.identity === 'unknown') return `cannot verify PID ${t.pid} belongs to this task (${check.error}); not killed`;
+  if (check.identity !== 'match') return undefined;
+  const result = await killProcessTree(t.pid!);
+  return result.killed ? undefined : result.error;
+}
+
+/**
+ * Ids of rows whose scan process is gone: PID dead, or now held by another program. If the
+ * process table can't be read, live PIDs count as their scans and the next tick retries.
+ */
+async function deadScanIds(rows: LeanTask[]): Promise<number[]> {
+  const live = rows.filter(t => isPidAlive(t.pid));
+  let infos: Map<number, ProcessInfo> | null = null;
+  if (live.length) {
+    try {
+      infos = await getProcessInfos(live.map(t => t.pid!));
+    } catch (err) {
+      log.warn(`Reading the process table failed; assuming live PIDs are their scans: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+  // An unreadable command line (e.g. an elevated instance's scan) counts as its scan too.
+  const reused = infos
+    ? live.filter(t => ['mismatch', 'gone'].includes(matchProcessIdentity(infos.get(t.pid!) ?? null, expectedTaskProcess(t))))
+    : [];
+  return [...rows.filter(t => !live.includes(t)), ...reused].map(t => t.id);
+}
+
 /**
  * Running videoscan rows of this machine that no live process backs — e.g. the scan
  * finished while the DB was down, so its final status write was lost. Left alone they
@@ -809,9 +865,8 @@ async function resolveDeadVideoscan(t: Task, why: string): Promise<void> {
  */
 async function reconcileDeadVideoscans(rows: LeanTask[]): Promise<Set<number>> {
   const settled = new Set<number>();
-  const stale = deadScans.update(rows
-    .filter(t => t.type === 'videoscan' && t.machineId === MACHINE_ID && !inFlight.has(t.id) && !isPidAlive(t.pid))
-    .map(t => t.id));
+  const stale = deadScans.update(await deadScanIds(rows
+    .filter(t => t.type === 'videoscan' && t.machineId === MACHINE_ID && !inFlight.has(t.id))));
   for (const id of stale) {
     try {
       const t = await getTask(id);
@@ -913,14 +968,25 @@ async function settleOrphan(t: Task): Promise<void> {
 
   // If the prior server died but its scan.mjs child survived (tsx-watch reload, etc.),
   // kill it before we spawn a respawn — otherwise two scan.mjs processes race on the
-  // same resume file.
+  // same resume file. After a reboot the PID may belong to an unrelated program: only
+  // kill a process that is verifiably this task's scan.
   if (isPidAlive(t.pid)) {
-    log.warn(`Orphaned videoscan #${t.id} has live PID ${t.pid} from previous instance — killing tree`);
-    const result = await killProcessTree(t.pid!);
-    if (!result.killed) {
-      log.error(`Failed to kill orphaned scan #${t.id} PID ${t.pid}: ${result.error}; skipping auto-resume to avoid double-spawn`);
-      await failTask(t.id, `Orphan kill failed: ${result.error}`);
+    const check = await verifyProcessIdentity(t.pid!, expectedTaskProcess(t));
+    if (check.identity === 'unknown') {
+      log.error(`Orphaned scan #${t.id}: cannot verify PID ${t.pid} is its scan.mjs (${check.error}); not killing, skipping auto-resume to avoid double-spawn`);
+      await failTask(t.id, `Orphan PID ${t.pid} could not be verified (${check.error}); not killed`);
       return;
+    }
+    if (check.identity === 'match') {
+      log.warn(`Orphaned videoscan #${t.id} has live PID ${t.pid} from previous instance — killing tree`);
+      const result = await killProcessTree(t.pid!);
+      if (!result.killed) {
+        log.error(`Failed to kill orphaned scan #${t.id} PID ${t.pid}: ${result.error}; skipping auto-resume to avoid double-spawn`);
+        await failTask(t.id, `Orphan kill failed: ${result.error}`);
+        return;
+      }
+    } else {
+      log.warn(`Orphaned videoscan #${t.id}: PID ${t.pid} is no longer its scan.mjs (${check.identity}) — not killing it`);
     }
   }
   await resolveDeadVideoscan(t, 'Server restarted while scan was running');
