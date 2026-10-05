@@ -404,6 +404,28 @@ export function readScanFileInfo(name: string): ScanFileInfo | null {
 }
 
 /**
+ * Whether a scan JSON was written by the run that started at `startedAt`. An older
+ * scanDate is the finished report of an earlier scan, and a merged or summary file
+ * belongs to no single run: resuming either rewrites it in place as if it were this run.
+ */
+export function scanIsFromRun(filename: string, scanDate: unknown, startedAt: string): boolean {
+  if (isDerivedScan(filename) || typeof scanDate !== 'string') return false;
+  return Date.parse(scanDate) >= Date.parse(startedAt);
+}
+
+/** The latest scan JSON for `domain` if the run started at `startedAt` wrote it, else null. */
+export function findScanFileOfRun(domain: string, startedAt: string): string | null {
+  const name = findLatestScanFileForDomain(domain);
+  if (!name) return null;
+  try {
+    const { scanDate } = JSON.parse(readFileSync(join(VIDEOSCAN_DIR, name), 'utf-8'));
+    return scanIsFromRun(name, scanDate, startedAt) ? name : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * maxPages and targetPages for auto-resuming an orphaned scan. scan.mjs reads a
  * resume's maxPages as "this many more", so passing the original maxPages
  * again would scan a full extra round on every server restart. A task that is
