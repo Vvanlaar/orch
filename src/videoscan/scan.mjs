@@ -55,7 +55,10 @@ export const DETECTORS = {
       /jwplatform\.com/i,
       /jwplayer\.com/i,
       /jwpcdn\.com/i,
-      /jwplayer\(/i,
+      // bare jwplayer() (no argument) is control code, not a player — hilvarenbeek2030.nl
+      // runs `if (jwplayer()) jwplayer().stop()` on 7 pages without one. A named call
+      // can still be control code (jwplayer('p').stop()); accepted, none seen so far.
+      /jwplayer\(\s*[^)\s]/i,
       /jw-video-player/i,
       /cdn\.jwplayer\.com\/libraries/i,
       /cdn\.jwplayer\.com\/v2\/playlists/i,

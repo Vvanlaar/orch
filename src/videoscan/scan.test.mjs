@@ -1407,6 +1407,27 @@ test("Video.js still detected — video-js class, <video-js> tag, video.js path"
   assert.ok(withNet.find((r) => r.player === "Video.js").evidence.some((e) => e.startsWith("Network:")), "video.js path still matched on the network");
 });
 
+// ── JW Player: bare jwplayer() is control code, not a player ───────
+test("bare jwplayer() control call is NOT a JW Player", () => {
+  // hilvarenbeek2030.nl gallery script, self-hosted lib, no player on the page
+  const html = '<script src="/UI/JS/jwplayer-5.9/jwplayer.js"></script>' +
+    "<script>$('.item1').live('click', function () { if (jwplayer()) jwplayer().stop(); });</script>";
+  assert.deepEqual(names(detectFromCorpus(html)), []);
+  assert.deepEqual(names(detectFromCorpus("<script>jwplayer( ).stop()</script>")), []);
+});
+
+test("JW Player setup call still detected", () => {
+  for (const call of [
+    "jwplayer('video1_3049').setup({ 'file': '/upload/video/1 guitar.mp4' })",
+    'jwplayer("player").setup({})',
+    "jwplayer( el ).setup({})",
+    'jwplayer(\\"player\\").setup({})', // JSON-escaped
+    "jwplayer(&quot;player&quot;).setup({})", // HTML-escaped
+  ]) {
+    assert.deepEqual(names(detectFromCorpus(`<script>${call}</script>`)), ["JW Player"], call);
+  }
+});
+
 // ── Network: trackers carry the page URL in their query ────────────
 test("a tracker query naming a player is NOT that player", () => {
   const network = [
