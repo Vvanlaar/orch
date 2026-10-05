@@ -77,8 +77,8 @@ export function holdVideoscan(taskId: number): () => void {
  * True while a run of this task is in flight on this machine: until runVideoscan
  * has settled and every other holder has released, not just while scan.mjs is
  * alive. After scan.mjs exits the run still merges, writes the report and PDF and
- * syncs, which takes seconds to minutes; a second run started in that window
- * races the first one's result.
+ * syncs, which takes seconds to minutes; a resume accepted in that window is
+ * swallowed when the first run records its result.
  */
 export function isVideoscanRunning(taskId: number): boolean {
   return runHolds.has(taskId);

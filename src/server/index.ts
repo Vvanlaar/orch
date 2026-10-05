@@ -469,7 +469,7 @@ app.post('/api/tasks/:id/resume', asyncHandler(async (req, res) => {
     res.status(409).json({ error: 'Scan is still finishing its pause (report, PDF and sync can take a few minutes) — try again shortly' });
     return;
   }
-  // isVideoscanRunning above only sees this machine's subprocesses.
+  // isVideoscanRunning above only sees this machine's runs.
   const elsewhere = checkpointElsewhere(task, MACHINE_ID);
   if (elsewhere) {
     res.status(400).json({ error: `Task is on a different machine (${elsewhere})` });
