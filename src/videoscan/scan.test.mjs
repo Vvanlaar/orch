@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, normalizeUrl, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource } from "./scan.mjs";
+import { DETECTORS, detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, pickConsent, isTranslatedCopy, translationPrefix, normalizeUrl, restoreQueue, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource } from "./scan.mjs";
 
 const names = (result) => result.map((r) => r.player).sort();
 
@@ -174,6 +174,195 @@ test("YouTube strings in tracking code, cookie banners and footer icons are NOT 
   assert.deepEqual(names(detectFromCorpus(banner)), []);
 });
 
+// A Next.js flight payload carries page HTML as a JSON string: < > as \u003c \u003e, quotes as \".
+const nextPayload = (html) =>
+  `<script>self.__next_f.push([1,"${html.replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/"/g, "\\\"")}"])</script>`;
+
+test("JSON-escaped <a href> in a Next.js payload is a link, not a player", () => {
+  // capelleaandenijssel.nl/rijbewijs: text links to a CBR video on bbvms.com
+  const payload = nextPayload(`<p>Deze <a href="https://cbr.bbvms.com/p/cbr_indienen_gv/p/654.html?inheritDimensions=true">video van het CBR</a> geeft advies</p>`);
+  assert.deepEqual(names(detectFromCorpus(payload)), []);
+});
+
+test("JSON-escaped Blue Billywig embed script still detected", () => {
+  const payload = nextPayload(`<a class="x">Kijk</a><script src="https://demo.bbvms.com/p/default/c/4256593.js"></script>`);
+  assert.deepEqual(names(detectFromCorpus(payload)), ["Blue Billywig"]);
+});
+
+test("JSON-escaped anchor: data-href first, double-escaped prop HTML", () => {
+  const dataHref = nextPayload('<a data-href="#" href="https://cbr.bbvms.com/p/x.html">video</a>');
+  assert.deepEqual(names(detectFromCorpus(dataHref)), []);
+  // HTML inside a JSON prop (dangerouslySetInnerHTML.__html) is escaped twice
+  const doubled = '"__html":"\\u003ca href=\\\\\\"https://cbr.bbvms.com/p/x.html\\\\\\"\\u003evideo\\u003c/a\\u003e"';
+  assert.deepEqual(names(detectFromCorpus(doubled)), []);
+});
+
+test("JSON-escaped anchor without href doesn't strip the next tag's href", () => {
+  // only < escaped, so the anchor never closes with \u003e
+  const payload = '\\u003ca class=\\"x\\">Kijk\\u003c/a>\\u003clink rel=\\"preload\\" as=\\"script\\" href=\\"https://demo.bbvms.com/p/default/c/1.js\\">';
+  assert.deepEqual(names(detectFromCorpus(payload)), ["Blue Billywig"]);
+});
+
+test("unclosed JSON-escaped anchors stay linear", () => {
+  const html = "\\u003ca x ".repeat(20000);
+  const t0 = performance.now();
+  detectFromCorpus(html);
+  assert.ok(performance.now() - t0 < 500, "stripAnchorHrefs went quadratic");
+});
+
+test("Vimeo host in a cookie-banner domain list is NOT a player", () => {
+  // gouda.nl: the consent config ships on every page
+  const cfg = '<script>window.cc={"cookies":[{"cookieID":"player","domain":".vimeo.com","provider":"vimeo.com"},{"cookieID":"sync_active","domain":"player.vimeo.com","provider":"vimeo.com"}]}</script>';
+  assert.deepEqual(names(detectFromCorpus(cfg)), []);
+});
+
+test("Vimeo CDN host in a CookieYes provider list is NOT a player", () => {
+  // defryskemarren.nl: the blocklist ships on every page
+  const cfg = '<script>var cy={"_providersToBlock":[{"re":"youtube.com|youtube-nocookie.com","categories":["analytics"]},{"re":"player.vimeo.com|highcharts.com|vimeocdn.com","categories":["analytics"]}]};</script>';
+  assert.deepEqual(names(detectFromCorpus(cfg)), []);
+});
+
+test("Vimeo CDN asset with a path still detected", () => {
+  assert.deepEqual(names(detectFromCorpus('<script src="https://f.vimeocdn.com/p/4.37.1/js/player.js"></script>')), ["Vimeo"]);
+  assert.deepEqual(names(detectFromCorpus('<img src="https://i.vimeocdn.com/video/1017466491_640.jpg">')), ["Vimeo"]);
+});
+
+test("Vimeo URLs with JSON-escaped or URL-encoded slashes still detected", () => {
+  const bs = String.fromCharCode(92); // backslash, kept out of the source literal
+  const esc = (s) => s.replaceAll("/", bs + "/");
+  for (const html of [
+    `<div data-embed='{"src":"${esc("https://player.vimeo.com/video/123")}"}'></div>`,
+    `<div data-embed='{"thumb":"${esc("https://i.vimeocdn.com/video/1_640.jpg")}"}'></div>`,
+    `<script>var x="${"https://i.vimeocdn.com/video/1.jpg".replaceAll("/", bs + bs + "/")}";</script>`,
+    '<img src="/_next/image?url=https%3A%2F%2Fi.vimeocdn.com%2Fvideo%2F1.jpg">',
+  ]) assert.deepEqual(names(detectFromCorpus(html)), ["Vimeo"], html);
+});
+
+test("QR-scanner camera preview <video> is NOT a player", () => {
+  assert.deepEqual(names(detectFromCorpus('<div class="qr"><video id="QrScanVideoPreview"></video></div>')), []);
+  assert.deepEqual(names(detectFromCorpus('<video class="webcam-feed" autoplay playsinline></video>')), []);
+});
+
+test("video-application recorder <video> is NOT a player", () => {
+  // Recruitee job page: the applicant's own recording surface, hidden until used.
+  const html = '<video tabindex="-1" data-selector="recorder-status" class="ba-videorecorder-video ba-videorecorder-norecorder" ' +
+    'data-video="video" playsinline="" disablepictureinpicture=""></video>';
+  assert.deepEqual(names(detectFromCorpus(html)), []);
+  // a recorder-named video that plays a file is still a video
+  for (const video of [
+    '<video class="recorder-demo" src="/demo.mp4"></video>',
+    '<video class="recorder-demo"><source src="/demo.mp4"></video>',
+    '<video class="recorder-lesson" data-src="/lesson.mp4"></video>',
+    '<video id="RecorderPlayback" controls></video>',
+  ]) assert.deepEqual(names(detectFromCorpus(video)), ["HTML5 native"], video);
+  // and a recorder next to a real video does not hide it, either order
+  const real = '<video class="hero"><source src="/a.mp4"></video>';
+  assert.deepEqual(names(detectFromCorpus(html + real)), ["HTML5 native"]);
+  assert.deepEqual(names(detectFromCorpus(real + html)), ["HTML5 native"]);
+});
+
+test("<video> with an ordinary id/class still detected as HTML5 native", () => {
+  assert.deepEqual(names(detectFromCorpus('<video id="hero" class="header-video" autoplay muted><source src="/a.mp4"></video>')), ["HTML5 native"]);
+  // a later sibling tag's camera class must not leak into this one
+  assert.deepEqual(names(detectFromCorpus('<video controls src="/b.mp4"></video><div class="camera"></div>')), ["HTML5 native"]);
+  // a camera-ish name on a video that has a src is still a video
+  assert.deepEqual(names(detectFromCorpus('<video class="security-camera-promo" controls src="/promo.mp4"></video>')), ["HTML5 native"]);
+  // data-id is not the id attribute
+  assert.deepEqual(names(detectFromCorpus('<video data-id="camera-1" controls></video>')), ["HTML5 native"]);
+});
+
+test("'Vimeo-player' in cookie-modal prose is NOT a player", () => {
+  const html = `<span>Schakelt de ingesloten Vimeo player-functie in. Cookies die worden geplaatst door ingesloten Vimeo-players zijn onderworpen aan Vimeo's beleid. Zie de Vimeo-player instellingen.</span>`;
+  assert.deepEqual(names(detectFromCorpus(html)), []);
+});
+
+test("vimeo-player as tag or attribute token still detected", () => {
+  const bs = String.fromCharCode(92); // backslash, kept out of the source literal
+  for (const html of [
+    '<vimeo-player video-id="76979871"></vimeo-player>',
+    '<div class="embed vimeo-player" data-id="1"></div>',
+    '<div id="vimeo-player"></div>',
+    '<figure class="wp-block-vimeo-player"></figure>',
+    '<div class="js-vimeo-player"></div>',
+    '<div data-module="vimeo-player"></div>',
+    `<script>var h="${bs}u003cvimeo-player video-id=${bs}"1${bs}"${bs}u003e";</script>`,
+    `<script>var h="<div class=${bs}"vimeo-player${bs}">";</script>`,
+    '<script>{"className":"vimeo-player"}</script>',
+    '<div data-embed="&lt;vimeo-player video-id=&quot;1&quot;&gt;"></div>',
+  ]) assert.deepEqual(names(detectFromCorpus(html)), ["Vimeo"], html);
+});
+
+test("vimeo-player pattern stays linear on a long run of ?id= text", () => {
+  const html = "<pre>" + "https://x.nl/p?id=1&q=2 ".repeat(50000) + "</pre>";
+  const t0 = performance.now();
+  detectFromCorpus(html);
+  assert.ok(performance.now() - t0 < 2000, "vimeo-player regex backtracked");
+});
+
+test("Vimeo embeds with a path on player.vimeo.com still detected", () => {
+  assert.deepEqual(names(detectFromCorpus('<script src="https://player.vimeo.com/api/player.js"></script>')), ["Vimeo"]);
+  assert.deepEqual(names(detectFromCorpus('<iframe src="https://player.vimeo.com/video/1017466491?dnt=1"></iframe>')), ["Vimeo"]);
+});
+
+test("YouTube embed with a doubled slash before the id is detected", () => {
+  // purmerend.nl CMS output
+  assert.deepEqual(names(detectFromCorpus('<iframe src="https://www.youtube.com/embed//GIRdeMdgYVY"></iframe>')), ["YouTube"]);
+});
+
+test("StreamPartner iframe player is detected (video.js runs inside the iframe)", () => {
+  // breda.nl/milieustation: only the iframe src is in the page; its video.js is network-only
+  const html = '<iframe src="https://ssl.streampartner.nl/player.php?url=n6ug3eb52lfhrz0utmjf&access=qdo994srioyhy60n9qpd"></iframe>';
+  const net = ["https://ssl.streampartner.nl/video_opensource/videojs-quality-menu.css"];
+  assert.deepEqual(names(detectFromCorpus(html, "", net)), ["StreamPartner"]);
+  // a link to the platform's site is not a player
+  assert.deepEqual(names(detectFromCorpus('<p>Hosted by streampartner.nl</p>')), []);
+});
+
+test("player library CSS and a site-wide library load are NOT a player", () => {
+  // gemeenteraad.denhelder.nl: video.js default styles + stylesheet on every page
+  const denHelder = '<head><style class="vjs-styles-defaults">.video-js { width: 300px; }</style>' +
+    '<link rel="stylesheet" type="text/css" href="https://static.gemeenteoplossingen.nl/1.0/css/video-js.min.css"></head><p>x</p>';
+  assert.deepEqual(names(detectFromCorpus(denHelder)), []);
+  // jeugdhulprijnmond.nl: theme CSS names .mejs-container, video.js loaded site-wide
+  // (its <script src> is in page.content() too and names the library)
+  const rijnmond = '<style>div.tf_audio_lazy audio{height:0}.mejs-container{visibility:visible}</style>' +
+    '<script src="https://cdn.jsdelivr.net/npm/video.js@8/dist/video.min.js"></script>' +
+    "<script src='/wp-includes/js/mediaelement/mediaelement-and-player.min.js'></script>" +
+    '<link rel="preload" as="style" href="/css/video-js.min.css"><p>x</p>';
+  const net = ["https://cdn.jsdelivr.net/npm/video.js@8/dist/video.min.js", "https://x.nl/wp-includes/js/mediaelement/mediaelement-and-player.min.js"];
+  assert.deepEqual(names(detectFromCorpus(rijnmond, "", net)), []);
+});
+
+test("an unclosed or JSON-escaped <style> does not swallow a player", () => {
+  const unclosed = '<script>var s="<style>"+css;</script><div><video class="video-js vjs-tech" src="a.mp4"></video></div><style>.b{}</style>';
+  assert.deepEqual(names(detectFromCorpus(unclosed)), ["HTML5 native", "Video.js"]);
+  const escaped = '<script type="application/json">{"c":"<style>.a{}<\\/style>"}</script>' +
+    '<iframe src="https://www.youtube.com/embed/M7lc1UVf-VE"></iframe><style>.b{}</style>';
+  assert.deepEqual(names(detectFromCorpus(escaped)), ["YouTube"]);
+});
+
+test("YouTube IFrame API player built in script is detected by its videoId", () => {
+  const html = '<div id="yt"></div><script>new YT.Player("yt", { height: 390, videoId: "M7lc1UVf-VE" })</script>';
+  assert.deepEqual(names(detectFromCorpus(html, "", ["https://www.youtube.com/iframe_api"])), ["YouTube"]);
+  // a videoId in some other player's config is not YouTube
+  assert.deepEqual(names(detectFromCorpus('<script>player.load({ videoId: "12345678901" })</script>')), []);
+});
+
+test("YouTube IFrame API loader alone is NOT a player", () => {
+  // almelobuurtsamen.nl / actiefhoogeveen.nl: loaded on every page, no embed
+  const net = ["https://www.youtube.com/iframe_api", "https://www.youtube.com/s/player/7460dd14/www-widgetapi.vflset/www-widgetapi.js"];
+  assert.deepEqual(names(detectFromCorpus("<p>x</p>", "", net)), []);
+});
+
+test("real players next to library CSS / the IFrame API are still detected", () => {
+  const vjs = '<style>.video-js{}</style><video class="video-js vjs-tech" src="/a.mp4"></video>';
+  assert.ok(names(detectFromCorpus(vjs)).includes("Video.js"));
+  const mejs = '<style>.mejs-container{}</style><div class="mejs-container"><video src="/a.mp4"></video></div>';
+  assert.ok(names(detectFromCorpus(mejs)).includes("MediaElement.js"));
+  const yt = ["https://www.youtube.com/iframe_api", "https://www.youtube.com/embed/TVH0auuQ_lE?enablejsapi=1"];
+  assert.deepEqual(names(detectFromCorpus("<p>x</p>", "", yt)), ["YouTube"]);
+});
+
 test("YouTube embeds with a video id still detected, consent-gated and playlist ones too", () => {
   const consent = `<div class="youtube-responsive consent-ce no-consent">
     <iframe class="consent-ce--iframe" src="https://www.youtube-nocookie.com/embed/LssNqQcxhz8?iv_load_policy=1"></iframe></div>`;
@@ -183,6 +372,12 @@ test("YouTube embeds with a video id still detected, consent-gated and playlist 
   // theaterspeelhuis.nl hero: only a video-id attribute until consent loads the API
   const hero = `<div class="youtube screen mute active" id="player-ss0uBuG6N7k" data-youtubevid="ss0uBuG6N7k"></div>`;
   assert.deepEqual(names(detectFromCorpus(hero)), ["YouTube"]);
+  // nu.venlo.nl: Drupal media oEmbed iframe, lazy until consent
+  const drupal = `<iframe data-src="https://nu.venlo.nl/media/oembed?url=https%3A//youtu.be/SrT2SAgDv3M&amp;max_width=0"></iframe>`;
+  assert.deepEqual(names(detectFromCorpus(drupal)), ["YouTube"]);
+  // …while the footer's channel link on every page is not a player
+  const footer = `<li class="youtube"><a href="https://www.youtube.com/user/DeGemeenteVenlo" aria-label="Video">YouTube</a></li>`;
+  assert.deepEqual(names(detectFromCorpus(footer)), []);
 });
 
 test("self-hosted Flowplayer library with no player is NOT Flowplayer (and doesn't hide YouTube)", () => {
@@ -277,6 +472,11 @@ test("Kaltura kWidget.addReadyCallback still detected (self-hosted, no kaltura.c
   assert.deepEqual(names(result), ["Kaltura"]);
 });
 
+test("Kaltura's rendered kWidgetIframeContainer detected on a self-hosted embed", () => {
+  const html = `<div class="kWidgetIframeContainer"><iframe src="https://video.uni.nl/p/102/sp/10200/embedIframeJs/uiconf_id/1"></iframe></div>`;
+  assert.deepEqual(names(detectFromCorpus(html)), ["Kaltura"]);
+});
+
 test("a word ending in kWidget is NOT Kaltura (word boundary)", () => {
   assert.deepEqual(names(detectFromCorpus(`<script>zoekWidget.embed({});</script>`)), []);
   assert.deepEqual(names(detectFromCorpus(`<script>mijnkWidget.embed();</script>`)), []);
@@ -337,7 +537,8 @@ test("Network evidence keeps the matched token when the URL is truncated", () =>
     "https://example.nl/sites/default/files/js/js_" +
     "A".repeat(43) +
     "/xx_vjs-yy.js?v=1";
-  const result = detectPlayers("<p>x</p>", [url]);
+  // Video.js needs markup too (a library request alone is not a player).
+  const result = detectPlayers('<div class="video-js"></div>', [url]);
   const evidence = result.flatMap((r) => r.evidence);
   assert.deepEqual(names(result), ["Video.js"]);
   assert.ok(
@@ -372,7 +573,8 @@ test("Network evidence: a match straddling the 80-char cut still gets a window",
   // for exactly this case; keying off match.index would drop the window and
   // leave the evidence showing only the first half of what fired.
   const url = "https://example.com/" + "b".repeat(55) + "/video.js?x=1";
-  const result = detectPlayers("<p>x</p>", [url]);
+  // Video.js needs markup too (a library request alone is not a player).
+  const result = detectPlayers('<div class="video-js"></div>', [url]);
   const evidence = result.flatMap((r) => r.evidence);
   assert.deepEqual(names(result), ["Video.js"]);
   assert.ok(
@@ -453,6 +655,9 @@ test("Drupal aggregated-JS bundle is NOT Video.js — network evidence", () => {
   // here flags 100% of pages, not a stray one.
   const result = detectFromCorpus("<p>Dataset page, no video.</p>", "", [DRUPAL_AGG_URL]);
   assert.deepEqual(names(result), []);
+  // Network-only Video.js is dropped anyway (NEEDS_MARKUP), so test the regex itself.
+  const path = DRUPAL_AGG_URL.split("?")[0];
+  assert.ok(!DETECTORS["Video.js"].scripts.some((re) => re.test(path)), "scripts regex must not match the bundle");
 });
 
 test("Drupal aggregated-JS bundle is NOT Video.js — same URL in HTML markup", () => {
@@ -473,8 +678,9 @@ test("Synthetic urlsafe-base64 blobs with vjs- inside do not match", () => {
 
 test("Real Video.js CDN script still detected (guard against over-narrowing)", () => {
   // vjs.zencdn.net is the only shape the `vjs` pattern is load-bearing for.
-  const result = detectFromCorpus("<p>x</p>", "", ["https://vjs.zencdn.net/8.10.0/video.min.js"]);
+  const result = detectFromCorpus('<div class="video-js"></div>', "", ["https://vjs.zencdn.net/8.10.0/video.min.js"]);
   assert.deepEqual(names(result), ["Video.js"]);
+  assert.ok(result[0].evidence.some((e) => e.includes("vjs.zencdn.net")), "network evidence kept");
 });
 
 test("Real Video.js markup still detected — vjs- skin classes", () => {
@@ -502,6 +708,13 @@ test("crawler trap: repeated path segments are rejected", () => {
   assert.equal(shouldSkipUrl(trap), true);
 });
 
+test("crawler trap: a segment repeated 4 times is rejected well inside the depth bound", () => {
+  // The fixture above has 16 segments, so the depth bound rejects it before the
+  // repeat count is ever read. 7 segments here: only the repeat check can fire.
+  assert.equal(isCrawlerTrap("https://example.nl/a/b/a/b/a/b/a"), true);
+  assert.equal(isCrawlerTrap("https://example.nl/a/b/a/b/a"), false);
+});
+
 test("crawler trap: excessive path depth is rejected", () => {
   const deep = "https://example.nl/" + Array.from({ length: 13 }, (_, i) => `s${i}`).join("/");
   assert.equal(isCrawlerTrap(deep), true);
@@ -515,6 +728,38 @@ test("crawler trap: the deepest real page in scan history is kept", () => {
   assert.equal(new URL(real).pathname.split("/").filter(Boolean).length, 10);
   assert.equal(isCrawlerTrap(real), false);
   assert.equal(shouldSkipUrl(real), false);
+});
+
+test("state-changing links (add to basket, log out) are skipped", () => {
+  for (const url of [
+    "https://www.agnietenhof.nl/order/add/event/11561",
+    "https://shop.example.nl/cart/add/42?qty=1",
+    "https://www.example.nl/winkelmandje/remove/7",
+    "https://www.example.nl/product/x?add-to-cart=123",
+    "https://www.agnietenhof.nl/logout",
+    "https://www.example.nl/mijn/uitloggen?next=/",
+    "https://www.example.nl/account/sign-out",
+    "https://www.example.nl/wp-login.php?action=logout&_wpnonce=abc",
+  ]) assert.equal(shouldSkipUrl(url), true, url);
+  for (const url of [
+    "https://www.agnietenhof.nl/agenda/the-odyssey-1xwr",
+    "https://www.example.nl/order/bevestiging",
+    "https://www.example.nl/order/add-ons",
+    "https://www.example.nl/nieuws/addendum-bestemmingsplan",
+    "https://www.example.nl/logout-problemen-oplossen",
+  ]) assert.equal(shouldSkipUrl(url), false, url);
+});
+
+test("pickConsent keeps only what accepting the banner added", () => {
+  const session = { name: "PHPSESSID", domain: "www.x.nl", path: "/", value: "s1" };
+  const bot = { name: "__cf_bm", domain: ".x.nl", path: "/", value: "b1" };
+  const before = [session, bot, { name: "cookieConsentLevel", domain: "www.x.nl", path: "/", value: "none" }];
+  const consent = { name: "cookieConsentLevel", domain: "www.x.nl", path: "/", value: "all" };
+  const cmp = { name: "CookieConsent", domain: "www.x.nl", path: "/", value: "{stamp:'x'}" };
+  const picked = pickConsent(before, [session, bot, consent, cmp], { theme: "dark" }, { theme: "dark", consentMode: "granted" });
+  assert.deepEqual(picked, { cookies: [consent, cmp], storage: { consentMode: "granted" } });
+  // nothing added: no consent state at all
+  assert.equal(pickConsent(before, before, {}, {}), null);
 });
 
 test("crawler trap: a segment repeating 3x is real traffic, not a trap", () => {
@@ -580,8 +825,8 @@ test("normalizeUrl still strips hash and trailing slash", () => {
   assert.equal(normalizeUrl("https://example.nl/pad/#sectie", "https://example.nl/"), "https://example.nl/pad");
 });
 
-test("resume restore: trap URLs are filtered, real pagination survives", () => {
-  // The restore pipeline from the --resume branch, run over a queue shaped like
+test("resume restore: trap URLs and translated copies are filtered, real pagination survives", () => {
+  // crawlSite's --resume restore, run over a queue shaped like
   // the real one: deep repeated-segment traps plus ?from= re-appended per link.
   const start = "https://waardwijzer.krimpenerwaard.nl/";
   const stored = [
@@ -589,16 +834,116 @@ test("resume restore: trap URLs are filtered, real pagination survives", () => {
     "https://waardwijzer.krimpenerwaard.nl/is/producten?view=list&from=162&from=150",
     "https://waardwijzer.krimpenerwaard.nl/is/producten?view=list&from=99&from=150",
     "https://waardwijzer.krimpenerwaard.nl/is/organisaties?size=12&from=372",
+    // Queued before translated copies were skipped
+    "https://waardwijzer.krimpenerwaard.nl/en/is/producten",
   ];
-  const restored = [
-    ...new Set(stored.map((u) => normalizeUrl(u, start)).filter((u) => u && !shouldSkipUrl(u))),
-  ];
-  assert.deepEqual(restored, [
+  assert.deepEqual(restoreQueue(stored, start), [
     // Real from= values are preserved; only trap output is dropped.
     "https://waardwijzer.krimpenerwaard.nl/is/producten?view=list&from=162&from=150",
     "https://waardwijzer.krimpenerwaard.nl/is/producten?view=list&from=99&from=150",
     "https://waardwijzer.krimpenerwaard.nl/is/organisaties?size=12&from=372",
   ]);
+});
+
+// ── Translated copies ───────────────────────────────────────────────
+// hilversum.nl spent 2,169 of a 3,000-page crawl on /es/ /bg/ /ro/ /pt/ copies.
+
+test("translated copies: language-prefixed pages are skipped, region/script forms too", () => {
+  const start = "https://hilversum.nl/";
+  for (const url of [
+    "https://hilversum.nl/es/vivir/aparcamiento",
+    "https://hilversum.nl/bg/wonen",
+    "https://hilversum.nl/ro",
+    "https://hilversum.nl/pt/",
+    "https://visitvlissingen.nl/de/entertainment-agenda",
+    "https://visitvlissingen.nl/fr/spotlights/market45",
+    "https://www.sociaalteamhouten.nl/uk/activiteiten/energiebalans-18-2",
+    "https://www.sociaalteamhouten.nl/ar/cookies",
+    "https://www.amstelveenvoorelkaar.nl/en/over-ons",
+    "https://x.nl/pt-br/sobre",
+    "https://x.nl/en-GB/about",
+    "https://x.nl/en_gb/about",
+    "https://x.nl/es-419/inicio",
+    "https://x.nl/zh-Hans/guanyu",
+  ]) {
+    assert.equal(shouldSkipUrl(url, start), true, url);
+  }
+  assert.equal(translationPrefix("https://x.nl/en_GB/about"), "en-gb");
+});
+
+test("translated copies: Dutch pages, /nl/ and Dutch region forms are kept", () => {
+  const start = "https://hilversum.nl/";
+  for (const url of [
+    "https://hilversum.nl/",
+    "https://hilversum.nl/wonen/parkeren",
+    "https://www.rijksmuseum.nl/nl/bezoek",
+    "https://samen.noordwijk.nl/nl-NL/projecten",
+    "https://x.nl/nl-be/wonen",
+  ]) {
+    assert.equal(shouldSkipUrl(url, start), false, url);
+  }
+});
+
+test("translated copies: a path that merely starts with a code is kept", () => {
+  for (const url of [
+    "https://x.nl/english-lessons",
+    "https://x.nl/debat",
+    "https://x.nl/esports",
+    "https://x.nl/Engels/cursus",
+    "https://www.harderwijk.nl/de-wolf", // region-looking, but not a region or script
+    "https://www.ing.nl/de-ing/over-ons",
+    // Codes that are Dutch paths on real sites, so not listed
+    "https://waardwijzer.krimpenerwaard.nl/is/product/154586",
+    "https://www.agnietenhof.nl/my/tickets",
+    "https://www.utrecht.nl/th",
+    // Only the first segment counts, and a code in a later one is a page
+    "https://x.nl/nieuws/en/overig",
+  ]) {
+    assert.equal(shouldSkipUrl(url, "https://x.nl/"), false, url);
+  }
+});
+
+test("translated copies: hosts and query strings are left alone", () => {
+  assert.equal(shouldSkipUrl("https://en.x.nl/wonen", "https://x.nl/"), false);
+  assert.equal(shouldSkipUrl("https://x.nl/wonen?lang=en", "https://x.nl/"), false);
+});
+
+test("translated copies: a scan started under a language prefix keeps that language", () => {
+  const start = "https://www.rijksmuseum.nl/en/visit";
+  assert.equal(shouldSkipUrl("https://www.rijksmuseum.nl/en/collection", start), false);
+  assert.equal(shouldSkipUrl("https://www.rijksmuseum.nl/EN/collection", start), false);
+  assert.equal(shouldSkipUrl("https://www.rijksmuseum.nl/nl/collectie", start), false);
+  assert.equal(shouldSkipUrl("https://www.rijksmuseum.nl/de/besuchen", start), true);
+  // The prefix must match: pt-br asked for Brazilian Portuguese, not /pt/
+  assert.equal(isTranslatedCopy("https://x.nl/pt-br/sobre", "https://x.nl/pt_BR/"), false);
+  assert.equal(isTranslatedCopy("https://x.nl/pt/sobre", "https://x.nl/pt-br/"), true);
+  // No start URL: every translation prefix is skipped
+  assert.equal(isTranslatedCopy("https://x.nl/en/about"), true);
+});
+
+test("urlSection strips a Dutch region prefix and a translation prefix alike", () => {
+  assert.equal(urlSection("https://x.nl/nl-be/wonen/huur").section, "wonen");
+  assert.equal(urlSection("https://x.nl/pt-br/viver/aluguel").section, "viver");
+  assert.equal(urlSection("https://x.nl/debat/raad/2024").section, "debat");
+});
+
+test("discoverSitemapUrls drops translated copies and skips a translation's sitemap", async (t) => {
+  const fetched = [];
+  const bodies = {
+    "https://x.nl/robots.txt": "Sitemap: https://x.nl/index.xml",
+    "https://x.nl/index.xml":
+      "<sitemapindex><loc>https://x.nl/nl.xml</loc><loc>https://x.nl/es/sitemap.xml</loc></sitemapindex>",
+    "https://x.nl/nl.xml":
+      "<urlset><loc>https://x.nl/wonen</loc><loc>https://x.nl/en/living</loc><loc>https://x.nl/nl/nieuws</loc></urlset>",
+    "https://x.nl/es/sitemap.xml": "<urlset><loc>https://x.nl/es/vivir</loc></urlset>",
+  };
+  t.mock.method(globalThis, "fetch", async (url) => {
+    fetched.push(url);
+    return url in bodies ? new Response(bodies[url]) : new Response("", { status: 404 });
+  });
+  const urls = await discoverSitemapUrls("https://x.nl/", "x.nl");
+  assert.deepEqual(urls.sort(), ["https://x.nl/nl/nieuws", "https://x.nl/wonen"]);
+  assert.ok(!fetched.includes("https://x.nl/es/sitemap.xml"));
 });
 
 // ── Company Webcast / iBabs (bestuurlijkeinformatie.nl meeting portals) ──
@@ -640,21 +985,70 @@ test("iBabs branding alone is NOT a video (whole-site false positive)", () => {
 });
 
 test("Company Webcast embed detected from the marker alone", () => {
-  // The SDK <script> is omitted on purpose: were it present it would satisfy
-  // the host pattern by itself, and the marker regex could be deleted without
-  // failing a test. A Cwc slot carries an empty data-video-url, so if the SDK
-  // ever moves into a bundle the marker is the only in-page signal left.
+  // No SDK and no player URL here, so only the marker regex can pass this.
+  // A Cwc slot carries an empty data-video-url and the SDK builds the iframe
+  // later, so before render the marker is the only in-page signal.
   const html = `<div class="cwc" data-video-type="Cwc" data-video-id="gemeente/20260303_3"
       data-video-url=""></div>`;
   const result = detectFromCorpus(html);
   assert.deepEqual(names(result), ["Company Webcast"]);
 });
 
-test("Company Webcast detected from the SDK script alone", () => {
-  const html = `<div class="cwc"></div>
-    <script src="//sdk.companywebcast.com/sdk/player/client.js"></script>`;
-  const result = detectFromCorpus(html);
+test("Company Webcast SDK loaded site-wide is NOT a player", () => {
+  // steenwijkerland.nl/bis: client.js on every page, no video slot (1153 pages).
+  const html = `<ul class="download-links cwc"><li>Agenda</li></ul>
+    <script defer src="//sdk.companywebcast.com/sdk/player/client.js"></script>`;
+  const result = detectPlayers(html, ["https://sdk.companywebcast.com/sdk/player/client.js"]);
+  assert.deepEqual(names(result), []);
+});
+
+test("Company Webcast player URL as text or in a share/copy attribute is NOT a player", () => {
+  const url = "http://player.companywebcast.com/gemeente/20160920_1/nl/player";
+  for (const html of [
+    `<p class="description">Geluidsverslag: ${url} </p>`,
+    `<meta name="description" content="Geluidsverslag: ${url} ">`,
+    `<div class="fb-share-button" data-href="${url}"></div>`,
+    `<button data-clipboard-text="${url}">Kopieer</button>`,
+  ]) assert.deepEqual(names(detectFromCorpus(html)), [], html);
+});
+
+test("Company Webcast SDK loaded site-wide does not suppress a YouTube embed", () => {
+  const html = `<script src="//sdk.companywebcast.com/sdk/player/client.js"></script>
+    <iframe src="https://www.youtube-nocookie.com/embed/H9OxXJmVf4M"></iframe>`;
+  const result = detectPlayers(html, ["https://sdk.companywebcast.com/sdk/player/client.js"]);
+  assert.deepEqual(names(result), ["YouTube"]);
+});
+
+test("Company Webcast lazy/consent iframe and escaped forms are still players", () => {
+  const bs = String.fromCharCode(92); // backslash, kept out of the source literal
+  const esc = (s) => s.replaceAll("/", bs + "/");
+  for (const html of [
+    `<iframe data-src="https://player.companywebcast.com/g/1/nl/player"></iframe>`,
+    `<iframe class="cmplz-video" data-src-cmplz="https://sdk.companywebcast.com/sdk/player/?id=g_1" src="about:blank"></iframe>`,
+    `<script>var h="<iframe src=${bs}"${esc("https://player.companywebcast.com/g/1/nl/player")}${bs}"></iframe>";</script>`,
+  ]) assert.deepEqual(names(detectFromCorpus(html)), ["Company Webcast"], html);
+});
+
+test("Company Webcast player request alone (nested iframe) is a player", () => {
+  const result = detectPlayers(`<iframe src="https://x.bestuurlijkeinformatie.nl/Agenda/Index/x"></iframe>`, [
+    "https://sdk.companywebcast.com/sdk/player/?id=g_1",
+  ]);
   assert.deepEqual(names(result), ["Company Webcast"]);
+});
+
+test("Company Webcast SDK plus a Cwc slot or a player iframe is still a player", () => {
+  const sdk = `<script src="//sdk.companywebcast.com/sdk/player/client.js"></script>`;
+  const net = ["https://sdk.companywebcast.com/sdk/player/client.js"];
+  const slot = `<div class="cwc" data-video-type="Cwc" data-video-id="gemeente/20260303_3" data-video-url=""></div>`;
+  assert.deepEqual(names(detectPlayers(slot + sdk, net)), ["Company Webcast"]);
+  const iframe = `<iframe src="https://player.companywebcast.com/gemeente/20260303_3/nl/player"></iframe>`;
+  assert.deepEqual(names(detectPlayers(iframe + sdk, [...net, "https://player.companywebcast.com/gemeente/20260303_3/nl/player"])), ["Company Webcast"]);
+});
+
+test("Company Webcast SDK embed iframe (sdk/player/?id=) is a player", () => {
+  // lansingerland.nl/kindervragenuur
+  const html = `<iframe src="//sdk.companywebcast.com/sdk/player/?id=gemeentelansingerland_20241120_1" width="930"></iframe>`;
+  assert.deepEqual(names(detectPlayers(html, ["https://sdk.companywebcast.com/sdk/player/?id=gemeentelansingerland_20241120_1"])), ["Company Webcast"]);
 });
 
 test("Company Webcast poster on an iBabs page is NOT a second player", () => {
@@ -907,6 +1301,29 @@ test("Spotify embeds still detected — open.spotify.com and podcasters", () => 
   assert.deepEqual(names(detectFromCorpus("<p>x</p>", "", [pod])), ["Spotify (podcast)"]);
 });
 
+test("Facebook watch link (href + data-href) is NOT a player", () => {
+  // trefhetinoss.nl blog: the anchor repeats its target in data-href, which
+  // survives stripAnchorHrefs.
+  const html = '<p>en <a href="https://www.facebook.com/watch/?v=997502637312348" target="_blank" ' +
+    'data-href="https://www.facebook.com/watch/?v=997502637312348">hoe ga je er mee om</a>?</p>';
+  assert.deepEqual(names(detectFromCorpus(html)), []);
+  // A site-wide SDK (like button) does not turn the link into a video either.
+  assert.deepEqual(names(detectFromCorpus(html, "", ["https://connect.facebook.net/nl_NL/sdk.js"])), []);
+  // Nor does a look-alike class.
+  assert.deepEqual(names(detectFromCorpus('<div class="fb-video-teaser"></div>')), []);
+});
+
+test("Facebook video embeds still detected — plugin iframe and fb-video div", () => {
+  const detected = (html) => assert.deepEqual(names(detectFromCorpus(html)), ["Facebook Video"], html);
+  detected('<iframe src="https://www.facebook.com/plugins/video.php?href=https%3A%2F%2Fwww.facebook.com%2Fwatch%2F%3Fv%3D1"></iframe>');
+  detected('<iframe data-src="https://www.facebook.com/v18.0/plugins/video.php?href=x"></iframe>');
+  detected('{"html":"<iframe src=\\"https:\\/\\/www.facebook.com\\/plugins\\/video.php?href=x\\"><\\/iframe>"}');
+  detected('<div class="fb-video" data-href="https://www.facebook.com/watch/?v=1"></div>');
+  detected('<div class="wp-block-embed fb-video" data-href="https://www.facebook.com/watch/?v=1"></div>');
+  detected("<div class='fb-video'></div>");
+  detected('{"html":"<div class=\\"fb-video\\"><\\/div>"}');
+});
+
 // ── Host allow-lists: a CSP or preconnect names vendors, embeds nothing ─
 const WERKENBIJOSS_CSP =
   `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; frame-src 'self' ` +
@@ -938,7 +1355,9 @@ test("Video.js still detected — video-js class, <video-js> tag, video.js path"
   assert.deepEqual(names(detectFromCorpus('<div class="video-js"></div>')), ["Video.js"]);
   assert.deepEqual(names(detectFromCorpus("<video-js id=p></video-js>")), ["Video.js"]);
   const network = ["https://cdn.jsdelivr.net/npm/video.js@8/dist/video.min.js"];
-  assert.deepEqual(names(detectFromCorpus("<p>x</p>", "", network)), ["Video.js"]);
+  const withNet = detectFromCorpus('<video class="video-js vjs-tech"></video>', "", network);
+  assert.deepEqual(names(withNet), ["HTML5 native", "Video.js"]);
+  assert.ok(withNet.find((r) => r.player === "Video.js").evidence.some((e) => e.startsWith("Network:")), "video.js path still matched on the network");
 });
 
 // ── Network: trackers carry the page URL in their query ────────────
@@ -983,7 +1402,11 @@ test("narrowed vendors still detected on their embed shapes", () => {
   const cases = [
     ['<iframe src="https://platform.vixyvideo.com/p/1/sp/100/embedIframeJs/uiconf_id/2"></iframe>', "Vixy Video"],
     ['<iframe src="https://hihaho.com/embed/1b2c3d4e"></iframe>', "Hihaho"],
-    ['<div data-block=\'{"url":"https:\/\/mediasite.uu.nl\/Mediasite\/Play\/0d1e2f"}\'></div>', "Mediasite"],
+    ['<iframe src="https://mediasite.uu.nl/Mediasite/Play/0d1e2f"></iframe>', "Mediasite"],
+    // String.raw: in a plain JS string "\/" is just "/", and the JSON-escaped
+    // alternative in the pattern would go untested.
+    [String.raw`<div data-block='{"url":"https:\/\/mediasite.uu.nl\/Mediasite\/Play\/0d1e2f"}'></div>`, "Mediasite"],
+    ['<div data-src="https%3A%2F%2Fmediasite.uu.nl%2FMediasite%2FPlay%2F0d1e2f"></div>', "Mediasite"],
     ['<iframe src="https://creators.spotify.com/pod/profile/museum/embed/episodes/ep-1"></iframe>', "Spotify (podcast)"],
     ['<iframe src="https://anchor.fm/museum/embed/episodes/ep-1"></iframe>', "Spotify (podcast)"],
     ['<script src="/typo3conf/ext/opengemeenten_mediaplayer/Resources/Public/player.js"></script>', "OpenGemeenten"],

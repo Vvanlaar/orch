@@ -98,13 +98,18 @@ export function decideDeadScan(opts: {
   crawlMode: boolean;
   /** targetFilename: the scan is merged into it server-side, so only that file proves the run finished. */
   mergeTarget?: string;
+  /** Basename of the checkpoint this run resumed from, if any. */
+  resumeFile?: string;
 }): DeadScanAction {
   const { latest } = opts;
   if (!latest) return { action: 'fail', reason: 'no scan file' };
   if (latest.checkpoint) {
-    return opts.crawlMode
-      ? { action: 'resume', file: latest.name }
-      : { action: 'fail', reason: 'explicit-URL scan cannot resume' };
+    if (!opts.crawlMode) return { action: 'fail', reason: 'explicit-URL scan cannot resume' };
+    // Only this run's checkpoint: written during the run, or the one it resumed from.
+    // An older one can belong to another row of the domain, e.g. a paused scan.
+    const own = latest.name === opts.resumeFile
+      || (opts.startedAtMs !== null && latest.mtimeMs >= opts.startedAtMs);
+    return own ? { action: 'resume', file: latest.name } : { action: 'fail', reason: 'no checkpoint from this run' };
   }
   // A report older than this run is an earlier scan of the same domain. The negated
   // comparison also rejects a NaN start time (unparseable startedAt).
