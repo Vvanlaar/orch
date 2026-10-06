@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DETECTORS, detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, pickConsent, isTranslatedCopy, translationPrefix, normalizeUrl, restoreQueue, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource } from "./scan.mjs";
+import { DETECTORS, detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, isFilterControl, pickConsent, isTranslatedCopy, translationPrefix, normalizeUrl, restoreQueue, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource } from "./scan.mjs";
 
 const names = (result) => result.map((r) => r.player).sort();
 
@@ -750,6 +750,58 @@ test("state-changing links (add to basket, log out) are skipped", () => {
   ]) assert.equal(shouldSkipUrl(url), false, url);
 });
 
+test("login pages are skipped", () => {
+  for (const url of [
+    "https://raad.rijssen-holten.nl/login?redirect=https%3A%2F%2Fraad.rijssen-holten.nl%2Fvergaderstukken%2Fx",
+    "https://www.rijksmuseum.nl/nl/inloggen?redirectUrl=https://www.rijksmuseum.nl/nl/pers",
+    "https://www.agnietenhof.nl/my/signin",
+    "https://www.example.nl/account/log-in/",
+    "https://www.example.nl/sign-in#form",
+    "https://www.example.nl/Account/Login.aspx?ReturnUrl=%2F",
+    "https://www.example.nl/login.php",
+    "https://www.example.nl/mijn/inloggen.html",
+  ]) assert.equal(shouldSkipUrl(url), true, url);
+  for (const url of [
+    "https://www.example.nl/nieuws/item?next=/login",
+    "https://www.example.nl/inloggen-met-digid-uitleg",
+    "https://www.example.nl/nieuws/login-problemen-opgelost",
+    "https://www.example.nl/blogin",
+    "https://www.example.nl/loginformatie",
+    // below a login segment: content, not the login form
+    "https://www.example.nl/inloggen/uitleg-digid-video",
+    "https://www.example.nl/login/help/instructievideo",
+  ]) assert.equal(shouldSkipUrl(url), false, url);
+});
+
+test("OpenGemeenten google-translate proxy links are skipped", () => {
+  for (const url of [
+    "https://www.nieuwegein.nl/google-translate-informatie?tx_opengemeententranslategoogle%5Burl%5D=aHR0cHM6Ly93d3cubmlldXdlZ2Vpbi5ubC9hZnZhbA%3D%3D",
+    "https://www.schouwen-duiveland.nl/google-translate-informatie",
+    // the parameter alone, on another path, raw brackets as normalizeUrl leaves them
+    "https://www.example.nl/vertalen?tx_opengemeententranslategoogle[url]=aHR0cA==",
+  ]) assert.equal(shouldSkipUrl(url), true, url);
+  for (const url of [
+    "https://www.nieuwegein.nl/afval", // the page that carries the link is still crawled
+    "https://www.example.nl/nieuws/google-translate-informatie-avond",
+  ]) assert.equal(shouldSkipUrl(url), false, url);
+});
+
+test("filter controls rendered as links are not followed", () => {
+  // visitrijssenholten.nl facet links
+  assert.equal(isFilterControl({ role: "checkbox", ariaChecked: "false" }), true);
+  assert.equal(isFilterControl({ role: "Radio ", ariaChecked: null }), true);
+  assert.equal(isFilterControl({ role: null, ariaChecked: "true" }), true);
+  assert.equal(isFilterControl({ role: null, ariaChecked: "" }), true);
+  assert.equal(isFilterControl({ role: "checkbox button", ariaChecked: null }), true);
+  for (const role of ["switch", "menuitemcheckbox", "menuitemradio"]) {
+    assert.equal(isFilterControl({ role, ariaChecked: null }), true, role);
+  }
+  // ordinary navigation
+  assert.equal(isFilterControl({ role: null, ariaChecked: null }), false);
+  assert.equal(isFilterControl({ role: "button", ariaChecked: null }), false);
+  assert.equal(isFilterControl({ role: "menuitem", ariaChecked: null }), false);
+});
+
 test("pickConsent keeps only what accepting the banner added", () => {
   const session = { name: "PHPSESSID", domain: "www.x.nl", path: "/", value: "s1" };
   const bot = { name: "__cf_bm", domain: ".x.nl", path: "/", value: "b1" };
@@ -1358,6 +1410,27 @@ test("Video.js still detected — video-js class, <video-js> tag, video.js path"
   const withNet = detectFromCorpus('<video class="video-js vjs-tech"></video>', "", network);
   assert.deepEqual(names(withNet), ["HTML5 native", "Video.js"]);
   assert.ok(withNet.find((r) => r.player === "Video.js").evidence.some((e) => e.startsWith("Network:")), "video.js path still matched on the network");
+});
+
+// ── JW Player: bare jwplayer() is control code, not a player ───────
+test("bare jwplayer() control call is NOT a JW Player", () => {
+  // hilvarenbeek2030.nl gallery script, self-hosted lib, no player on the page
+  const html = '<script src="/UI/JS/jwplayer-5.9/jwplayer.js"></script>' +
+    "<script>$('.item1').live('click', function () { if (jwplayer()) jwplayer().stop(); });</script>";
+  assert.deepEqual(names(detectFromCorpus(html)), []);
+  assert.deepEqual(names(detectFromCorpus("<script>jwplayer( ).stop()</script>")), []);
+});
+
+test("JW Player setup call still detected", () => {
+  for (const call of [
+    "jwplayer('video1_3049').setup({ 'file': '/upload/video/1 guitar.mp4' })",
+    'jwplayer("player").setup({})',
+    "jwplayer( el ).setup({})",
+    'jwplayer(\\"player\\").setup({})', // JSON-escaped
+    "jwplayer(&quot;player&quot;).setup({})", // HTML-escaped
+  ]) {
+    assert.deepEqual(names(detectFromCorpus(`<script>${call}</script>`)), ["JW Player"], call);
+  }
 });
 
 // ── Network: trackers carry the page URL in their query ────────────
