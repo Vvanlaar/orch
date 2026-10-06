@@ -1499,15 +1499,22 @@ function detectConnectionRateLimit(err) {
   return match ? `connection: ${match}` : null;
 }
 
-function detectResponseRateLimit(response, html) {
+// A block page says what it is in its text, not in the URLs it carries: the 403
+// page of meer-vitaal.nl (LiteSpeed, no WAF) pulls jQuery from
+// cdnjs.cloudflare.com and read as a Cloudflare block, which put the whole
+// crawl in back-off for 145 filter URLs.
+const ABSOLUTE_URL = /(?:https?:)?\/\/[^\s"'<>)]+/gi;
+
+export function detectResponseRateLimit(response, html) {
   if (!response) return 'null response (blocked)';
   const status = response.status();
   if (status === 429) return `HTTP 429`;
   if ((status === 403 || status === 503) && html) {
     const titleMatch = html.match(/<title[^>]*>(.*?)<\/title>/i);
     const title = titleMatch ? titleMatch[1] : '';
+    const head = html.replace(ABSOLUTE_URL, '').slice(0, 5000);
     for (const p of WAF_TITLE_PATTERNS) {
-      if (p.test(title) || p.test(html.slice(0, 5000))) {
+      if (p.test(title) || p.test(head)) {
         return `HTTP ${status} WAF (${title.slice(0, 40)})`;
       }
     }
@@ -1520,9 +1527,13 @@ function detectResponseRateLimit(response, html) {
   return null;
 }
 
-function createRateLimitError(reason) {
+// With the response for a block page: a 403 can also be the site refusing this
+// one URL, which the crawl loop tells apart (see createRefusalTracker). A 403
+// that names a Retry-After is a rate limit by its own account.
+export function createRateLimitError(reason, response) {
   const err = new Error(`Rate limited: ${reason}`);
   err._rateLimit = reason;
+  err._refusable = response?.status() === 403 && !response.headers()['retry-after'];
   return err;
 }
 
@@ -1638,7 +1649,7 @@ async function scanPageIn(context, url, timeout) {
   const rlReason = detectResponseRateLimit(response, earlyHtml);
   if (rlReason) {
     await page.close();
-    throw createRateLimitError(rlReason);
+    throw createRateLimitError(rlReason, response);
   }
 
   // Skip pages that redirected to a different domain
@@ -1674,7 +1685,7 @@ async function scanPageIn(context, url, timeout) {
   const detected = await detectWithConsent(page, corpus, networkRequests);
   const links = await collectLinks(page);
 
-  return { detected, links };
+  return { detected, links, status: response.status() };
 }
 
 // Filter controls rendered as links: each one adds a facet to the current URL,
@@ -1729,7 +1740,7 @@ async function scanFirstPageIn(context, url, timeout) {
   const rlReason = detectResponseRateLimit(response, earlyHtml);
   if (rlReason) {
     await page.close();
-    throw createRateLimitError(rlReason);
+    throw createRateLimitError(rlReason, response);
   }
 
   // Skip pages that redirected to a different domain
@@ -1787,7 +1798,7 @@ async function scanFirstPageIn(context, url, timeout) {
   const detected = await detectWithConsent(page, corpus, networkRequests);
   const links = await collectLinks(page);
 
-  return { detected, links };
+  return { detected, links, status: response.status() };
 }
 
 // Initial guess before AutoTuner takes over (it'll converge within ~2 batches).
@@ -1959,6 +1970,133 @@ function tryRecover(throttle) {
   throttle.concurrency = Math.min(throttle.baseConcurrency, throttle.concurrency + 1);
 }
 
+// ── Access refusal vs rate limit ──────────────────────────────────
+// A 403 block page means one of two things. The host is throttling the crawl
+// (mauritshuis.nl: Cloudflare on every URL after the first page), and backing
+// off is the answer. Or the site refuses that one URL to anyone
+// (beeldengeluid.nl: Drupal's "Access denied" on 21 profile pages, three
+// back-offs each, in a crawl of 2044 pages), and backing off only stalls the
+// crawl.
+//
+// The rest of the host tells them apart. A refused URL is tried once more,
+// REFUSAL_RECHECK_MS later and without throttling, and when it is refused the
+// same way while the host serves other pages both times, it is that URL. The
+// wait is what makes the second answer mean something: a rate limit that
+// blocks part of the requests would repeat itself a moment later too. A retry
+// that gets through shows that kind of 403 passes
+// (oss.bestuurlijkeinformatie.nl: three Cloudflare 403s, all fine on retry),
+// so from then on it is a rate limit again.
+const REFUSAL_RECHECK_MS = 30_000;
+
+// www and the bare domain are one host here, as they are in isSameDomain.
+const hostOf = (url) => new URL(url).hostname.replace(/^www\./, "");
+
+export function createRefusalTracker(now = Date.now) {
+  const firstRefusal = new Map(); // url → { signature of the block page it got, due time of its retry }
+  const waiting = []; // [{ url, due }], oldest first: refused once, retry not sent yet
+  const transient = new Set(); // signatures a retry got past
+  const controls = new Map(); // host → the last page it served
+  // cf-ray differs per response
+  const signatureOf = (reason) => reason.replace(/\s*\(cf-ray: [^)]*\)/, "");
+
+  return {
+    /** A page this host served, to ask for again when a batch holds only refusals. */
+    controlUrl: (host) => controls.get(host) ?? null,
+    /** A page loaded. Returns the refusal it got past, if it had been refused before. */
+    pageLoaded(url) {
+      controls.set(hostOf(url), url);
+      const first = firstRefusal.get(url);
+      if (!first) return null;
+      firstRefusal.delete(url);
+      transient.add(first.signature);
+      return first.signature;
+    },
+    /** "retry" (later, unthrottled), "refused" (give the URL up) or "rate-limit" (back off). */
+    judge(url, reason, hostOk) {
+      const signature = signatureOf(reason);
+      if (transient.has(signature)) {
+        firstRefusal.delete(url);
+        return "rate-limit";
+      }
+      if (!hostOk) return "rate-limit";
+      const first = firstRefusal.get(url);
+      if (first?.signature === signature) {
+        // Seen again before its wait was over (a URL list naming it twice):
+        // still the first answer, the retry is on its way
+        if (now() < first.due) return "retry";
+        firstRefusal.delete(url);
+        return "refused";
+      }
+      // One unthrottled retry per URL. A block page whose title changes per
+      // response would otherwise send the URL round forever; the rate-limit
+      // path counts its retries.
+      if (first) return "rate-limit";
+      const due = now() + REFUSAL_RECHECK_MS;
+      firstRefusal.set(url, { signature, due });
+      waiting.push({ url, due });
+      return "retry";
+    },
+    /** Up to `limit` URLs whose retry is due, oldest first. They stop waiting. */
+    takeDue(limit = Infinity) {
+      const due = [];
+      while (due.length < limit && waiting.length > 0 && waiting[0].due <= now()) due.push(waiting.shift().url);
+      return due;
+    },
+    /** The URLs still sitting out their wait. */
+    waiting: () => waiting.map((w) => w.url),
+  };
+}
+
+// A scan result that shows the host serving pages: not a redirect off the
+// domain or a download, and not an error page that slipped past the WAF check.
+const servedPage = (scan) => !scan.skippedReason && scan.status < 400;
+
+// Loads a page the host served earlier in this crawl, without scanning it.
+function hostServes(browser, url, timeout) {
+  return withScanContext(browser, timeout * 2, async (context) => {
+    const page = await context.newPage();
+    const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout });
+    return Boolean(response) && response.status() < 400;
+  }).catch((err) => {
+    // Counts as "host does not serve", which backs off: the safe reading
+    console.log(chalk.gray(`  control page ${truncate(url, 50)} did not load: ${String(err?.message).slice(0, 60)}`));
+    return false;
+  });
+}
+
+// Reads a batch before its failures are judged: did the host serve a page while
+// it refused the others? Only this batch counts. A page from a few seconds ago
+// says nothing once a block has started: on a test site that blocked everything
+// after three pages, 16 URLs were written off on evidence 15 seconds old.
+// A batch of nothing but refusals (filter URLs come in runs) has no such page,
+// so `probe` asks the host for one it served before. Also while backing off:
+// skipping the question there would file every refusal in the run as a rate
+// limit, which extends the back-off, which skips the question again.
+export async function weighBatch(refusals, throttle, batch, batchResults, probe) {
+  let rateLimited = false;
+  const serving = new Set(); // hosts that served a page in this batch
+  const refusing = new Set(); // hosts with a 403 to judge
+  batch.forEach((url, i) => {
+    const result = batchResults[i];
+    if (result.status === "rejected") {
+      if (result.reason?._refusable) refusing.add(hostOf(url));
+    } else if (servedPage(result.value)) {
+      serving.add(hostOf(url));
+      const cleared = refusals.pageLoaded(url);
+      if (cleared) {
+        onRateLimit(throttle, url, `${cleared}, gone on retry`);
+        rateLimited = true;
+      }
+    }
+  });
+
+  for (const host of refusing) {
+    const control = refusals.controlUrl(host);
+    if (!serving.has(host) && control && (await probe(control))) serving.add(host);
+  }
+  return { hostOk: (url) => serving.has(hostOf(url)), rateLimited };
+}
+
 // Live control file: { paused?: boolean }.
 // Concurrency / delay used to be settable here; the AutoTuner owns those now.
 // Legacy fields are silently ignored so old control files don't crash anything.
@@ -2112,6 +2250,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
 
   const throttle = createThrottleState(delay, concurrency);
   const autoTuner = createAutoTuner(controlFile);
+  const refusals = createRefusalTracker();
   const retryCount = new Map();
   const MAX_RETRIES = 2;
 
@@ -2200,7 +2339,9 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       chalk.gray(`[${visited.size}/${maxPages}] `) + chalk.white(truncate(firstUrl, 80)) + " "
     );
     try {
-      const { detected, links, skippedReason } = await scanFirstPage(browser, firstUrl, timeout);
+      const first = await scanFirstPage(browser, firstUrl, timeout);
+      const { detected, links, skippedReason } = first;
+      if (servedPage(first)) refusals.pageLoaded(firstUrl);
       if (skippedReason) {
         console.log(chalk.yellow(`  ⤳ skipped (${skippedReason})`));
       } else if (detected.length > 0) {
@@ -2289,7 +2430,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   // we'd divide *all* visited pages (including pre-resume ones) by *this run's* elapsed time.
   const resumeBaseline = visited.size;
 
-  while (queue.length > 0 && visited.size < maxPages && !interrupted) {
+  while ((queue.length > 0 || refusals.waiting().length > 0) && visited.size < maxPages && !interrupted) {
     // Inter-batch delay (skip first batch)
     if (batchNum > 0 && throttle.delay > 0) {
       await sleep(throttle.delay);
@@ -2299,14 +2440,23 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     // Apply live control-file overrides (concurrency/delay) before sizing batch
     applyControlFile(throttle, controlFile);
 
-    // Grab a batch of URLs to scan in parallel (use throttle.concurrency)
-    const batch = [];
+    // Grab a batch of URLs to scan in parallel (use throttle.concurrency).
+    // Refused URLs whose wait is over go first, and straight into the batch:
+    // through the queue, the re-sort below would file the ones that don't fit
+    // back under their section (see rebalanceQueue).
+    const batch = refusals.takeDue(Math.min(throttle.concurrency, maxPages - visited.size));
     while (batch.length < throttle.concurrency && queue.length > 0 && visited.size + batch.length < maxPages) {
       const url = queue.shift();
       if (!url || visited.has(url)) continue;
       batch.push(url);
     }
-    if (batch.length === 0) break;
+    if (batch.length === 0) {
+      if (refusals.waiting().length === 0) break;
+      // Nothing left but refused URLs sitting out their wait
+      autoTuner.beat(throttle, domain);
+      await sleep(1000);
+      continue;
+    }
 
     // Mark all batch URLs as visited before launching (prevents duplicates)
     for (const url of batch) visited.add(url);
@@ -2324,7 +2474,8 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     );
 
     // Process results and collect new links
-    let batchHadRateLimit = false;
+    const weighed = await weighBatch(refusals, throttle, batch, batchResults, (control) => hostServes(browser, control, timeout));
+    let batchHadRateLimit = weighed.rateLimited;
     for (let i = 0; i < batch.length; i++) {
       const url = batch[i];
       const result = batchResults[i];
@@ -2350,7 +2501,14 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
         const err = result.reason;
         const errMsg = err?.message || "Unknown error";
 
-        if (err?._rateLimit) {
+        const verdict = err?._refusable ? refusals.judge(url, err._rateLimit, weighed.hostOk(url)) : null;
+        if (verdict === "refused") {
+          console.log(chalk.red(`  ✗ ${truncate(url, 65)}  access refused, other pages load`));
+          results.push({ url, players: [], error: `Access refused: ${err._rateLimit}` });
+        } else if (verdict === "retry") {
+          console.log(chalk.gray(`  ↻ ${truncate(url, 65)}  ${err._rateLimit}, one retry in ${REFUSAL_RECHECK_MS / 1000}s`));
+          visited.delete(url);
+        } else if (err?._rateLimit) {
           batchHadRateLimit = true;
           onRateLimit(throttle, url, err._rateLimit);
           visited.delete(url);
@@ -2389,7 +2547,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       const etaMin = ppm > 0 ? (remaining / ppm).toFixed(1) : "?";
       console.log(chalk.cyan(`  ── ${ppm} pages/min | queue=${queue.length} | ~${etaMin}min left | delay=${throttle.delay}ms | auto-conc=${throttle.concurrency} (base=${throttle.baseConcurrency})`));
       lastProgressAt = Date.now();
-      writeCheckpoint(domain, results, visited, queue);
+      writeCheckpoint(domain, results, visited, [...refusals.waiting(), ...queue]);
     }
 
     // Recycle the browser between batches once we've scanned enough pages — a
@@ -2403,6 +2561,10 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       pagesSinceRecycle = 0;
     }
   }
+
+  // Stopped (page cap, pause) before their retry: back in the queue, so a
+  // resume asks again instead of losing them.
+  queue.unshift(...refusals.waiting());
 
   await browser.close();
   autoTuner.cleanup();
@@ -2581,6 +2743,7 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
   const throttle = createThrottleState(delay, concurrency);
   const autoTuner = createAutoTuner(controlFile);
   autoTuner.beat(throttle, domain);
+  const refusals = createRefusalTracker();
   const retryCount = new Map();
   const MAX_RETRIES = 2;
 
@@ -2593,7 +2756,9 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
   const firstUrl = urls[0];
   process.stdout.write(chalk.gray(`[1/${urls.length}] `) + chalk.white(truncate(firstUrl, 80)) + " ");
   try {
-    const { detected, skippedReason } = await scanFirstPage(browser, firstUrl, timeout);
+    const first = await scanFirstPage(browser, firstUrl, timeout);
+    const { detected, skippedReason } = first;
+    if (servedPage(first)) refusals.pageLoaded(firstUrl);
     if (skippedReason) {
       console.log(chalk.yellow(`  ⤳ skipped (${skippedReason})`));
     } else if (detected.length > 0) {
@@ -2617,13 +2782,20 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
   const remaining = urls.slice(1);
   let batchNum = 0;
 
-  while (remaining.length > 0 && !interrupted) {
+  while ((remaining.length > 0 || refusals.waiting().length > 0) && !interrupted) {
     if (batchNum > 0 && throttle.delay > 0) await sleep(throttle.delay);
     batchNum++;
 
     applyControlFile(throttle, controlFile);
 
-    const batch = remaining.splice(0, throttle.concurrency);
+    // Refused URLs whose wait is over go first (see createRefusalTracker)
+    const batch = refusals.takeDue(throttle.concurrency);
+    batch.push(...remaining.splice(0, throttle.concurrency - batch.length));
+    if (batch.length === 0) {
+      autoTuner.beat(throttle, domain);
+      await sleep(1000);
+      continue;
+    }
 
     for (let i = 0; i < batch.length; i++) {
       const idx = results.length + i + 1;
@@ -2634,6 +2806,7 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
       batch.map((url) => scanOnePage(browser, url, timeout))
     );
 
+    const weighed = await weighBatch(refusals, throttle, batch, batchResults, (control) => hostServes(browser, control, timeout));
     for (let i = 0; i < batch.length; i++) {
       const url = batch[i];
       const result = batchResults[i];
@@ -2648,7 +2821,13 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
         results.push({ url, players: detected });
       } else {
         const err = result.reason;
-        if (err?._rateLimit) {
+        const verdict = err?._refusable ? refusals.judge(url, err._rateLimit, weighed.hostOk(url)) : null;
+        if (verdict === "refused") {
+          console.log(chalk.red(`  ✗ ${truncate(url, 65)}  access refused, other pages load`));
+          results.push({ url, players: [], error: `Access refused: ${err._rateLimit}` });
+        } else if (verdict === "retry") {
+          console.log(chalk.gray(`  ↻ ${truncate(url, 65)}  ${err._rateLimit}, one retry in ${REFUSAL_RECHECK_MS / 1000}s`));
+        } else if (err?._rateLimit) {
           onRateLimit(throttle, url, err._rateLimit);
           const retries = retryCount.get(url) || 0;
           if (retries < MAX_RETRIES) {
@@ -2693,7 +2872,7 @@ function generateReport({ domain, results, pagesScanned, _state, rateLimits, bat
   for (const { url, players, error } of results) {
     if (error) {
       // Collapse to the ERR_*/keyword signature so noisy URLs/suffixes group.
-      const key = (error.match(/ERR_[A-Z0-9_]+|Timeout|Rate limited|null response/i) || [error])[0];
+      const key = (error.match(/ERR_[A-Z0-9_]+|Timeout|Rate limited|Access refused|null response/i) || [error])[0];
       errorSummary[key] = (errorSummary[key] || 0) + 1;
       if (failedUrls.length < 1000) failedUrls.push({ url, error: error.slice(0, 200) });
     }
@@ -2731,7 +2910,12 @@ function generateReport({ domain, results, pagesScanned, _state, rateLimits, bat
     }
   }
   // A scan that failed to load most pages must not read as a clean result.
-  if (failureRate >= 0.5) {
+  if (failureRate >= 0.5 && (errorSummary["Access refused"] || 0) > pagesFailed / 2) {
+    console.log(chalk.bold.red(
+      `\n  ⚠ ${Math.round(failureRate * 100)}% of pages failed — mostly URLs the site refused (403) twice, ${REFUSAL_RECHECK_MS / 1000}s apart, while other pages loaded.` +
+      `\n    That points at those URLs rather than a rate limit: a re-run will likely get the same answer.`
+    ));
+  } else if (failureRate >= 0.5) {
     console.log(chalk.bold.red(
       `\n  ⚠ ${Math.round(failureRate * 100)}% of pages failed to load — results are NOT representative.` +
       `\n    Likely bot-blocking/rate-limiting. The auto-tuner backs off on protocol resets;` +

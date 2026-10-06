@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DETECTORS, detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, isFilterControl, pickConsent, isTranslatedCopy, translationPrefix, normalizeUrl, restoreQueue, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource } from "./scan.mjs";
+import { DETECTORS, detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, isFilterControl, pickConsent, isTranslatedCopy, translationPrefix, normalizeUrl, restoreQueue, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource, detectResponseRateLimit, createRateLimitError, createRefusalTracker, weighBatch } from "./scan.mjs";
 
 const names = (result) => result.map((r) => r.player).sort();
 
@@ -1499,4 +1499,274 @@ test("recordSubresource drops the page's own navigation, keeps iframes and asset
   record(req("https://www.ngf.nl/app.js", false, mainFrame));
   record({ url: () => "https://www.ngf.nl/sw-fetch", isNavigationRequest: () => true, frame: () => { throw new Error("sw"); } });
   assert.deepEqual(seen, ["https://www.youtube.com/embed/19lqfVgbBws", "https://www.ngf.nl/app.js", "https://www.ngf.nl/sw-fetch"]);
+});
+
+// ── Access refusal vs rate limit ───────────────────────────────────
+const fakeResponse = (status, headers = {}) => ({ status: () => status, headers: () => headers });
+const blockPage = (title, body = "") => `<!DOCTYPE html><html><head><title>${title}</title></head><body>${body}</body></html>`;
+
+test("a 403 page that only carries Cloudflare in its URLs is not a WAF block (meer-vitaal.nl)", () => {
+  const cdn = "cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js";
+  const shapes = [
+    `<script src="https://${cdn}"></script>`,
+    `<link rel='stylesheet' href='//${cdn}'>`,
+    `<script src=https://${cdn}></script>`,
+    `<img srcset="https://${cdn} 2x">`,
+    `<style>@import url(https://${cdn});</style>`,
+    `<meta http-equiv="Content-Security-Policy" content="script-src https://cdnjs.cloudflare.com">`,
+  ];
+  for (const shape of shapes) {
+    const html = blockPage("Meer-vitaal.nl · 🔒 Pagina is afgeschermd.", `${shape}<h1>Pagina is afgeschermd</h1>`);
+    assert.equal(detectResponseRateLimit(fakeResponse(403), html), null, shape);
+  }
+  // The 5000 characters are counted after the URLs are gone, so one cut in half does not survive
+  const cut = blockPage("Afgeschermd", `${"x".repeat(4900)}<script src="https://${cdn}?${"y".repeat(200)}"></script>`);
+  assert.equal(detectResponseRateLimit(fakeResponse(403), cut), null);
+});
+
+test("block pages are still recognised by their title, their text and cf-ray", () => {
+  assert.equal(detectResponseRateLimit(fakeResponse(403), blockPage("Just a moment...")), "HTTP 403 WAF (Just a moment...)");
+  assert.equal(
+    detectResponseRateLimit(fakeResponse(403), blockPage("Attention Required! | Cloudflare")),
+    "HTTP 403 WAF (Attention Required! | Cloudflare)",
+  );
+  assert.equal(detectResponseRateLimit(fakeResponse(503), blockPage("", "<p>Checking your browser before accessing</p>")), "HTTP 503 WAF ()");
+  // Named in the link text, with the URL stripped
+  assert.equal(
+    detectResponseRateLimit(fakeResponse(403), blockPage("Blocked", '<a href="https://www.cloudflare.com/5xx-error-landing">Performance &amp; security by Cloudflare</a>')),
+    "HTTP 403 WAF (Blocked)",
+  );
+  assert.equal(
+    detectResponseRateLimit(fakeResponse(403, { "cf-ray": "a34eb12a9b9c0a55-AMS" }), blockPage("Forbidden")),
+    "HTTP 403 Cloudflare (cf-ray: a34eb12a9b9c0a55-AMS)",
+  );
+  assert.equal(detectResponseRateLimit(fakeResponse(429), blockPage("Too many requests")), "HTTP 429");
+  assert.equal(detectResponseRateLimit(null, ""), "null response (blocked)");
+  assert.equal(detectResponseRateLimit(fakeResponse(403), blockPage("Forbidden")), null);
+});
+
+test("only a 403 without Retry-After can be a refusal of one URL", () => {
+  const refusable = (response) => createRateLimitError("x", response)._refusable;
+  assert.equal(refusable(fakeResponse(403)), true);
+  assert.equal(refusable(fakeResponse(403, { "retry-after": "30" })), false);
+  assert.equal(refusable(fakeResponse(503)), false);
+  assert.equal(refusable(fakeResponse(429)), false);
+  // Connection errors carry no response
+  assert.equal(createRateLimitError("connection: ERR_CONNECTION_RESET")._refusable, false);
+  assert.equal(createRateLimitError("x", fakeResponse(403))._rateLimit, "x");
+});
+
+const DENIED = "HTTP 403 WAF (Access denied | The Netherlands Institut)";
+const EXPERT = "https://www.beeldengeluid.nl/en/about/experts/kelly-mostert";
+// A tracker, and the way to let its 30 seconds pass
+const trackerWithClock = () => {
+  let t = 1_000_000;
+  return { refusals: createRefusalTracker(() => t), wait: (ms = 30_000) => { t += ms; } };
+};
+
+test("a 403 that repeats 30 seconds later while the host serves other pages is that URL, not a rate limit", () => {
+  const { refusals, wait } = trackerWithClock();
+  assert.equal(refusals.judge(EXPERT, DENIED, true), "retry");
+  wait();
+  assert.equal(refusals.judge(EXPERT, DENIED, true), "refused");
+  // The next refused URL gets its own retry: nothing is given up on one response
+  assert.equal(refusals.judge("https://www.beeldengeluid.nl/en/about/experts/lizzy-komen", DENIED, true), "retry");
+});
+
+test("a URL refused again before its wait is over is still waiting, not given up", () => {
+  const { refusals, wait } = trackerWithClock();
+  assert.equal(refusals.judge(EXPERT, DENIED, true), "retry");
+  // A list of URLs that names it twice
+  wait(29_999);
+  assert.equal(refusals.judge(EXPERT, DENIED, true), "retry");
+  assert.deepEqual(refusals.waiting(), [EXPERT]);
+  wait(1);
+  assert.deepEqual(refusals.takeDue(), [EXPERT]);
+  assert.equal(refusals.judge(EXPERT, DENIED, true), "refused");
+});
+
+test("a 403 while the host serves nothing else is a rate limit, on the first sight and on the retry", () => {
+  const { refusals, wait } = trackerWithClock();
+  const url = "https://www.mauritshuis.nl/bezoek";
+  assert.equal(refusals.judge(url, DENIED, false), "rate-limit");
+  assert.equal(refusals.judge(url, DENIED, true), "retry");
+  wait();
+  // The host stopped answering at the retry: no verdict on the URL yet
+  assert.equal(refusals.judge(url, DENIED, false), "rate-limit");
+  // …and the first refusal still stands when it answers again
+  assert.equal(refusals.judge(url, DENIED, true), "refused");
+});
+
+test("a refusal that is gone on retry makes that kind of 403 a rate limit from then on", () => {
+  const refusals = createRefusalTracker();
+  const a = "https://oss.bestuurlijkeinformatie.nl/Agenda/Document/1";
+  const b = "https://oss.bestuurlijkeinformatie.nl/Agenda/Document/2";
+  const c = "https://oss.bestuurlijkeinformatie.nl/Agenda/Document/3";
+  assert.equal(refusals.judge(a, "HTTP 403 Cloudflare (cf-ray: a34eb12a9b9c0a55-AMS)", true), "retry");
+  assert.equal(refusals.judge(c, "HTTP 403 Cloudflare (cf-ray: a34eb12add2a0bbc-AMS)", true), "retry");
+  // cf-ray differs per response and is not part of what is compared
+  assert.equal(refusals.pageLoaded(a), "HTTP 403 Cloudflare");
+  assert.equal(refusals.judge(b, "HTTP 403 Cloudflare (cf-ray: a34eb7da2aa49fca-AMS)", true), "rate-limit");
+  // A URL that was already waiting is a rate limit too, and is reported once, not again when it loads
+  assert.equal(refusals.judge(c, "HTTP 403 Cloudflare (cf-ray: a34eb7da2aa49fcb-AMS)", true), "rate-limit");
+  assert.equal(refusals.pageLoaded(c), null);
+  // Another block page on the same host is judged on its own
+  assert.equal(refusals.judge(b, DENIED, true), "retry");
+  // A page that was never refused clears nothing
+  assert.equal(refusals.pageLoaded("https://oss.bestuurlijkeinformatie.nl/"), null);
+});
+
+test("a URL gets one unthrottled retry, however often its block page changes", () => {
+  const refusals = createRefusalTracker();
+  const url = "https://example.nl/a";
+  assert.equal(refusals.judge(url, "HTTP 403 WAF (Access denied, ref 1001)", true), "retry");
+  // Every further answer goes down the rate-limit path, which counts its retries
+  for (let ref = 1002; ref < 1010; ref++) {
+    assert.equal(refusals.judge(url, `HTTP 403 WAF (Access denied, ref ${ref})`, true), "rate-limit");
+  }
+  assert.deepEqual(refusals.waiting(), [url]);
+});
+
+test("the retry of a refused URL is due 30 seconds later, oldest first", () => {
+  let t = 1_000_000;
+  const refusals = createRefusalTracker(() => t);
+  refusals.judge("https://example.nl/a?f=1", DENIED, true);
+  t += 10_000;
+  refusals.judge("https://example.nl/a?f=2", DENIED, true);
+  // Not a retry: nothing to wait for
+  refusals.judge("https://example.nl/a?f=3", DENIED, false);
+  assert.deepEqual(refusals.waiting(), ["https://example.nl/a?f=1", "https://example.nl/a?f=2"]);
+  assert.deepEqual(refusals.takeDue(), []);
+
+  t += 19_999;
+  assert.deepEqual(refusals.takeDue(), []);
+  t += 1;
+  assert.deepEqual(refusals.takeDue(), ["https://example.nl/a?f=1"]);
+  assert.deepEqual(refusals.waiting(), ["https://example.nl/a?f=2"]);
+  t += 60_000;
+  refusals.judge("https://example.nl/a?f=4", DENIED, true);
+  refusals.judge("https://example.nl/a?f=5", DENIED, true);
+  t += 30_000;
+  // No more than the batch has room for; the rest stays first in line
+  assert.deepEqual(refusals.takeDue(2), ["https://example.nl/a?f=2", "https://example.nl/a?f=4"]);
+  assert.deepEqual(refusals.waiting(), ["https://example.nl/a?f=5"]);
+  assert.deepEqual(refusals.takeDue(0), []);
+  assert.deepEqual(refusals.takeDue(), ["https://example.nl/a?f=5"]);
+  assert.deepEqual(refusals.takeDue(), []);
+  assert.deepEqual(refusals.waiting(), []);
+  // Taken from the wait, but still remembered as refused once
+  assert.equal(refusals.judge("https://example.nl/a?f=1", DENIED, true), "refused");
+});
+
+test("the control page is the last one a host served, www or not", () => {
+  const refusals = createRefusalTracker();
+  assert.equal(refusals.controlUrl("example.nl"), null);
+  refusals.pageLoaded("https://www.example.nl/");
+  assert.equal(refusals.controlUrl("example.nl"), "https://www.example.nl/");
+  refusals.pageLoaded("https://example.nl/nieuws");
+  assert.equal(refusals.controlUrl("example.nl"), "https://example.nl/nieuws");
+  assert.equal(refusals.controlUrl("raad.example.nl"), null);
+});
+
+// What Promise.allSettled hands the crawl loop for a batch
+const loaded = (extra = {}) => ({ status: "fulfilled", value: { detected: [], links: [], status: 200, ...extra } });
+const blocked = (reason = DENIED, response = fakeResponse(403)) => ({ status: "rejected", reason: createRateLimitError(reason, response) });
+const newThrottle = () => ({ delay: 200, concurrency: 4, baseDelay: 200, baseConcurrency: 4, rateLimitHits: 0, cooldownUntil: 0, events: [], peakDelay: 200, minConcurrency: 4 });
+const probeSpy = (answer) => {
+  const asked = [];
+  const probe = async (url) => (asked.push(url), answer);
+  return { asked, probe };
+};
+
+test("a page that loads in the batch vouches for its host, without asking again", async () => {
+  const refusals = createRefusalTracker();
+  const { asked, probe } = probeSpy(false);
+  const batch = ["https://example.nl/nieuws", "https://example.nl/nieuws?doelgroep=jongeren"];
+  const weighed = await weighBatch(refusals, newThrottle(), batch, [loaded(), blocked()], probe);
+  assert.equal(weighed.hostOk(batch[1]), true);
+  assert.equal(weighed.rateLimited, false);
+  assert.deepEqual(asked, []);
+  assert.equal(refusals.controlUrl("example.nl"), "https://example.nl/nieuws");
+});
+
+test("a batch of only refusals asks the host for a page it served before", async () => {
+  const batch = ["https://example.nl/nieuws?doelgroep=jongeren", "https://example.nl/nieuws?doelgroep=senioren"];
+  for (const answer of [true, false]) {
+    const refusals = createRefusalTracker();
+    refusals.pageLoaded("https://www.example.nl/");
+    const { asked, probe } = probeSpy(answer);
+    const weighed = await weighBatch(refusals, newThrottle(), batch, [blocked(), blocked()], probe);
+    // Once per host, not once per refusal
+    assert.deepEqual(asked, ["https://www.example.nl/"]);
+    assert.equal(weighed.hostOk(batch[0]), answer);
+    assert.equal(weighed.hostOk(batch[1]), answer);
+  }
+});
+
+test("with no page served yet there is nothing to ask, and the host is not vouched for", async () => {
+  const refusals = createRefusalTracker();
+  const { asked, probe } = probeSpy(true);
+  const batch = ["https://example.nl/a"];
+  const weighed = await weighBatch(refusals, newThrottle(), batch, [blocked()], probe);
+  assert.deepEqual(asked, []);
+  assert.equal(weighed.hostOk(batch[0]), false);
+});
+
+test("error pages, redirects off the domain and downloads do not vouch for the host", async () => {
+  const refusals = createRefusalTracker();
+  const { asked, probe } = probeSpy(false);
+  const batch = ["https://example.nl/403", "https://example.nl/uit", "https://example.nl/file.pdf", "https://example.nl/a?f=1"];
+  const results = [
+    loaded({ status: 403 }),
+    { status: "fulfilled", value: { detected: [], links: [], skippedReason: "redirect to elders.nl" } },
+    { status: "fulfilled", value: { detected: [], links: [], skippedReason: "download" } },
+    blocked(),
+  ];
+  const weighed = await weighBatch(refusals, newThrottle(), batch, results, probe);
+  assert.equal(weighed.hostOk(batch[3]), false);
+  assert.equal(refusals.controlUrl("example.nl"), null);
+  assert.deepEqual(asked, []);
+});
+
+test("429, 503 and connection errors never raise the question", async () => {
+  const refusals = createRefusalTracker();
+  refusals.pageLoaded("https://example.nl/");
+  const { asked, probe } = probeSpy(true);
+  const batch = ["https://example.nl/a", "https://example.nl/b", "https://example.nl/c", "https://example.nl/d"];
+  const results = [
+    blocked("HTTP 429", fakeResponse(429)),
+    blocked("HTTP 503 WAF (Please wait)", fakeResponse(503)),
+    blocked("connection: ERR_CONNECTION_RESET", null),
+    { status: "rejected", reason: new Error("page.goto: Timeout 15000ms exceeded") },
+  ];
+  await weighBatch(refusals, newThrottle(), batch, results, probe);
+  assert.deepEqual(asked, []);
+});
+
+test("one host does not vouch for another in a list of URLs", async () => {
+  const refusals = createRefusalTracker();
+  refusals.pageLoaded("https://raad.example.nl/");
+  const { asked, probe } = probeSpy(false);
+  const batch = ["https://example.nl/nieuws", "https://raad.example.nl/document/1", "https://elders.nl/a"];
+  const weighed = await weighBatch(refusals, newThrottle(), batch, [loaded(), blocked(), blocked()], probe);
+  // raad.example.nl has a control page (which fails here), elders.nl has none
+  assert.deepEqual(asked, ["https://raad.example.nl/"]);
+  assert.equal(weighed.hostOk(batch[1]), false);
+  assert.equal(weighed.hostOk(batch[2]), false);
+});
+
+test("a refused URL that loads on its retry is counted as the rate limit it was", async () => {
+  const refusals = createRefusalTracker();
+  const throttle = newThrottle();
+  const [a, b] = ["https://example.nl/document/1", "https://example.nl/document/2"];
+  assert.equal(refusals.judge(a, "HTTP 403 Cloudflare (cf-ray: 1-AMS)", true), "retry");
+
+  const { probe } = probeSpy(true);
+  const weighed = await weighBatch(refusals, throttle, [b, a], [blocked("HTTP 403 Cloudflare (cf-ray: 2-AMS)"), loaded()], probe);
+  assert.equal(weighed.rateLimited, true);
+  assert.equal(throttle.rateLimitHits, 1);
+  assert.equal(throttle.concurrency, 2);
+  assert.deepEqual(throttle.events.map((e) => [e.url, e.reason]), [[a, "HTTP 403 Cloudflare, gone on retry"]]);
+  // Loads are read before any failure is judged: b, earlier in the batch, is a rate limit already
+  assert.equal(refusals.judge(b, "HTTP 403 Cloudflare (cf-ray: 2-AMS)", weighed.hostOk(b)), "rate-limit");
 });
