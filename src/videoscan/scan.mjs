@@ -818,7 +818,8 @@ export function isTranslatedCopy(url, startUrl) {
 // 1,664 login URLs with a player only repeated the page they redirect to; the
 // other 14 were rijksmuseum.nl's site-wide template on the login form.
 // Matched on the path only: ?next=/login on a content page is not a login page.
-const LOGIN_PATH = /\/(?:login|log-in|signin|sign-in|inloggen)(?:\.(?:php|aspx?|html?))?(?:\/|$)/i;
+// Last segment only: pages below one (/inloggen/uitleg-digid-video) can be content.
+const LOGIN_PATH = /\/(?:login|log-in|signin|sign-in|inloggen)(?:\.(?:php|aspx?|html?))?\/?$/i;
 
 function isLoginPage(url) {
   try {
@@ -1684,7 +1685,7 @@ async function scanPageIn(context, url, timeout) {
 const FILTER_CONTROL_ROLES = new Set(["checkbox", "radio", "switch", "menuitemcheckbox", "menuitemradio"]);
 
 export function isFilterControl({ role, ariaChecked }) {
-  // role may list fallbacks ("checkbox button"); the first token is the one in force
+  // role may list fallbacks ("checkbox button"); only the first token is checked
   const primaryRole = (role || "").trim().split(/\s+/)[0].toLowerCase();
   return FILTER_CONTROL_ROLES.has(primaryRole) || ariaChecked != null;
 }
@@ -2149,7 +2150,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     const dropped = storedQueue.length - restored.length;
     if (dropped > 0) {
       console.log(
-        chalk.yellow(`  Dropped ${dropped} queued URL(s) as crawler-trap output, translated copies, state-changing links, login pages or duplicates`),
+        chalk.yellow(`  Dropped ${dropped} queued URL(s): the crawl now skips them, or duplicates`),
       );
     }
     // Say so out loud when the filter took everything, and resume nothing: the
@@ -2157,7 +2158,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     // resume endpoint seeds https://www.<domain>, which a non-www host never
     // visited, so falling back here would crawl one stray page.
     if (storedQueue.length > 0 && restored.length === 0) {
-      console.log(chalk.yellow("  Every queued URL was trap output or a translated copy — nothing left to resume"));
+      console.log(chalk.yellow("  Every queued URL is one the crawl now skips — nothing left to resume"));
     }
     queue = restored.length || storedQueue.length ? restored : [normalizeUrl(startUrl, startUrl)];
 

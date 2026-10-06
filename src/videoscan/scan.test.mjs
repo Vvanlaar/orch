@@ -758,6 +758,8 @@ test("login pages are skipped", () => {
     "https://www.example.nl/account/log-in/",
     "https://www.example.nl/sign-in#form",
     "https://www.example.nl/Account/Login.aspx?ReturnUrl=%2F",
+    "https://www.example.nl/login.php",
+    "https://www.example.nl/mijn/inloggen.html",
   ]) assert.equal(shouldSkipUrl(url), true, url);
   for (const url of [
     "https://www.example.nl/nieuws/item?next=/login",
@@ -765,6 +767,9 @@ test("login pages are skipped", () => {
     "https://www.example.nl/nieuws/login-problemen-opgelost",
     "https://www.example.nl/blogin",
     "https://www.example.nl/loginformatie",
+    // below a login segment: content, not the login form
+    "https://www.example.nl/inloggen/uitleg-digid-video",
+    "https://www.example.nl/login/help/instructievideo",
   ]) assert.equal(shouldSkipUrl(url), false, url);
 });
 
