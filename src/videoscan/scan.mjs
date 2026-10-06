@@ -1992,7 +1992,7 @@ const REFUSAL_RECHECK_MS = 30_000;
 const hostOf = (url) => new URL(url).hostname.replace(/^www\./, "");
 
 export function createRefusalTracker(now = Date.now) {
-  const firstRefusal = new Map(); // url → signature of the block page it got
+  const firstRefusal = new Map(); // url → { signature of the block page it got, due time of its retry }
   const waiting = []; // [{ url, due }], oldest first: refused once, retry not sent yet
   const transient = new Set(); // signatures a retry got past
   const controls = new Map(); // host → the last page it served
@@ -2005,11 +2005,11 @@ export function createRefusalTracker(now = Date.now) {
     /** A page loaded. Returns the refusal it got past, if it had been refused before. */
     pageLoaded(url) {
       controls.set(hostOf(url), url);
-      const signature = firstRefusal.get(url);
-      if (!signature) return null;
+      const first = firstRefusal.get(url);
+      if (!first) return null;
       firstRefusal.delete(url);
-      transient.add(signature);
-      return signature;
+      transient.add(first.signature);
+      return first.signature;
     },
     /** "retry" (later, unthrottled), "refused" (give the URL up) or "rate-limit" (back off). */
     judge(url, reason, hostOk) {
@@ -2020,7 +2020,10 @@ export function createRefusalTracker(now = Date.now) {
       }
       if (!hostOk) return "rate-limit";
       const first = firstRefusal.get(url);
-      if (first === signature) {
+      if (first?.signature === signature) {
+        // Seen again before its wait was over (a URL list naming it twice):
+        // still the first answer, the retry is on its way
+        if (now() < first.due) return "retry";
         firstRefusal.delete(url);
         return "refused";
       }
@@ -2028,14 +2031,15 @@ export function createRefusalTracker(now = Date.now) {
       // response would otherwise send the URL round forever; the rate-limit
       // path counts its retries.
       if (first) return "rate-limit";
-      firstRefusal.set(url, signature);
-      waiting.push({ url, due: now() + REFUSAL_RECHECK_MS });
+      const due = now() + REFUSAL_RECHECK_MS;
+      firstRefusal.set(url, { signature, due });
+      waiting.push({ url, due });
       return "retry";
     },
-    /** The URLs whose retry is due, oldest first. They stop waiting. */
-    takeDue() {
+    /** Up to `limit` URLs whose retry is due, oldest first. They stop waiting. */
+    takeDue(limit = Infinity) {
       const due = [];
-      while (waiting.length > 0 && waiting[0].due <= now()) due.push(waiting.shift().url);
+      while (due.length < limit && waiting.length > 0 && waiting[0].due <= now()) due.push(waiting.shift().url);
       return due;
     },
     /** The URLs still sitting out their wait. */
@@ -2436,11 +2440,11 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     // Apply live control-file overrides (concurrency/delay) before sizing batch
     applyControlFile(throttle, controlFile);
 
-    // Refused URLs whose wait is over go first (see createRefusalTracker)
-    queue.unshift(...refusals.takeDue());
-
-    // Grab a batch of URLs to scan in parallel (use throttle.concurrency)
-    const batch = [];
+    // Grab a batch of URLs to scan in parallel (use throttle.concurrency).
+    // Refused URLs whose wait is over go first, and straight into the batch:
+    // through the queue, the re-sort below would file the ones that don't fit
+    // back under their section (see rebalanceQueue).
+    const batch = refusals.takeDue(Math.min(throttle.concurrency, maxPages - visited.size));
     while (batch.length < throttle.concurrency && queue.length > 0 && visited.size + batch.length < maxPages) {
       const url = queue.shift();
       if (!url || visited.has(url)) continue;
@@ -2449,6 +2453,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     if (batch.length === 0) {
       if (refusals.waiting().length === 0) break;
       // Nothing left but refused URLs sitting out their wait
+      autoTuner.beat(throttle, domain);
       await sleep(1000);
       continue;
     }
@@ -2784,9 +2789,10 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
     applyControlFile(throttle, controlFile);
 
     // Refused URLs whose wait is over go first (see createRefusalTracker)
-    remaining.unshift(...refusals.takeDue());
-    const batch = remaining.splice(0, throttle.concurrency);
+    const batch = refusals.takeDue(throttle.concurrency);
+    batch.push(...remaining.splice(0, throttle.concurrency - batch.length));
     if (batch.length === 0) {
+      autoTuner.beat(throttle, domain);
       await sleep(1000);
       continue;
     }
@@ -2905,10 +2911,9 @@ function generateReport({ domain, results, pagesScanned, _state, rateLimits, bat
   }
   // A scan that failed to load most pages must not read as a clean result.
   if (failureRate >= 0.5 && (errorSummary["Access refused"] || 0) > pagesFailed / 2) {
-    // Refused twice while the rest of the site loaded: a re-run gets the same answer
     console.log(chalk.bold.red(
-      `\n  ⚠ ${Math.round(failureRate * 100)}% of pages failed — mostly URLs the site refuses (403) while its other pages load.` +
-      `\n    That is not a rate limit and a re-run will not get them; the results cover the pages that are open.`
+      `\n  ⚠ ${Math.round(failureRate * 100)}% of pages failed — mostly URLs the site refused (403) twice, ${REFUSAL_RECHECK_MS / 1000}s apart, while other pages loaded.` +
+      `\n    That points at those URLs rather than a rate limit: a re-run will likely get the same answer.`
     ));
   } else if (failureRate >= 0.5) {
     console.log(chalk.bold.red(

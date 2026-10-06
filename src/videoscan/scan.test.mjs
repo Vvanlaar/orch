@@ -1558,20 +1558,39 @@ test("only a 403 without Retry-After can be a refusal of one URL", () => {
 
 const DENIED = "HTTP 403 WAF (Access denied | The Netherlands Institut)";
 const EXPERT = "https://www.beeldengeluid.nl/en/about/experts/kelly-mostert";
+// A tracker, and the way to let its 30 seconds pass
+const trackerWithClock = () => {
+  let t = 1_000_000;
+  return { refusals: createRefusalTracker(() => t), wait: (ms = 30_000) => { t += ms; } };
+};
 
-test("a 403 that repeats while the host serves other pages is that URL, not a rate limit", () => {
-  const refusals = createRefusalTracker();
+test("a 403 that repeats 30 seconds later while the host serves other pages is that URL, not a rate limit", () => {
+  const { refusals, wait } = trackerWithClock();
   assert.equal(refusals.judge(EXPERT, DENIED, true), "retry");
+  wait();
   assert.equal(refusals.judge(EXPERT, DENIED, true), "refused");
   // The next refused URL gets its own retry: nothing is given up on one response
   assert.equal(refusals.judge("https://www.beeldengeluid.nl/en/about/experts/lizzy-komen", DENIED, true), "retry");
 });
 
+test("a URL refused again before its wait is over is still waiting, not given up", () => {
+  const { refusals, wait } = trackerWithClock();
+  assert.equal(refusals.judge(EXPERT, DENIED, true), "retry");
+  // A list of URLs that names it twice
+  wait(29_999);
+  assert.equal(refusals.judge(EXPERT, DENIED, true), "retry");
+  assert.deepEqual(refusals.waiting(), [EXPERT]);
+  wait(1);
+  assert.deepEqual(refusals.takeDue(), [EXPERT]);
+  assert.equal(refusals.judge(EXPERT, DENIED, true), "refused");
+});
+
 test("a 403 while the host serves nothing else is a rate limit, on the first sight and on the retry", () => {
-  const refusals = createRefusalTracker();
+  const { refusals, wait } = trackerWithClock();
   const url = "https://www.mauritshuis.nl/bezoek";
   assert.equal(refusals.judge(url, DENIED, false), "rate-limit");
   assert.equal(refusals.judge(url, DENIED, true), "retry");
+  wait();
   // The host stopped answering at the retry: no verdict on the URL yet
   assert.equal(refusals.judge(url, DENIED, false), "rate-limit");
   // …and the first refusal still stands when it answers again
@@ -1625,7 +1644,14 @@ test("the retry of a refused URL is due 30 seconds later, oldest first", () => {
   assert.deepEqual(refusals.takeDue(), ["https://example.nl/a?f=1"]);
   assert.deepEqual(refusals.waiting(), ["https://example.nl/a?f=2"]);
   t += 60_000;
-  assert.deepEqual(refusals.takeDue(), ["https://example.nl/a?f=2"]);
+  refusals.judge("https://example.nl/a?f=4", DENIED, true);
+  refusals.judge("https://example.nl/a?f=5", DENIED, true);
+  t += 30_000;
+  // No more than the batch has room for; the rest stays first in line
+  assert.deepEqual(refusals.takeDue(2), ["https://example.nl/a?f=2", "https://example.nl/a?f=4"]);
+  assert.deepEqual(refusals.waiting(), ["https://example.nl/a?f=5"]);
+  assert.deepEqual(refusals.takeDue(0), []);
+  assert.deepEqual(refusals.takeDue(), ["https://example.nl/a?f=5"]);
   assert.deepEqual(refusals.takeDue(), []);
   assert.deepEqual(refusals.waiting(), []);
   // Taken from the wait, but still remembered as refused once
