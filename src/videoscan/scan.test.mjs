@@ -873,6 +873,53 @@ test("normalizeUrl leaves a URL without repeated keys byte-identical", () => {
   assert.equal(normalizeUrl(url, "https://example.nl/"), url);
 });
 
+test("normalizeUrl collapses Drupal quicktabs variants onto the page", () => {
+  // jiphaarlemmermeer.nl: 4 rows for one page with one YouTube embed.
+  const page = "https://www.jiphaarlemmermeer.nl/pesten-geweld/grooming-sexting";
+  for (const variant of [page, `${page}?qt-vragen_formulier=0`, `${page}?qt-vragen_formulier=1`, `${page}?qt-vragen_formulier=2`]) {
+    assert.equal(normalizeUrl(variant, "https://www.jiphaarlemmermeer.nl/"), page, variant);
+  }
+  // Next to real parameters only the tab goes, wherever it sits.
+  assert.equal(
+    normalizeUrl("https://example.nl/nieuws?page=2&qt-tabs=1&sort=date", "https://example.nl/"),
+    "https://example.nl/nieuws?page=2&sort=date",
+  );
+  assert.equal(
+    normalizeUrl("https://example.nl/nieuws?qt-tabs=1&qt-zijbalk=0&page=2", "https://example.nl/"),
+    "https://example.nl/nieuws?page=2",
+  );
+  // Together with the verbatim-repeat rule, and through the --resume queue.
+  assert.equal(normalizeUrl("https://example.nl/nieuws?a=1&qt-tabs=0&a=1", "https://example.nl/"), "https://example.nl/nieuws?a=1");
+  assert.deepEqual(
+    restoreQueue([page, `${page}?qt-vragen_formulier=0`, `${page}?qt-vragen_formulier=2`], "https://www.jiphaarlemmermeer.nl/"),
+    [page],
+  );
+});
+
+test("normalizeUrl collapses an empty WordPress search onto the page", () => {
+  // dementiehaarlemmermeer.nl: 2 rows for one page.
+  const page = "https://dementiehaarlemmermeer.nl/dagbesteding-overzicht";
+  assert.equal(normalizeUrl(`${page}?s=`, "https://dementiehaarlemmermeer.nl/"), page);
+  assert.equal(normalizeUrl(`${page}?s`, "https://dementiehaarlemmermeer.nl/"), page);
+  assert.equal(normalizeUrl(`${page}?s=&paged=2`, "https://dementiehaarlemmermeer.nl/"), `${page}?paged=2`);
+});
+
+test("normalizeUrl keeps a real search and parameters that only resemble a tab", () => {
+  for (const url of [
+    "https://dementiehaarlemmermeer.nl/?s=zoekterm",
+    "https://dementiehaarlemmermeer.nl/dagbesteding-overzicht?s=zoekterm",
+    "https://dementiehaarlemmermeer.nl/?s=", // on the root this is the search template, not the home page
+    "https://dementiehaarlemmermeer.nl/?s=dag%20besteding&paged=2",
+    "https://example.nl/zoek?search=&sort=", // empty, but not WordPress's s
+    "https://example.nl/zoek?qs=&ss=",
+    "https://example.nl/producten?qt=5&qty=2", // no qt- prefix
+    "https://example.nl/producten?qt-filter=rood", // not a tab index
+    "https://example.nl/producten?id=12&page=3&utm_source=nieuwsbrief",
+  ]) {
+    assert.equal(normalizeUrl(url, "https://example.nl/"), url, url);
+  }
+});
+
 test("normalizeUrl still strips hash and trailing slash", () => {
   assert.equal(normalizeUrl("https://example.nl/pad/#sectie", "https://example.nl/"), "https://example.nl/pad");
 });
