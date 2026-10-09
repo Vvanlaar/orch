@@ -647,6 +647,30 @@ const MAX_PATH_SEGMENTS = 12;
 const MAX_SEGMENT_REPEATS = 4;
 const MAX_QUERY_KEY_REPEATS = 3;
 
+// Query parameters that pick a state of the page they sit on rather than
+// another page. Each is matched against one raw `key=value` part and is as
+// narrow as the site that fooled us allows — a parameter that merely looks
+// similar names a different page and has to survive.
+//
+// Drupal quicktabs: ?qt-<block>=<n> only says which tab of a tab block is
+// open. www.jiphaarlemmermeer.nl/pesten-geweld/grooming-sexting came back four
+// times (bare, ?qt-vragen_formulier=0, =1, =2) — one page, one YouTube embed.
+// The value is always a tab index, so anything else under a qt- key is not
+// quicktabs and stays. The price: a quicktabs block in ajax mode renders only
+// the open tab, so a video in another tab is no longer reached through its
+// ?qt- link.
+const QUICKTABS_PARAM = /^qt-[^=]+=\d+$/;
+// WordPress search with nothing typed: dementiehaarlemmermeer.nl links
+// /dagbesteding-overzicht?s= next to /dagbesteding-overzicht, and on a page
+// path WordPress ignores the empty s and serves the page itself. Only the
+// empty value goes — ?s=term is a real results page — and never on the root,
+// where /?s= is the search template rather than the home page.
+const EMPTY_SEARCH_PARAM = /^s=?$/;
+
+function isSamePageParam(part, pathname) {
+  return QUICKTABS_PARAM.test(part) || (pathname !== "/" && EMPTY_SEARCH_PARAM.test(part));
+}
+
 export function normalizeUrl(url, base) {
   try {
     const u = new URL(url, base);
@@ -669,11 +693,14 @@ export function normalizeUrl(url, base) {
     // Done on the raw query string rather than via URLSearchParams so that
     // untouched parameters keep their exact original encoding — re-serializing
     // would rewrite %20 as + on params that never repeated.
+    //
+    // Same-page parameters (isSamePageParam) go in the same pass, on the raw
+    // string as well, so what remains keeps its encoding too.
     const rawQuery = u.search.slice(1);
-    if (rawQuery.includes("&")) {
+    if (rawQuery) {
       const parts = rawQuery.split("&");
-      const unique = [...new Set(parts)];
-      if (unique.length !== parts.length) u.search = unique.join("&");
+      const kept = [...new Set(parts.filter((part) => !isSamePageParam(part, u.pathname)))];
+      if (kept.length !== parts.length) u.search = kept.join("&");
     }
     return u.href;
   } catch {
