@@ -29,8 +29,10 @@ const interval = intervalSec * 1000;
 // lists the 100 newest tasks only, so a batch can scroll out of it while its
 // last crawl still runs. /api/tasks: a resume or retry (the service does both
 // on its own after a restart) fails the original task and creates a NEW one in
-// the same batch, which no manifest knows about.
-const known = new Set(readManifest(batchId)?.tasks.map(t => t.taskId) ?? []);
+// the same batch, which no manifest knows about. The manifest is re-read every
+// poll: scan-retry-failed.mjs adds its re-scan tasks to it while this runs, and
+// those carry no batch id for the list to find them by.
+const known = new Set();
 
 const stamp = () => new Date().toTimeString().slice(0, 5);
 const MAX_MISSES = 10;
@@ -40,6 +42,7 @@ let misses = 0;
 for (;;) {
   let tasks;
   try {
+    for (const t of readManifest(batchId)?.tasks ?? []) known.add(t.taskId);
     const listed = new Map((await api('/api/tasks')).map(t => [t.id, t]));
     for (const t of listed.values()) if (t.context?.batchId === batchId) known.add(t.id);
     if (!known.size) fail(`No tasks known for batch "${batchId}" — no launch manifest and nothing in /api/tasks`);

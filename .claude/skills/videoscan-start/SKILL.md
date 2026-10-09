@@ -109,8 +109,28 @@ finished files), and start the watcher again. A finished scan's file is final,
 so pruning it now is safe — and it means the merge the service does at the end
 is built from rows that were already checked. Look at coverage too while the
 crawl is fresh: a scan that stopped at one page (a redirect off the host, an
-expired certificate, a login wall, a single-page app) or lost a quarter of its
-requests to timeouts is a finding for the user, not a clean zero.
+expired certificate, a login wall, a single-page app) is a finding for the
+user, not a clean zero. Fetch the homepage to tell which of those it is.
+
+**Re-scan what timed out — at every wake, not after the batch.**
+
+```bash
+node .claude/skills/videoscan-start/scripts/scan-retry-failed.mjs <batchId>          # dry run + earlier retries
+node .claude/skills/videoscan-start/scripts/scan-retry-failed.mjs <batchId> --apply
+```
+
+Ten crawls at once make this machine slow, and slow sites time out on their
+own: expect a few percent of pages lost per scan, a quarter on a bad one. A
+timed-out page was never checked for video. The script queues those pages as
+"add URLs" tasks that fold their result into the scan's own file; permanent
+failures (expired certificate, dead host, refusal) are listed and left. It
+remembers which files it already retried, so run it again at each wake for the
+scans that finished since. Not after the batch: the service merges the
+organisation report the moment the last crawl finishes, and an add-URLs task
+is not a batch member — the merge does not wait for it. The watcher does; the
+re-scans are added to the launch manifest it follows. Without `--apply` the
+script also reports how earlier retries ended and which pages failed twice —
+those go in the final report as unchecked.
 
 `--once` prints the current state and returns (exit 0 while still busy), for a
 progress question in between. A failed task (`scan.mjs exited with code null`
@@ -156,6 +176,15 @@ answered, ask now rather than shipping the slug as a title.
 ## Reporting back
 
 At launch: the batch id, the number of tasks, which sites were capped as shared
-(or excluded) and why, and the open tasks found on the server. At the end: which hosts failed or were cut
-off at the cap, the validation result, and the report files with the title and
+(or excluded) and why, and the open tasks found on the server. At each wake:
+what was verified, what was pruned, coverage findings, what was queued for a
+re-scan. At the end: which hosts failed or were cut off at the cap, which pages
+failed twice, the validation result, and the report files with the title and
 cover that went on them.
+
+## Keep this skill current
+
+When a run teaches something — a trap that cost time, a manual step done a
+second time, a rule the user states ("shared sites stay under 500 pages") —
+put it in this file or its scripts in the same session, then commit and push.
+A lesson that only lives in the conversation is gone the next time.
