@@ -121,6 +121,20 @@ crawl is fresh: a scan that stopped at one page (a redirect off the host, an
 expired certificate, a login wall, a single-page app) is a finding for the
 user, not a clean zero. Fetch the homepage to tell which of those it is.
 
+When the registered URL redirects to another domain, the crawl ends at that
+one page and the site itself was never scanned (`samensterkertegenarmoede.nl`
+→ `samensterker.org`). If the target is still the organisation's site, add it
+to the batch and tell the user:
+
+```bash
+node .claude/skills/videoscan-start/scripts/scan-start.mjs https://samensterker.org/ --batch <batchId> --apply
+```
+
+Count pages, not rows, when a site serves one page under several URLs: an
+embed on `/page`, `/page?qt-tab=0`, `/page?qt-tab=1` (Drupal quicktabs) or
+`/page?s=` is one page with video, reported as three or four. Those rows are
+real detections, so they are not pruned — say so next to the number.
+
 **Re-scan what timed out — at every wake, not after the batch.**
 
 ```bash
