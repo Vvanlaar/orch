@@ -159,6 +159,19 @@ The script queues those pages as a URL-list scan **in the same batch**:
   up and printed as `unchecked`; one with a re-scan still queued is left alone.
   So run it at every wake — it only queues what is new or failed again.
 
+A re-scan is worth it: on one organisation 330 of 337 timed-out pages loaded
+on the first or second re-scan, and three of them had video. For the pages that
+are given up, look at the served HTML before calling them unchecked:
+
+```bash
+node .claude/skills/videoscan-start/scripts/scan-unchecked.mjs <batchId>
+```
+
+Often the server answers in a second and it is only the browser that never
+finishes loading them; the script prints the player markup in the HTML, if
+any. Report those as "not rendered by the scanner; HTML has no player" — it
+cannot rule out a player that JavaScript adds.
+
 Permanent failures (expired certificate, dead host, refusal) are listed and
 not retried. The `unchecked` pages go in the final report as not checked. Not
 after the batch: the merge archives the batch's scan files, and then there is
