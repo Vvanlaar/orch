@@ -1,89 +1,83 @@
 #!/usr/bin/env node
-// Re-scan the pages a batch's finished scans lost to timeouts, into the same file.
+// Re-scan the pages a batch's finished scans could not load.
 //
-//   node scan-retry-failed.mjs <batchId>           # what failed, and how earlier retries went
+//   node scan-retry-failed.mjs <batchId>           # where every failed page stands
 //   node scan-retry-failed.mjs <batchId> --apply   # queue the re-scans
 //
-// A crawl records every page it could not load. Timeouts are mostly this machine
-// (ten crawls at once) or a slow site, not a missing page — and a page that
-// timed out is a page nobody checked for video. Each re-scan is an "add URLs"
-// task: it scans just those pages and folds the result into the scan's own file.
+// A crawl lists the pages it could not load (the first 1000 of them). Timeouts
+// are mostly this machine, busy with several crawls at once, or a slow site —
+// not a missing page — and a page that timed out is a page nobody checked for
+// video. Each re-scan is an ordinary URL-list scan IN THE SAME BATCH: the
+// service waits for it before it builds the organisation report, and its result
+// is a scan file of its own, so which pages failed again is on disk, not in a
+// log. Nothing is remembered between runs — the state of a page is read from
+// the batch's files and its open tasks every time.
 //
-// Run it while the batch is still crawling. The service builds the organisation
-// report the moment the batch's last crawl finishes, from the files as they are
-// then, and an add-URLs task is not part of the batch — nothing waits for it.
+// Run it while the batch is still crawling: once the report is built, the
+// batch's scan files are archived and there is nothing left to read.
 
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { api, fail, parseArgs, readManifest, writeManifest } from './api.mjs';
+import { api, fail, parseArgs, readManifest, OPEN_STATUSES } from './api.mjs';
+import { retryPlan, chunk, MAX_ATTEMPTS } from './logic.mjs';
 import { listScans, videoscanDir, isDerivedScan } from '../../videoscan-validate/scripts/lib.mjs';
 
 const { target: batchId, flags } = parseArgs(process.argv.slice(2), { '--apply': 'bool' },
   'usage: scan-retry-failed.mjs <batchId> [--apply]');
-const manifest = readManifest(batchId);
-if (!manifest) fail(`No launch manifest for "${batchId}" — this needs a batch started by scan-start.mjs`);
-manifest.retries ??= []; // [{ taskId, filename, urls }]
+const MAX_URLS_PER_TASK = 500; // the endpoint's limit
 
-// Worth a second try: the page may well exist. An expired certificate, a dead
-// host name or a refusal will fail the same way again.
-const TRANSIENT = /Timeout|ERR_TIMED_OUT|ERR_CONNECTION_(RESET|CLOSED|TIMED_OUT)|ERR_NETWORK_CHANGED|ERR_EMPTY_RESPONSE|ERR_ABORTED|ERR_HTTP2_PROTOCOL_ERROR/i;
-const MAX_URLS_PER_TASK = 100; // the endpoint's limit
-
-// ── Earlier retries ──
-if (manifest.retries.length) {
-  console.log('── Earlier retries ──');
-  for (const r of manifest.retries) {
-    let t;
-    try { t = await api(`/api/tasks/${r.taskId}`); } catch (err) { console.log(`  #${r.taskId}  ${r.filename}: ${err.message}`); continue; }
-    // The re-scan's own file is deleted once merged, so the task output is the
-    // only record of which of these pages failed a second time.
-    const out = String(t.output || '');
-    const stillFailing = r.urls.filter(u => new RegExp(`(fail|timeout|error)[^\\n]*${escapeRe(u)}|${escapeRe(u)}[^\\n]*(fail|timeout|error)`, 'i').test(out));
-    const merged = out.match(/Merged successfully \(([^)]*)\)/)?.[1];
-    console.log(`  #${r.taskId}  ${t.status}  ${r.filename}: ${r.urls.length} pages re-scanned${merged ? `, file now ${merged}` : ''}${t.status === 'completed' ? `, ${stillFailing.length} failed again` : ''}`);
-    for (const u of stillFailing) console.log(`      still failing  ${u}`);
-  }
-  console.log('');
-}
-
-// ── What is there to retry ──
 const dir = videoscanDir();
-const retried = new Set(manifest.retries.map(r => r.filename));
-const plan = [];
-console.log('── Failed pages in finished scans ──');
-for (const s of listScans(dir).filter(s => s.batchId === batchId && !s.unreadable && !isDerivedScan(s.filename) && !s.filename.includes('INPROGRESS'))) {
-  if (!s.pagesFailed) continue;
-  const failed = JSON.parse(readFileSync(join(dir, s.filename), 'utf-8')).failedUrls || [];
-  const urls = failed.filter(f => TRANSIENT.test(f.error || '')).map(f => f.url);
-  const rest = failed.length - urls.length;
-  const state = retried.has(s.filename) ? 'already retried' : urls.length ? 'retry' : 'nothing a retry would fix';
-  console.log(`  ${s.domain}: ${s.pagesFailed} of ${s.pagesScanned} failed — ${urls.length} transient${rest ? `, ${rest} permanent (${[...new Set(failed.filter(f => !TRANSIENT.test(f.error || '')).map(f => String(f.error).match(/ERR_\w+|Access refused|HTTP \d+/)?.[0] || 'other'))].join(', ')})` : ''}  [${state}]`);
-  if (urls.length && !retried.has(s.filename)) plan.push({ filename: s.filename, urls });
-}
-if (!plan.length) { console.log('\nNothing to queue.'); process.exit(0); }
+const members = listScans(dir).filter(s => s.batchId === batchId && !s.unreadable && !isDerivedScan(s.filename) && !s.filename.includes('INPROGRESS'));
+if (!members.length) fail(`No finished scan files for batch "${batchId}" — nothing has completed yet, the id is wrong, or the batch was already merged`, 1);
+const files = members.map(s => {
+  const d = JSON.parse(readFileSync(join(dir, s.filename), 'utf-8'));
+  return { domain: s.domain, pagesFailed: d.pagesFailed || 0, visited: d._state?.visited || [], failedUrls: d.failedUrls || [] };
+});
 
+// Re-scans that are queued or running have no file yet. /api/tasks shows the
+// 100 newest tasks; a re-scan is always newer than the crawl it follows.
+const open = (await api('/api/tasks')).filter(t => t.context?.batchId === batchId && OPEN_STATUSES.includes(t.status) && t.context?.urls?.length);
+const inFlight = new Set(open.flatMap(t => t.context.urls));
+
+const rows = retryPlan(files, inFlight);
+if (!rows.length) { console.log('No failed pages in the finished scans.'); process.exit(0); }
+
+console.log('── Failed pages in finished scans ──');
+for (const r of rows) {
+  const parts = [
+    r.retry.length && `${r.retry.length} to re-scan`,
+    r.waiting.length && `${r.waiting.length} re-scan queued`,
+    r.recovered && `${r.recovered} loaded on a re-scan`,
+    r.gaveUp.length && `${r.gaveUp.length} failed ${MAX_ATTEMPTS}× — unchecked`,
+    r.permanent.length && `${r.permanent.length} permanent (${[...new Set(r.permanent.map(p => String(p.error).match(/ERR_\w+|Access refused|HTTP \d+/)?.[0] || 'other'))].join(', ')})`,
+    r.unrecorded && `${r.unrecorded} more failed but not listed by the scan`,
+  ].filter(Boolean);
+  console.log(`  ${r.domain}: ${parts.join(', ')}`);
+  for (const u of r.gaveUp) console.log(`      unchecked  ${u}`);
+}
+
+const todo = rows.filter(r => r.retry.length);
+if (!todo.length) { console.log('\nNothing to queue.'); process.exit(0); }
 if (!flags['--apply']) {
-  console.log(`\nDry run — ${plan.reduce((n, p) => n + p.urls.length, 0)} pages in ${plan.length} scans would be re-scanned. Re-run with --apply.`);
+  console.log(`\nDry run — ${todo.reduce((n, r) => n + r.retry.length, 0)} pages on ${todo.length} sites would be re-scanned. Re-run with --apply.`);
   process.exit(0);
 }
 
+// Batch label and delay come from a batch member, so this also works on a
+// batch that was not started by scan-start.mjs.
+const manifest = readManifest(batchId);
+const batchLabel = manifest?.batchLabel || members.find(s => s.batchLabel)?.batchLabel;
 let errors = 0;
-for (const p of plan) {
-  for (let i = 0; i < p.urls.length; i += MAX_URLS_PER_TASK) {
-    const urls = p.urls.slice(i, i + MAX_URLS_PER_TASK);
+for (const r of todo) {
+  for (const urls of chunk(r.retry, MAX_URLS_PER_TASK)) {
     try {
-      const r = await api('/api/actions/add-urls-to-scan', { filename: p.filename, urls, delay: manifest.delay });
-      manifest.retries.push({ taskId: r.taskId, filename: p.filename, urls });
-      // In `tasks` too, so scan-watch.mjs keeps watching until the re-scan is in.
-      manifest.tasks.push({ taskId: r.taskId, kind: 'retry', target: `${urls.length} failed pages of ${p.filename}` });
-      console.log(`  queued #${r.taskId}  ${urls.length} pages → ${p.filename}`);
+      // maxPages as the dashboard sends it for a URL list: the endpoint's own default is 50.
+      const t = await api('/api/actions/start-videoscan-urls', { urls, maxPages: 20000, delay: manifest?.delay ?? 200, batchId, ...(batchLabel ? { batchLabel } : {}) });
+      console.log(`  queued #${t.taskId}  ${urls.length} pages of ${r.domain}`);
     } catch (err) {
       errors++;
-      console.log(`  FAILED to queue ${p.filename}: ${err.message}`);
+      console.log(`  FAILED to queue ${r.domain}: ${err.message}`);
     }
-    writeManifest(manifest);
   }
 }
 process.exit(errors ? 1 : 0);
-
-function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }

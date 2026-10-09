@@ -15,11 +15,13 @@
 //
 // Always prints what else is open on the server first. A DigiToegankelijk
 // organisation becomes one batch, planned the way the dashboard's import does;
-// a plain site URL becomes a single unbatched crawl.
+// a plain site URL becomes a batch of one crawl, so the later steps (watch,
+// re-scan, report) find it the same way.
 
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { api, fail, parseArgs, writeManifest, OPEN_STATUSES } from './api.mjs';
+import { bare, buildPlan } from './logic.mjs';
 import { videoscanDir, heartbeats } from '../../videoscan-validate/scripts/lib.mjs';
 
 const USAGE = 'usage: scan-start.mjs <digitoegankelijk org url | org id | site url> [--shared h1,h2] [--shared-max-pages N] [--exclude h1,h2] [--max-pages N] [--delay MS] [--title "…"] [--cover <url>] [--apply]';
@@ -36,7 +38,6 @@ for (const [name, n] of [['--max-pages', maxPages], ['--shared-max-pages', share
 }
 if (!Number.isFinite(delay) || delay < 0) fail('--delay must be a number of milliseconds');
 
-const bare = (host) => host.toLowerCase().replace(/^www\./, '');
 const hostList = (v) => new Set((v || '').split(',').map(h => bare(h.trim())).filter(Boolean));
 const excluded = hostList(flags['--exclude']);
 const shared = hostList(flags['--shared']);
@@ -46,56 +47,49 @@ const shared = hostList(flags['--shared']);
 // is not listed here; scan-status.mjs (heartbeats) is the check for live crawls.
 const tasks = await api('/api/tasks');
 const open = tasks.filter(t => OPEN_STATUSES.includes(t.status));
-console.log('── Open tasks on the server ──');
+console.log(`── Open tasks on the server (of the ${tasks.length} newest) ──`);
 if (!open.length) console.log('  none');
 for (const t of open) console.log(`  #${t.id}  ${t.type}  ${t.status}  ${t.context?.title || t.repo}${t.context?.batchLabel ? `  [${t.context.batchLabel}]` : ''}`);
 
 // ── Plan ──
 const digi = target.match(/^https?:\/\/dashboard\.digitoegankelijk\.nl\/organisaties\/(\d+)/) || target.match(/^(\d+)$/);
-let plan; // [{ kind: 'crawl', url, maxPages } | { kind: 'urls', urls, domain }]
-let batch = null;
+let groups;
+let batch;
 let orgSlug = '';
-const skipped = [];
 
 if (digi) {
   const org = await api('/api/videoscans/import-digitoegankelijk', { id: Number(digi[1]) });
   console.log(`\n── DigiToegankelijk organisation ${digi[1]}: ${org.orgName} ──`);
   console.log(`  ${org.totalSites} sites on ${org.groups.length} domains, ${org.skippedApps} apps skipped`);
+  groups = org.groups;
   orgSlug = org.orgName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'import';
   // Same id and label shape as VideoscanPage.svelte's handleBulkStart, so the
   // batch groups and wraps up in the dashboard like one started there.
   batch = { batchId: `digi-${orgSlug}-${Date.now()}`, batchLabel: `Digi import — ${org.orgName}` };
-  plan = [];
-  for (const group of org.groups) {
-    const urls = group.sites.map(s => s.url).filter(u => {
-      const keep = !excluded.has(bare(new URL(u).hostname));
-      if (!keep) skipped.push(u);
-      return keep;
-    });
-    const { crawls, explicit } = classifyGroupUrls(urls);
-    for (const url of crawls) plan.push(crawl(url));
-    if (explicit.length) plan.push({ kind: 'urls', urls: explicit, domain: group.rootDomain });
-  }
 } else {
   let url;
-  try { url = new URL(/^https?:\/\//.test(target) ? target : `https://${target}`).href; } catch { fail(`Not a URL or organisation id: ${target}`); }
-  plan = [crawl(url)];
+  try { url = new URL(/^https?:\/\//.test(target) ? target : `https://${target}`); } catch { fail(`Not a URL or organisation id: ${target}`); }
+  const host = bare(url.hostname);
+  groups = [{ rootDomain: host, sites: [{ url: url.href }] }];
+  batch = { batchId: `site-${host}-${Date.now()}`, batchLabel: `Site — ${host}` };
 }
 
-const crawlHosts = new Set(plan.filter(p => p.kind === 'crawl').map(p => bare(new URL(p.url).hostname)));
-const planHosts = new Set([...crawlHosts, ...skipped.map(u => bare(new URL(u).hostname))]);
-const strangers = [...excluded].filter(h => !planHosts.has(h)).concat([...shared].filter(h => !crawlHosts.has(h)));
-if (strangers.length) fail(`--exclude / --shared name hosts that are not a crawl in this plan: ${strangers.join(', ')}`);
+const { plan, skipped, unknown } = buildPlan(groups, { excluded, shared, maxPages, sharedMaxPages });
+if (unknown.length) fail(`--exclude / --shared name hosts this plan does not crawl: ${unknown.join(', ')}`);
 
 console.log(`\n── Plan: ${plan.length} tasks, max ${maxPages} pages per crawl, delay ${delay}ms ──`);
 const dir = videoscanDir();
 const live = new Set(heartbeats(dir).filter(h => h.live && h.hostname).map(h => bare(h.hostname)));
+const liveInPlan = [];
 for (const p of plan) {
   if (p.kind === 'urls') { console.log(`  pages  ${p.domain}: ${p.urls.join('  ')}`); continue; }
   const host = bare(new URL(p.url).hostname);
+  if (live.has(host)) liveInPlan.push(host);
   const cap = p.maxPages === maxPages ? '' : `  (shared — max ${p.maxPages} pages)`;
   // Only a hint: the organisation's own tenant on a supplier platform fails
-  // this test too, and so does a project site with a name of its own.
+  // this test too, and so does a project site with a name of its own. And the
+  // import's organisation name can itself be a supplier's domain, or
+  // "Organisation <id>", in which case every line gets the hint.
   const hint = orgSlug && !cap && !host.includes(orgSlug.replace(/-/g, '')) && !host.includes(orgSlug) ? '  ? name does not carry the organisation — shared site?' : '';
   console.log(`  crawl  ${p.url}${cap}${hint}${checkpointNote(host)}`);
 }
@@ -105,66 +99,44 @@ if (!apply) {
   console.log('\nDry run — nothing started. Re-run with --apply to create the tasks.');
   process.exit(0);
 }
+// Two crawls of one host write the same checkpoint file and take each other's
+// result for their own.
+if (liveInPlan.length) fail(`Not started: a crawl of ${liveInPlan.join(', ')} is running right now. Wait for it, or leave the host out with --exclude.`, 1);
 
 // ── Launch ──
 const started = [];
-const errors = [];
+const notStarted = [];
 for (const p of plan) {
+  const what = p.kind === 'crawl' ? p.url : p.urls.join(' ');
   try {
     const r = p.kind === 'crawl'
-      ? await api('/api/actions/start-videoscan', { url: p.url, maxPages: p.maxPages, delay, ...(batch || {}) })
-      : await api('/api/actions/start-videoscan-urls', { urls: p.urls, maxPages, delay, ...(batch || {}) });
-    started.push({ taskId: r.taskId, kind: p.kind, target: p.kind === 'crawl' ? p.url : p.urls.join(' '), ...(p.kind === 'crawl' ? { maxPages: p.maxPages } : {}) });
+      ? await api('/api/actions/start-videoscan', { url: p.url, maxPages: p.maxPages, delay, ...batch })
+      : await api('/api/actions/start-videoscan-urls', { urls: p.urls, maxPages, delay, ...batch });
+    if (!Number.isInteger(r.taskId)) throw new Error(`no task id in the reply: ${JSON.stringify(r).slice(0, 120)}`);
+    started.push({ taskId: r.taskId, kind: p.kind, target: what, ...(p.kind === 'crawl' ? { maxPages: p.maxPages } : {}) });
   } catch (err) {
-    errors.push(`${p.kind === 'crawl' ? p.url : p.domain}: ${err.message}`);
+    notStarted.push({ target: what, error: err.message });
   }
 }
 
 console.log(`\nStarted ${started.length}/${plan.length} tasks${started.length ? ` (#${started[0].taskId}–#${started.at(-1).taskId})` : ''}`);
-for (const e of errors) console.log(`  FAILED to start  ${e}`);
+for (const n of notStarted) console.log(`  FAILED to start  ${n.target}: ${n.error}`);
 if (started.length) {
   const report = { ...(flags['--title'] ? { title: flags['--title'] } : {}), ...(flags['--cover'] ? { cover: flags['--cover'] } : {}) };
-  const manifest = { ...(batch || { batchId: `single-${started[0].taskId}`, batchLabel: target }), target, maxPages, delay, startedAt: new Date().toISOString(), tasks: started, skipped, report };
-  writeManifest(manifest);
-  console.log(`batch: ${manifest.batchId}`);
-  console.log(`watch: node .claude/skills/videoscan-start/scripts/scan-watch.mjs ${manifest.batchId}`);
+  // notStarted goes in too: the watcher has no other way to know the batch is
+  // short of sites, and would call it complete.
+  writeManifest({ ...batch, target, maxPages, delay, startedAt: new Date().toISOString(), tasks: started, skipped, notStarted, report });
+  console.log(`batch: ${batch.batchId}`);
+  console.log(`watch: node .claude/skills/videoscan-start/scripts/scan-watch.mjs ${batch.batchId}`);
 }
-process.exit(errors.length ? 1 : 0);
-
-function crawl(url) {
-  return { kind: 'crawl', url, maxPages: shared.has(bare(new URL(url).hostname)) ? sharedMaxPages : maxPages };
-}
-
-/**
- * Per host: its root URL is a crawl seed, anything else is scanned as the
- * listed pages only (a login page or one municipality's path on a supplier's
- * domain is not a reason to crawl the whole host). Mirrors classifyGroupUrls in
- * src/dashboard/stores/videoscan.svelte.ts — keep the two in step.
- */
-function classifyGroupUrls(urls) {
-  const buckets = new Map();
-  for (const u of urls) {
-    const host = bare(new URL(u).hostname);
-    if (!buckets.has(host)) buckets.set(host, []);
-    buckets.get(host).push(u);
-  }
-  const crawls = [];
-  const explicit = [];
-  for (const bucketUrls of buckets.values()) {
-    const root = bucketUrls.find(u => new URL(u).pathname === '/');
-    if (root) crawls.push(root);
-    else explicit.push(...bucketUrls);
-  }
-  return { crawls, explicit };
-}
+process.exit(notStarted.length ? 1 : 0);
 
 /**
  * scan.mjs checkpoints to one fixed name per host, so a fresh crawl overwrites
- * whatever an earlier crawl of that host left behind — and two crawls of one
- * host at once write over each other.
+ * whatever an earlier crawl of that host left behind.
  */
 function checkpointNote(host) {
-  if (live.has(host)) return '\n         ! a crawl of this host is LIVE right now — a second one fights it over the same checkpoint file';
+  if (live.has(host)) return '\n         ! a crawl of this host is LIVE right now — --apply will refuse';
   const file = join(dir, `videoscan-${host}-INPROGRESS.json`);
   if (!existsSync(file)) return '';
   try {

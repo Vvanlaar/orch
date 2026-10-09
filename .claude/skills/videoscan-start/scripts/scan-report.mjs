@@ -9,6 +9,7 @@
 // server keeps both inside the scan JSON, so later regenerations reuse them.
 
 import { api, fail, parseArgs, readManifest, writeManifest } from './api.mjs';
+import { pickReportFiles } from './logic.mjs';
 import { listScans, isDerivedScan } from '../../videoscan-validate/scripts/lib.mjs';
 
 const { target, flags } = parseArgs(process.argv.slice(2), { '--title': 'value', '--cover': 'value', '--save': 'bool' },
@@ -44,25 +45,20 @@ if (cover) {
 }
 
 // ── Which file is the batch's report? ──
-// The organisation report is a derived scan: the "<slug>-organisatie…-merged"
-// the service writes when the batch's last task completes, or the "…-summary"
-// a manual wrap-up writes. Members keep their own reports and are left alone.
 let files;
 if (target.endsWith('.json')) {
   files = [target];
 } else {
-  const slug = target.match(/^(?:digi|urls)-(.+)-\d+$/)?.[1];
-  const since = manifest?.startedAt || '';
-  files = listScans()
-    .filter(s => !s.unreadable && isDerivedScan(s.filename))
-    .filter(s => s.batchId === target
-      || (slug && s.filename.startsWith(`videoscan-${slug}-organisatie-`) && s.scanDate >= since))
-    .map(s => s.filename);
-  if (!files.length) fail(`No merged or summary report for "${target}" yet — the batch has not settled (or fewer than two scans completed). Pass the scan .json explicitly to report on one file.`, 1);
+  files = pickReportFiles(listScans(), target, isDerivedScan);
+  if (!files.length) fail(`No report file for "${target}" yet — the batch has not settled (or fewer than two of its scans completed). Pass a scan .json to put the title and cover on one file.`, 1);
 }
 
+let missing = 0;
 for (const filename of files) {
   // Renders the report and its preview, HTML and PDF each — minutes for a large batch.
   const r = await api('/api/videoscans/generate-report', { filename, ...(title ? { orgName: title } : {}), ...(cover ? { coverImageUrl: cover } : {}) }, 600_000);
   console.log(`${filename}\n  → ${r.htmlFile || '(no html)'}  ${r.pdfFile || '(no pdf)'}`);
+  if (!r.htmlFile || !r.pdfFile) missing++;
 }
+// The endpoint answers 200 with whatever it managed to render.
+if (missing) fail(`${missing} report(s) came back without an HTML or PDF file`, 1);

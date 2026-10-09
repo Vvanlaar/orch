@@ -2,7 +2,7 @@
 // the launch manifest that scan-start.mjs leaves behind for the later steps.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { homedir, tmpdir } from 'os';
+import { homedir } from 'os';
 import { join } from 'path';
 
 export const ORCH_URL = (process.env.ORCH_URL || 'http://127.0.0.1:3011').replace(/\/$/, '');
@@ -46,12 +46,15 @@ export async function api(path, body, timeoutMs = 30_000) {
   }
   const text = await res.text();
   let json;
-  try { json = JSON.parse(text); } catch { json = { error: text.slice(0, 200) }; }
-  if (!res.ok) throw Object.assign(new Error(`${path}: HTTP ${res.status} ${json.error || ''}`.trim()), { status: res.status });
+  try { json = JSON.parse(text); } catch { json = undefined; }
+  if (!res.ok) throw Object.assign(new Error(`${path}: HTTP ${res.status} ${json?.error || text.slice(0, 200)}`.trim()), { status: res.status });
+  // A 200 that is not JSON is not this API: ORCH_URL points at the Vite dev
+  // server or some other app, whose HTML would otherwise pass for a result.
+  if (json === undefined) throw Object.assign(new Error(`${path}: HTTP ${res.status} but not JSON — is ${ORCH_URL} the orch service?`), { status: 421 });
   return json;
 }
 
-/** Statuses that still hold or will take a slot. */
+/** Not finished: waiting, working, or parked until someone acts on it. */
 export const OPEN_STATUSES = ['pending', 'running', 'paused', 'needs-repo'];
 
 /**
@@ -76,8 +79,11 @@ export function parseArgs(argv, spec, usage) {
   return { target: positionals[0], flags: out };
 }
 
+// Under the home directory, not the temp dir: a batch runs for hours or days,
+// and the manifest holds what nothing else does (the report title and cover the
+// user gave at launch, the sites that failed to start).
 export function manifestPath(batchId) {
-  const dir = join(tmpdir(), 'orch-videoscan-batches');
+  const dir = join(homedir(), '.claude', 'orch-videoscan-batches');
   mkdirSync(dir, { recursive: true });
   return join(dir, `${batchId.replace(/[^a-z0-9._-]/gi, '_')}.json`);
 }
