@@ -1,20 +1,25 @@
 #!/usr/bin/env node
 // Block until a batch started by scan-start.mjs has nothing pending or running.
 //
-//   node scan-watch.mjs <batchId> [--interval SEC] [--once]
+//   node scan-watch.mjs <batchId> [--interval SEC] [--step N] [--once]
 //
 // Meant to run in the background: it prints a line whenever the counts change
 // and exits when the batch settles. Exit 0 = every scan completed; 1 = settled
 // with failed/dismissed scans; 3 = only paused tasks are left (someone has to
 // resume or stop them); 4 = the server stopped answering; 2 = usage, or the
 // server refused the request. --once prints the state and exits 0 while the
-// batch is still busy.
+// batch is still busy. --step N exits 10 as soon as N more scans have completed
+// than when it started, naming them — the cue to validate those and start the
+// watcher again.
 
 import { api, fail, parseArgs, readManifest } from './api.mjs';
 
-const { target: batchId, flags } = parseArgs(process.argv.slice(2), { '--interval': 'value', '--once': 'bool' },
-  'usage: scan-watch.mjs <batchId> [--interval SEC] [--once]');
+const { target: batchId, flags } = parseArgs(process.argv.slice(2), { '--interval': 'value', '--step': 'value', '--once': 'bool' },
+  'usage: scan-watch.mjs <batchId> [--interval SEC] [--step N] [--once]');
 const once = !!flags['--once'];
+const step = flags['--step'] === undefined ? 0 : Number(flags['--step']);
+if (!Number.isInteger(step) || step < 0) fail('--step must be a positive integer');
+let doneAtStart = null; // ids completed when this watcher first looked
 const intervalSec = Number(flags['--interval'] ?? 60);
 // A NaN or 0 interval turns the loop into a flood of requests at a live service.
 if (!Number.isFinite(intervalSec) || intervalSec < 5) fail('--interval must be at least 5 seconds');
@@ -82,6 +87,13 @@ for (;;) {
     const clean = (by.completed?.length || 0) === current.length;
     console.log(clean ? 'Batch settled — every scan completed.' : 'Batch settled — not every scan completed, see above.');
     process.exit(clean ? 0 : 1);
+  }
+
+  doneAtStart ??= new Set((by.completed || []).map(t => t.id));
+  const fresh = (by.completed || []).filter(t => !doneAtStart.has(t.id));
+  if (step && fresh.length >= step) {
+    console.log(`${fresh.length} more scans completed: ${fresh.map(t => { try { return new URL(t.context.scanUrl).hostname; } catch { return `#${t.id}`; } }).join(' ')}`);
+    process.exit(10);
   }
   await sleep(interval);
 }

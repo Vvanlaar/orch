@@ -86,7 +86,7 @@ takes hours.
 ## 3. Watch
 
 ```bash
-node .claude/skills/videoscan-start/scripts/scan-watch.mjs <batchId> --interval 120
+node .claude/skills/videoscan-start/scripts/scan-watch.mjs <batchId> --interval 120 --step 8
 ```
 
 Run it **in the background** (`run_in_background`) so its exit wakes the
@@ -100,6 +100,17 @@ exits when nothing is pending or running:
 | 2 | usage error, or the server refused the request (token, scope) |
 | 3 | only paused tasks left; someone has to resume or stop them |
 | 4 | the server stopped answering |
+| 10 | `--step N`: N more scans completed, batch still busy |
+
+**Validate as scans finish, not only at the end.** With `--step N` the watcher
+exits 10 each time N more scans have completed and names their hosts. Run
+phases 2 and 3 of `videoscan-validate` on the batch then (the audit only sees
+finished files), and start the watcher again. A finished scan's file is final,
+so pruning it now is safe — and it means the merge the service does at the end
+is built from rows that were already checked. Look at coverage too while the
+crawl is fresh: a scan that stopped at one page (a redirect off the host, an
+expired certificate, a login wall, a single-page app) or lost a quarter of its
+requests to timeouts is a finding for the user, not a clean zero.
 
 `--once` prints the current state and returns (exit 0 while still busy), for a
 progress question in between. A failed task (`scan.mjs exited with code null`
