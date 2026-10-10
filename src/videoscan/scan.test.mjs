@@ -333,6 +333,21 @@ test("player library CSS and a site-wide library load are NOT a player", () => {
   assert.deepEqual(names(detectFromCorpus(rijnmond, "", net)), []);
 });
 
+test("video.js's own style switch in an inline script is NOT a player", () => {
+  // haarlemmerliederaad.haarlemmermeer.nl: library + this flag on all 16,386 pages,
+  // a player on the 2,330 agenda items with a recording
+  const flag = '<script nonce="">window.VIDEOJS_NO_DYNAMIC_STYLE = true</script>';
+  const libs = '<script src="https://static.gemeenteoplossingen.nl/1.0/js/libs/video.min.js"></script>' +
+    '<script src="https://static.gemeenteoplossingen.nl/1.0/js/libs/videojs-playlist.min.js"></script>';
+  const net = ["https://static.gemeenteoplossingen.nl/1.0/js/libs/video.min.js", "https://static.gemeenteoplossingen.nl/1.0/js/libs/videojs-playlist.min.js"];
+  assert.deepEqual(names(detectFromCorpus(`<head>${flag}${libs}</head><p>Agenda</p>`, "", net)), []);
+  // the same page with its recording
+  const player = '<div id="mediaplayer-vjs" class="video-js vjs-4-3 vjs-paused vjs-fluid"><video class="vjs-tech" src="blob:https://x.nl/3e5a"></video></div>';
+  assert.deepEqual(names(detectFromCorpus(`<head>${flag}${libs}</head>${player}`, "", net)), ["HTML5 native", "Video.js"]);
+  // an inline init call is still Video.js markup
+  assert.ok(names(detectFromCorpus(`${libs}<video id="v"></video><script>videojs("v")</script>`, "", net)).includes("Video.js"));
+});
+
 test("an unclosed or JSON-escaped <style> does not swallow a player", () => {
   const unclosed = '<script>var s="<style>"+css;</script><div><video class="video-js vjs-tech" src="a.mp4"></video></div><style>.b{}</style>';
   assert.deepEqual(names(detectFromCorpus(unclosed)), ["HTML5 native", "Video.js"]);

@@ -489,7 +489,11 @@ export const DETECTORS = {
     // enqueued script the id "<handle>-js", so the jarallax plugin's
     // id="parallax-video-js" flagged all 336 pages of ettyhillesumcentrum.nl,
     // and a bare /video\.js/ matches any site script named *-video.js.
-    patterns: [/(?<![\w-])video\.js\b/i, /videojs/i, /(?:^|[\s"'\/.])vjs-/i, /(?<![\w-])video-js\b/i],
+    // `videojs` must not be the library's own style switch: an inline
+    // `window.VIDEOJS_NO_DYNAMIC_STYLE = true` sits on every page of a site that
+    // loads video.js site-wide (haarlemmerliederaad.haarlemmermeer.nl flagged
+    // 5,833 pages without a <video>), and it is markup, so NEEDS_MARKUP lets it by.
+    patterns: [/(?<![\w-])video\.js\b/i, /videojs(?!_NO_DYNAMIC_STYLE)/i, /(?:^|[\s"'\/.])vjs-/i, /(?<![\w-])video-js\b/i],
     // `scripts` patterns see the request URL without its query string (see
     // detectPlayers), so a query blob can no longer reach them. Residual: `_` and
     // `-` are in the base64url alphabet, so a path segment like `…_vjs_…` can
