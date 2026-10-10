@@ -100,6 +100,24 @@ await new Promise(r => setTimeout(r, 4000));
 })
 ```
 
+Run that as its own call a few seconds after the navigate, not in the same
+breath: straight after navigation the DOM is still empty and every page reads
+as "no player". Three results that look like a miss and are not:
+
+- **A consent placeholder where the embed should be** ("Marketingcookies
+  geweigerd"). The pane declines cookies, the scanner accepts them — its
+  network evidence of `youtube-nocookie.com/embed/<id>` is the embed loading.
+- **A click-to-load facade.** A video component with a poster
+  (`img.youtube.com/vi/<id>`, `i.vimeocdn.com/video/…`, often lazy in
+  `data-bg-src`) and the player URL only in a script or JSON payload, where
+  its slashes are usually written as `u002F` escapes. The iframe exists after
+  a click. Search `document.documentElement.innerHTML` for the player host
+  (`player.vimeo.com`), not for the full URL.
+- **A page that hangs the pane** (the script times out twice). Fetch the HTML
+  over HTTP and read the markup; if the player is rendered client-side and
+  that shows nothing either, report the detection as unverified — do not prune
+  it and do not call it confirmed.
+
 A detection passes when the page yields a real media URL (`.mp4`, `.m3u8`,
 `.mpd`), an embed iframe on a video host, or a player API with a playlist. It
 fails when the only match sits in body text, a `data-*` payload, a link href,
