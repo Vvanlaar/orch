@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DETECTORS, detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, isFilterControl, pickConsent, isTranslatedCopy, translationPrefix, normalizeUrl, restoreQueue, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource, detectResponseRateLimit, createRateLimitError, createRefusalTracker, weighBatch } from "./scan.mjs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DETECTORS, detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, isFilterControl, pickConsent, isTranslatedCopy, translationPrefix, normalizeUrl, restoreQueue, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, capQueue, writeCheckpoint, createCheckpointSaver, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource, detectResponseRateLimit, createRateLimitError, createRefusalTracker, weighBatch } from "./scan.mjs";
 
 const names = (result) => result.map((r) => r.player).sort();
 
@@ -786,6 +789,107 @@ test("OpenGemeenten google-translate proxy links are skipped", () => {
   ]) assert.equal(shouldSkipUrl(url), false, url);
 });
 
+test("facet combinations in array parameters are skipped, a single value and pagination are not", () => {
+  for (const url of [
+    // www.ha-meer.nl: gemeente[0] is on every link, the second array parameter is a filter
+    "https://www.ha-meer.nl/activiteiten?gemeente%5B0%5D=116&filter=ja&doelgroepen%5B0%5D=64&order=asc&sort=name&view=default",
+    "https://www.ha-meer.nl/activiteiten?gemeente%5B0%5D=116&filter=ja&filters%5B0%5D=332&order=asc&sort=name&sport_types%5B0%5D=8&sport_types%5B1%5D=50&view=default",
+    "https://www.ha-meer.nl/activiteiten?gemeente%5B0%5D=116&filter=ja&days%5B0%5D=1&days%5B1%5D=4&doelgroepen%5B0%5D=65&filters%5B0%5D=332&order=asc&projecten%5B0%5D=4501&sort=date&sport_types%5B0%5D=2&view=kalender",
+    // raw brackets, as a link that was never percent-encoded arrives
+    "https://www.ha-meer.nl/activiteiten?gemeente[0]=116&doelgroepen[0]=64",
+    // the Tilburg sites: nested key, index last
+    "https://www.werkenvoortilburg.nl/vacatures?tx_solr[filter][0]=discipline:Dienstverlening&tx_solr[filter][1]=discipline:Sociaal",
+    "https://www.trefhetinoss.nl/plan-je-bezoek/volledige-kaart?category[0]=30109&category[1]=33002&zoom=11",
+    // key[]= on two facets, upper- and lowercase escapes
+    "https://waardwijzer.krimpenerwaard.nl/is/organisaties?q=&o1%5B%5D=19&o2%5B%5D=622595",
+    "https://waardwijzer.krimpenerwaard.nl/is/organisaties?q=&o1%5b%5d=70&o2%5b%5d=98316",
+  ]) assert.equal(shouldSkipUrl(url), true, url);
+  for (const url of [
+    "https://www.ha-meer.nl/activiteiten",
+    // ha-meer's own pagination and sort links carry gemeente[0] and nothing else
+    "https://www.ha-meer.nl/activiteiten?gemeente%5B0%5D=116&order=asc&pagina=2&sort=name&view=default",
+    "https://www.ha-meer.nl/activiteiten?gemeente[]=116",
+    // one filter value
+    "https://www.amstelveen.nl/projecten-en-plannen?tags%5B201%5D=201",
+    "https://waardwijzer.krimpenerwaard.nl/is/organisaties?q=&o2%5B%5D=98365",
+    // named keys address one page: a TYPO3 event
+    "https://www.almere.nl/agenda/activiteit?tx_netevents_main%5Baction%5D=show&tx_netevents_main%5Bcontroller%5D=Event&tx_netevents_main%5Bevent%5D=337&cHash=669a255ff1aa97291a1f370d4f06a689",
+    "https://www.example.nl/nieuws/detail?tx_news_pi1[action]=detail&tx_news_pi1[controller]=News&tx_news_pi1[news]=42",
+    "https://www.example.nl/nieuws?page=2",
+    // a repeated plain key is MAX_QUERY_KEY_REPEATS' call, and two are fine
+    "https://www.example.nl/zoeken?filter=a&filter=b",
+    // brackets in a value are not a key
+    "https://www.example.nl/zoeken?q=lijst[0]&r=lijst[1]",
+  ]) assert.equal(shouldSkipUrl(url), false, url);
+});
+
+test("resume restore: a queue of facet combinations comes back as the listing and its pages", () => {
+  // The ha-meer.nl checkpoint: 600,778 queued, 24 of them not a combination
+  const start = "https://www.ha-meer.nl/";
+  const stored = [
+    "https://www.ha-meer.nl/activiteiten?gemeente%5B0%5D=116&filter=ja&days%5B0%5D=1&days%5B1%5D=4&doelgroepen%5B0%5D=65&sort=date&view=kalender",
+    "https://www.ha-meer.nl/activiteiten?gemeente%5B0%5D=116&order=asc&pagina=2&sort=name&view=default",
+    "https://www.ha-meer.nl/activiteiten?gemeente%5B0%5D=116&filter=ja&sport_types%5B0%5D=8&view=default",
+    "https://www.ha-meer.nl/sociale-kaart",
+  ];
+  assert.deepEqual(restoreQueue(stored, start), [
+    "https://www.ha-meer.nl/activiteiten?gemeente%5B0%5D=116&order=asc&pagina=2&sort=name&view=default",
+    "https://www.ha-meer.nl/sociale-kaart",
+  ]);
+});
+
+test("calendar pages for a year no meeting is in are skipped", () => {
+  const nextYear = new Date().getFullYear() + 1;
+  for (const url of [
+    // gemeenteraad.haarlemmermeer.nl, both ends of what one crawl walked
+    "https://gemeenteraad.haarlemmermeer.nl/kalender/1799",
+    "https://gemeenteraad.haarlemmermeer.nl/kalender/4583",
+    "https://gemeenteraad.haarlemmermeer.nl/kalender/4583/08",
+    "https://raad.dordrecht.nl/kalender/2173",
+    "https://gemeenteraad.haarlemmermeer.nl/kalender/1989",
+    `https://gemeenteraad.haarlemmermeer.nl/kalender/${nextYear + 2}`,
+  ]) assert.equal(shouldSkipUrl(url), true, url);
+  for (const url of [
+    "https://gemeenteraad.haarlemmermeer.nl/kalender",
+    "https://gemeenteraad.haarlemmermeer.nl/kalender/1990",
+    "https://gemeenteraad.haarlemmermeer.nl/kalender/2007",
+    "https://gemeenteraad.haarlemmermeer.nl/kalender/2026/08",
+    `https://gemeenteraad.haarlemmermeer.nl/kalender/${nextYear}`,
+    `https://gemeenteraad.haarlemmermeer.nl/kalender/${nextYear + 1}`,
+    // longer than a year: a date or an id
+    "https://www.example.nl/kalender/20261012",
+    "https://www.example.nl/kalender/12345/zomerconcert",
+    // the meetings themselves
+    "https://gemeenteraad.haarlemmermeer.nl/Vergaderingen/Raadsplein/2026/1-oktober/17:00",
+    // a slug after /kalender/, and a number that is an id, not a year
+    "https://ondernemen.ede.nl/kalender/energizer-wk-volleybal-dames-2022",
+    "https://www.ngf.nl/over-de-ngf/kalender/bijeenkomsten/langste-blotevoetenpad-2026",
+    "https://www.example.nl/event/6133",
+    "https://www.example.nl/agenda/1799",
+  ]) assert.equal(shouldSkipUrl(url), false, url);
+});
+
+test("iBabs document viewers are skipped, the meetings they hang off are not", () => {
+  for (const url of [
+    "https://haarlemmermeer.bestuurlijkeinformatie.nl/Agenda/Document/637e029c-3586-45e0-8938-4451bc95be36?documentId=1a1585d4-8ee2-4367-bba5-0b3bec91be48&agendaItemId=038be458-87da-4de6-a7cb-0e7d2372e583",
+    "https://krimpenerwaard.bestuurlijkeinformatie.nl/Reports/Document/92f697c7-ad9b-4990-a8d8-914cd3e9a4f2?documentId=213dc185-f77b-4728-a7b8-6dda993184f7",
+    "https://hilversum.bestuurlijkeinformatie.nl/Document/View/065c2fce-3dd5-4aec-97f4-f13bb4c5379f",
+    "https://hilversum.bestuurlijkeinformatie.nl/agenda/document/065C2FCE-3DD5-4AEC-97F4-F13BB4C5379F",
+  ]) assert.equal(shouldSkipUrl(url), true, url);
+  for (const url of [
+    // where the Company Webcast / iBabs player is
+    "https://krimpenerwaard.bestuurlijkeinformatie.nl/Agenda/Index/6fef647f-bc19-4d62-82a3-c9c33df2a42f",
+    "https://krimpenerwaard.bestuurlijkeinformatie.nl/Calendar/OpenCategory/100213703",
+    "https://krimpenerwaard.bestuurlijkeinformatie.nl/Reports/Item/92f697c7-ad9b-4990-a8d8-914cd3e9a4f2",
+    "https://krimpenerwaard.bestuurlijkeinformatie.nl/Document/AccessibilityStatement",
+    // a viewer named in the query of a meeting page
+    "https://krimpenerwaard.bestuurlijkeinformatie.nl/Agenda/Index/6fef647f-bc19-4d62-82a3-c9c33df2a42f?returnUrl=/Document/View/065c2fce-3dd5-4aec-97f4-f13bb4c5379f",
+    // /document/ followed by a slug or a plain number is somebody's page
+    "https://www.example.nl/document/jaarverslag-2025",
+    "https://www.example.nl/document/12345",
+  ]) assert.equal(shouldSkipUrl(url), false, url);
+});
+
 test("filter controls rendered as links are not followed", () => {
   // visitrijssenholten.nl facet links
   assert.equal(isFilterControl({ role: "checkbox", ariaChecked: "false" }), true);
@@ -1184,6 +1288,121 @@ test("orderQueue weighs the path, not the host", () => {
   // Every URL on this host contains "media"; a host match would weigh them all
   const queue = ["https://media.gemeente.nl/wonen/a", "https://media.gemeente.nl/zorg/video-a"];
   assert.equal(orderQueue(queue)[0], "https://media.gemeente.nl/zorg/video-a");
+});
+
+test("capQueue drops the lowest-ranked URLs and lets them be queued again", () => {
+  // One section 5,000 deep next to five small ones, like a filter maze beside a site
+  const maze = Array.from({ length: 5000 }, (_, i) => `https://gemeente.nl/activiteiten/filter-${i}`);
+  const site = ["wonen", "zorg", "werk", "afval", "parkeren"].flatMap((s) =>
+    Array.from({ length: 20 }, (_, i) => `https://gemeente.nl/${s}/pagina-${i}`),
+  );
+  const queue = [...maze, ...site];
+  const queuedSet = new Set(queue);
+  reprioritizeQueue(queue);
+  const ranked = [...queue];
+
+  assert.equal(capQueue(queue, queuedSet, 1000), 4100);
+  assert.deepEqual(queue, ranked.slice(0, 1000));
+  // Every page of the small sections outranks the maze's tail
+  for (const url of site) assert.ok(queuedSet.has(url), url);
+  assert.equal(queuedSet.size, 1000);
+  // A dropped URL is not remembered as queued: the next link to it queues it again
+  assert.equal(queuedSet.has(ranked[4000]), false);
+
+  assert.equal(capQueue(queue, queuedSet, 1000), 0);
+  assert.equal(queue.length, 1000);
+});
+
+test("capQueue leaves a queue under the bound alone", () => {
+  const queue = ["https://gemeente.nl/a", "https://gemeente.nl/b"];
+  const queuedSet = new Set(queue);
+  assert.equal(capQueue(queue, queuedSet), 0);
+  assert.equal(capQueue(queue, queuedSet, 2), 0);
+  assert.deepEqual(queue, ["https://gemeente.nl/a", "https://gemeente.nl/b"]);
+  assert.equal(queuedSet.size, 2);
+});
+
+test("writeCheckpoint writes the state --resume reads, in pieces", () => {
+  const dir = mkdtempSync(join(tmpdir(), "videoscan-checkpoint-"));
+  const file = join(dir, "videoscan-x.nl-INPROGRESS.json");
+  try {
+    // Past two write chunks, with a URL that needs JSON escaping
+    const visited = new Set(Array.from({ length: 2500 }, (_, i) => `https://x.nl/pagina-${i}`));
+    visited.add('https://x.nl/zoek?q="quoted"\\path');
+    const queue = Array.from({ length: 1000 }, (_, i) => `https://x.nl/wachtrij-${i}`);
+    const results = [
+      { url: "https://x.nl/pagina-1", players: [{ player: "YouTube", evidence: ["HTML: youtube.com/embed"] }] },
+      { url: "https://x.nl/pagina-2", players: [] },
+    ];
+    writeCheckpoint("x.nl", results, visited, queue, file);
+
+    const stored = JSON.parse(readFileSync(file, "utf-8"));
+    assert.equal(stored.domain, "x.nl");
+    assert.equal(stored.checkpoint, true);
+    assert.equal(stored.pagesScanned, 2501);
+    assert.deepEqual(stored._state.visited, [...visited]);
+    assert.deepEqual(stored._state.queue, queue);
+    assert.deepEqual(stored.details, [
+      { url: "https://x.nl/pagina-1", players: [{ name: "YouTube", evidence: ["HTML: youtube.com/embed"] }] },
+    ]);
+
+    // Nothing queued, nothing found: still JSON, and it replaces the file
+    writeCheckpoint("x.nl", [], new Set(["https://x.nl/"]), [], file);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf-8"))._state, { visited: ["https://x.nl/"], queue: [] });
+    assert.deepEqual(readdirSync(dir), ["videoscan-x.nl-INPROGRESS.json"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("writeCheckpoint throws when it cannot write, and keeps the previous checkpoint", () => {
+  const dir = mkdtempSync(join(tmpdir(), "videoscan-checkpoint-"));
+  const file = join(dir, "videoscan-x.nl-INPROGRESS.json");
+  try {
+    writeCheckpoint("x.nl", [], new Set(["https://x.nl/"]), ["https://x.nl/a"], file);
+    // An item that cannot be serialized, halfway the queue
+    const queue = ["https://x.nl/b", 10n];
+    assert.throws(() => writeCheckpoint("x.nl", [], new Set(["https://x.nl/"]), queue, file), TypeError);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf-8"))._state.queue, ["https://x.nl/a"]);
+    assert.deepEqual(readdirSync(dir), ["videoscan-x.nl-INPROGRESS.json"]);
+
+    assert.throws(() => writeCheckpoint("x.nl", [], new Set(), [], join(dir, "missing", "checkpoint.json")), /ENOENT/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a failed checkpoint is reported once, and once more when it works again", () => {
+  const log = [];
+  let fail = true;
+  const save = createCheckpointSaver(
+    () => { if (fail) throw new RangeError("Invalid string length"); },
+    (line) => log.push(line),
+  );
+  assert.equal(save(), false);
+  assert.equal(save(), false);
+  assert.equal(save(), false);
+  assert.equal(log.length, 1);
+  assert.match(log[0], /CHECKPOINT NOT SAVED: Invalid string length/);
+
+  fail = false;
+  assert.equal(save(), true);
+  assert.equal(save(), true);
+  assert.equal(log.length, 2);
+  assert.match(log[1], /saved again/);
+
+  fail = true;
+  assert.equal(save(), false);
+  assert.equal(log.length, 3);
+});
+
+test("a checkpoint that keeps working says nothing", () => {
+  const log = [];
+  const calls = [];
+  const save = createCheckpointSaver((...state) => calls.push(state), (line) => log.push(line));
+  assert.equal(save("x.nl", [], new Set(), ["https://x.nl/a"]), true);
+  assert.deepEqual(calls, [["x.nl", [], new Set(), ["https://x.nl/a"]]]);
+  assert.deepEqual(log, []);
 });
 
 test("urlSection skips a language prefix and files top-level pages under root", () => {
