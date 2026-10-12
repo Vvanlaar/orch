@@ -577,6 +577,8 @@ interface ScanData {
   _state: { visited: string[]; queue: string[] };
   batchId?: string;
   batchLabel?: string;
+  /** The crawl hit scan.mjs's queue bound and dropped URLs unscanned. Only present when true. */
+  queueCapped?: boolean;
 }
 
 /**
@@ -668,6 +670,13 @@ export function mergeScansData(scansData: ScanData[]): ScanData {
     ? scansData.find(s => s.batchId === batchId && s.batchLabel)?.batchLabel
     : undefined;
 
+  // Capped if any source was. The URLs a capped crawl dropped are in nobody's
+  // queue, so the union above cannot bring them back: a filter-maze crawl like
+  // ha-meer.nl's, cut at the bound and merged with a clean 200-page rescan, is
+  // still a site that was not covered. A full re-crawl after the maze is fixed
+  // supersedes the capped scan instead: delete that one, do not merge it in.
+  const queueCapped = scansData.some(s => s.queueCapped === true);
+
   return {
     domain: scansData[0].domain,
     scanDate: latestDate,
@@ -679,6 +688,7 @@ export function mergeScansData(scansData: ScanData[]): ScanData {
     _state: { visited: [...visitedSet], queue: [...queueSet] },
     ...(batchId ? { batchId } : {}),
     ...(batchLabel ? { batchLabel } : {}),
+    ...(queueCapped ? { queueCapped } : {}),
   };
 }
 
@@ -912,6 +922,7 @@ export async function syncScanToSupabase(jsonFilename: string): Promise<SyncResu
       hasPreview: existsSync(join(VIDEOSCAN_DIR, previewFile)),
       hasPreviewPdf: existsSync(join(VIDEOSCAN_DIR, previewPdfFile)),
       canResume: (data._state?.queue?.length || 0) > 0 && !isDerivedScan(jsonFilename),
+      queueCapped: data.queueCapped === true,
       batchId: typeof data.batchId === 'string' ? data.batchId : undefined,
       batchLabel: typeof data.batchLabel === 'string' ? data.batchLabel : undefined,
     });
@@ -939,6 +950,8 @@ export interface ScanSummary {
   canResume: boolean;
   batchId?: string;
   batchLabel?: string;
+  /** The crawl dropped queued URLs at its queue bound: not fully covered, even with an empty queue. */
+  queueCapped?: boolean;
 }
 
 function listScansFromDisk(): ScanSummary[] {
@@ -968,6 +981,7 @@ function listScansFromDisk(): ScanSummary[] {
           canResume: (data._state?.queue?.length || 0) > 0 && !isDerivedScan(filename),
           ...(typeof data.batchId === 'string' && data.batchId ? { batchId: data.batchId } : {}),
           ...(typeof data.batchLabel === 'string' && data.batchLabel ? { batchLabel: data.batchLabel } : {}),
+          ...(data.queueCapped === true ? { queueCapped: true } : {}),
         };
       } catch {
         return {

@@ -87,6 +87,26 @@ describe('mergeScansData', () => {
     expect(merged.batchId).toBeUndefined();
   });
 
+  it('is queue-capped when any source was', () => {
+    // A crawl that stopped at the queue bound, merged with a clean rescan: the
+    // URLs the first one dropped are in neither queue, so the merge is not covered.
+    const merged = mergeScansData([
+      scan({ queueCapped: true, _state: { visited: ['https://example.nl/a'], queue: [] } }),
+      scan({ _state: { visited: ['https://example.nl/b'], queue: [] } }),
+    ]);
+    expect(merged.queueCapped).toBe(true);
+    expect(merged._state.queue).toEqual([]);
+    // Whichever position the capped source is in
+    expect(mergeScansData([scan(), scan({ queueCapped: true })]).queueCapped).toBe(true);
+  });
+
+  it('leaves queueCapped off a merge of uncapped sources', () => {
+    const merged = mergeScansData([scan(), scan()]);
+    expect('queueCapped' in merged).toBe(false);
+    // Only a real `true` counts, not a stray value in a hand-edited file
+    expect('queueCapped' in mergeScansData([scan({ queueCapped: false }), scan()])).toBe(false);
+  });
+
   it('still unions visited and drops already-visited URLs from the queue', () => {
     const merged = mergeScansData([
       scan({ _state: { visited: ['https://example.nl/a'], queue: ['https://example.nl/b'] } }),

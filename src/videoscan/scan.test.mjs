@@ -1334,7 +1334,7 @@ test("writeCheckpoint writes the state --resume reads, in pieces", () => {
       { url: "https://x.nl/pagina-1", players: [{ player: "YouTube", evidence: ["HTML: youtube.com/embed"] }] },
       { url: "https://x.nl/pagina-2", players: [] },
     ];
-    writeCheckpoint("x.nl", results, visited, queue, file);
+    writeCheckpoint("x.nl", results, visited, queue, { file });
 
     const stored = JSON.parse(readFileSync(file, "utf-8"));
     assert.equal(stored.domain, "x.nl");
@@ -1345,11 +1345,39 @@ test("writeCheckpoint writes the state --resume reads, in pieces", () => {
     assert.deepEqual(stored.details, [
       { url: "https://x.nl/pagina-1", players: [{ name: "YouTube", evidence: ["HTML: youtube.com/embed"] }] },
     ]);
+    // Only written when the queue bound was hit
+    assert.equal("queueCapped" in stored, false);
 
     // Nothing queued, nothing found: still JSON, and it replaces the file
-    writeCheckpoint("x.nl", [], new Set(["https://x.nl/"]), [], file);
+    writeCheckpoint("x.nl", [], new Set(["https://x.nl/"]), [], { file });
     assert.deepEqual(JSON.parse(readFileSync(file, "utf-8"))._state, { visited: ["https://x.nl/"], queue: [] });
     assert.deepEqual(readdirSync(dir), ["videoscan-x.nl-INPROGRESS.json"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("writeCheckpoint records that the queue bound dropped URLs", () => {
+  const dir = mkdtempSync(join(tmpdir(), "videoscan-checkpoint-"));
+  const file = join(dir, "videoscan-x.nl-INPROGRESS.json");
+  try {
+    // A maze crawl killed after the bound hit: the queue it stored is already
+    // the trimmed one, so nothing but the flag says URLs are missing from it
+    const visited = new Set(["https://x.nl/", "https://x.nl/activiteiten"]);
+    const queue = ["https://x.nl/activiteiten?filter=1", "https://x.nl/activiteiten?filter=2"];
+    writeCheckpoint("x.nl", [], visited, queue, { file, queueCapped: true });
+
+    const stored = JSON.parse(readFileSync(file, "utf-8"));
+    assert.equal(stored.queueCapped, true);
+    // Next to the fields --resume and the runner already read, not instead of them
+    assert.equal(stored.checkpoint, true);
+    assert.equal(stored.pagesScanned, 2);
+    assert.deepEqual(stored._state, { visited: [...visited], queue });
+    assert.deepEqual(stored.details, []);
+
+    // Not sticky in the writer: the crawl decides, per write
+    writeCheckpoint("x.nl", [], visited, queue, { file, queueCapped: false });
+    assert.equal("queueCapped" in JSON.parse(readFileSync(file, "utf-8")), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1359,14 +1387,14 @@ test("writeCheckpoint throws when it cannot write, and keeps the previous checkp
   const dir = mkdtempSync(join(tmpdir(), "videoscan-checkpoint-"));
   const file = join(dir, "videoscan-x.nl-INPROGRESS.json");
   try {
-    writeCheckpoint("x.nl", [], new Set(["https://x.nl/"]), ["https://x.nl/a"], file);
+    writeCheckpoint("x.nl", [], new Set(["https://x.nl/"]), ["https://x.nl/a"], { file });
     // An item that cannot be serialized, halfway the queue
     const queue = ["https://x.nl/b", 10n];
-    assert.throws(() => writeCheckpoint("x.nl", [], new Set(["https://x.nl/"]), queue, file), TypeError);
+    assert.throws(() => writeCheckpoint("x.nl", [], new Set(["https://x.nl/"]), queue, { file }), TypeError);
     assert.deepEqual(JSON.parse(readFileSync(file, "utf-8"))._state.queue, ["https://x.nl/a"]);
     assert.deepEqual(readdirSync(dir), ["videoscan-x.nl-INPROGRESS.json"]);
 
-    assert.throws(() => writeCheckpoint("x.nl", [], new Set(), [], join(dir, "missing", "checkpoint.json")), /ENOENT/);
+    assert.throws(() => writeCheckpoint("x.nl", [], new Set(), [], { file: join(dir, "missing", "checkpoint.json") }), /ENOENT/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1400,8 +1428,8 @@ test("a checkpoint that keeps working says nothing", () => {
   const log = [];
   const calls = [];
   const save = createCheckpointSaver((...state) => calls.push(state), (line) => log.push(line));
-  assert.equal(save("x.nl", [], new Set(), ["https://x.nl/a"]), true);
-  assert.deepEqual(calls, [["x.nl", [], new Set(), ["https://x.nl/a"]]]);
+  assert.equal(save("x.nl", [], new Set(), ["https://x.nl/a"], { queueCapped: true }), true);
+  assert.deepEqual(calls, [["x.nl", [], new Set(), ["https://x.nl/a"], { queueCapped: true }]]);
   assert.deepEqual(log, []);
 });
 

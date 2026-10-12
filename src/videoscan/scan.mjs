@@ -2371,11 +2371,20 @@ function replaceFile(from, to) {
 // Throws when the write fails — see createCheckpointSaver. Goes to a .tmp
 // first, so a process killed halfway leaves the previous checkpoint, not half
 // of a new one.
-export function writeCheckpoint(domain, results, visited, queue, file = checkpointPath(domain)) {
+// `queueCapped` goes in too: a crawl that hits the queue bound is the long,
+// maze-fed kind that gets killed (ha-meer.nl), and its resume would otherwise
+// finish with an empty queue and nothing saying URLs were dropped before it.
+export function writeCheckpoint(domain, results, visited, queue, { file = checkpointPath(domain), queueCapped = false } = {}) {
   const details = results
     .filter((r) => r.players.length > 0)
     .map((r) => ({ url: r.url, players: r.players.map((p) => ({ name: p.player, evidence: p.evidence })) }));
-  const head = JSON.stringify({ domain, checkpoint: true, scanDate: new Date().toISOString(), pagesScanned: visited.size }, null, 2);
+  const head = JSON.stringify({
+    domain,
+    checkpoint: true,
+    scanDate: new Date().toISOString(),
+    pagesScanned: visited.size,
+    ...(queueCapped ? { queueCapped: true } : {}),
+  }, null, 2);
   const tmp = `${file}.tmp`;
   try {
     const fd = openSync(tmp, "w");
@@ -2436,10 +2445,14 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   const refusals = createRefusalTracker();
   const retryCount = new Map();
   const MAX_RETRIES = 2;
+  // The queue bound dropped URLs, in this run or in one it resumes: what was
+  // dropped is gone from the stored queue, so only the flag remembers it
+  let queueCapped = false;
 
   // Resume from previous scan state
   if (resumeFile) {
     const prev = JSON.parse(readFileSync(resumeFile, "utf-8"));
+    queueCapped = prev.queueCapped === true;
 
     // `visited` is normalized with the same function as the queue below. Both
     // sides of the "have I seen this?" test have to speak one spelling: a URL
@@ -2609,6 +2622,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     const dropped = capQueue(queue, queuedSet, maxQueue);
     if (dropped > 0 && !queueFull) {
       queueFull = true;
+      queueCapped = true;
       console.log(chalk.yellow.bold(`  ⚠ QUEUE FULL: ${dropped} URL(s) over the ${maxQueue} bound, the lowest-ranked are dropped from here on — check the queue for a filter or calendar maze`));
     }
   };
@@ -2745,7 +2759,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       const etaMin = ppm > 0 ? (remaining / ppm).toFixed(1) : "?";
       console.log(chalk.cyan(`  ── ${ppm} pages/min | queue=${queue.length} | ~${etaMin}min left | delay=${throttle.delay}ms | auto-conc=${throttle.concurrency} (base=${throttle.baseConcurrency})${queueFull ? " | queue full" : ""}`));
       lastProgressAt = Date.now();
-      saveCheckpoint(domain, results, visited, [...refusals.waiting(), ...queue]);
+      saveCheckpoint(domain, results, visited, [...refusals.waiting(), ...queue], { queueCapped });
     }
 
     // Recycle the browser between batches once we've scanned enough pages — a
@@ -2765,6 +2779,8 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   queue.unshift(...refusals.waiting());
   if (queueFull) {
     console.log(chalk.yellow(`  Queue was full (${maxQueue}): URLs were dropped unscanned, so this crawl did not cover the site`));
+  } else if (queueCapped) {
+    console.log(chalk.yellow("  Queue was full in an earlier run of this crawl: URLs were dropped unscanned then, so it did not cover the site"));
   }
 
   await browser.close();
@@ -2779,6 +2795,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     pagesScanned: visited.size,
     _state: { visited: [...visited], queue },
     rateLimits: buildRateLimits(throttle),
+    ...(queueCapped ? { queueCapped: true } : {}),
   };
 }
 
@@ -3065,7 +3082,7 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
 
 // ── Report ──────────────────────────────────────────────────────────
 
-function generateReport({ domain, results, pagesScanned, _state, rateLimits, batchId, batchLabel, resumeFile }) {
+function generateReport({ domain, results, pagesScanned, _state, rateLimits, queueCapped, batchId, batchLabel, resumeFile }) {
   const playerSummary = {};
   const pagesWithPlayers = [];
   const pagesWithoutPlayers = [];
@@ -3190,6 +3207,10 @@ function generateReport({ domain, results, pagesScanned, _state, rateLimits, bat
     ...(pagesFailed > 0 ? { errorSummary, failedUrls } : {}),
     ...(batchId ? { batchId } : {}),
     ...(batchLabel ? { batchLabel } : {}),
+    // Only when it happened. Nothing else in the file tells a crawl that
+    // dropped URLs at the bound (a filter maze like ha-meer.nl's) from one that
+    // did not, and once its queue drains or wrap-up clears it, it reads as covered.
+    ...(queueCapped ? { queueCapped: true } : {}),
     playerSummary: Object.fromEntries(
       Object.entries(playerSummary).map(([p, urls]) => [p, { count: urls.length, pages: urls }])
     ),

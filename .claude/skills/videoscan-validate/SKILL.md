@@ -21,7 +21,8 @@ named "Vince (admin)"). Export it once: `export ORCH_TOKEN=<admin token>`.
 
 `scan-status.mjs [target]` — target is a batch id, part of a batch label, or a
 domain. It reports, per batch: running scans, queued-but-unfinished scans,
-dead hosts, duplicate scan files, and whether the batch is already closed.
+dead hosts, duplicate scan files, scans that hit the queue bound (`!` lines,
+a note rather than a blocker), and whether the batch is already closed.
 
 What "done" means:
 
@@ -35,11 +36,20 @@ What "done" means:
   ceiling is a stopping point, not a finish line, and wrap-up accepts the
   partial coverage as final.
 - **An empty queue is not proof either.** The queue is bounded at 100,000
-  (`--max-queue`); past that scan.mjs drops the lowest-ranked URLs and says so
-  in the task output only: `QUEUE FULL`, `| queue full` on the progress lines,
-  `Queue was full … did not cover the site` at the end. The report JSON does
-  not record it. A queue that large has so far always been a filter or
-  calendar maze — look at what is queued before calling the site covered.
+  (`--max-queue`); past that scan.mjs drops the lowest-ranked URLs. The report
+  JSON records it as top-level `queueCapped: true` (absent when it did not
+  happen), and so does the `-INPROGRESS.json` checkpoint. The flag is sticky:
+  a `--resume` keeps it, a merge or batch summary has it if any source did, and
+  the dashboard shows "queue capped — not fully covered" on the scan. The task
+  output says it too: `QUEUE FULL`, `| queue full` on the progress lines,
+  `Queue was full … did not cover the site` at the end. Reports written before
+  the flag existed lack it, so for those the task output is still the only
+  record. A queue that large has so far always been a filter or calendar
+  maze — look at what is queued before calling the site covered. Resuming
+  does not help: the dropped URLs are in no queue. The way out is a skip rule
+  for the maze and a fresh crawl; then delete the capped scan rather than
+  merging it with the new one, or the merge (and the batch summary) stays
+  marked capped.
 - **A stale checkpoint is not progress.** A heartbeat only says the loop turns.
   If the task output shows `CHECKPOINT NOT SAVED`, or the `-INPROGRESS.json`
   is much older than the heartbeat, a crash loses everything since that file.
