@@ -1,5 +1,5 @@
 import { spawn, ChildProcess } from 'child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { basename, join, dirname } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { chromium } from 'playwright';
@@ -941,50 +941,126 @@ export interface ScanSummary {
   batchLabel?: string;
 }
 
+/** What a listing takes from inside the scan JSON; the has* flags are other files in the dir. */
+type ScanJsonSummary = Omit<ScanSummary, 'hasReport' | 'hasPdf' | 'hasPreview' | 'hasPreviewPdf'>;
+
+// A scan JSON over this size is listed from its first and last bytes, not parsed.
+// Parsing costs about 2.5 ms per MB and two bytes of heap per byte of file, all of
+// it on the event loop: a crawl that ran away left a 512 MB checkpoint, 1.4 s and
+// over 1 GB per listing.
+const LIST_PARSE_MAX_BYTES = 128 * 1024 * 1024;
+const LIST_ENDS_BYTES = 4096;
+
+// One entry per scan JSON on disk, reused while the file's mtime and size hold, so
+// that a listing parses a file once per change instead of every file per call.
+// A rewrite to the same size within one mtime tick would go unseen; the writers
+// are seconds apart.
+let diskSummaries = new Map<string, { mtimeMs: number; size: number; summary: ScanJsonSummary }>();
+
+function unknownScan(filename: string): ScanJsonSummary {
+  return { filename, domain: 'unknown', scanDate: '', pagesScanned: 0, pagesWithVideo: 0, uniquePlayers: 0, canResume: false };
+}
+
+function cachedScanJsonSummary(filename: string, seen: typeof diskSummaries): ScanJsonSummary {
+  try {
+    // Stat first: a file read mid-write is cached under an mtime and size the finished file won't have.
+    const { mtimeMs, size } = statSync(join(VIDEOSCAN_DIR, filename));
+    const cached = diskSummaries.get(filename);
+    const entry = cached?.mtimeMs === mtimeMs && cached.size === size
+      ? cached
+      : { mtimeMs, size, summary: summarizeScanJson(filename, size) };
+    seen.set(filename, entry);
+    return entry.summary;
+  } catch (err) {
+    // Locked, or gone since the readdir. Not cached: the next listing reads it again.
+    log.warn(`Scan file ${filename} could not be read for the listing: ${err instanceof Error ? err.message : err}`);
+    return unknownScan(filename);
+  }
+}
+
+/** Throws when the file can't be read; a file that reads but isn't a scan is the unknown row. */
+function summarizeScanJson(filename: string, size: number): ScanJsonSummary {
+  const path = join(VIDEOSCAN_DIR, filename);
+  if (size > LIST_PARSE_MAX_BYTES) {
+    log.warn(`Scan file ${filename} is ${Math.round(size / 1048576)} MB: listed from its first and last bytes, not parsed`);
+    return summarizeScanJsonEnds(filename, path, size);
+  }
+  const text = readFileSync(path, 'utf-8');
+  try {
+    const data = JSON.parse(text);
+    return {
+      filename,
+      domain: data.domain || 'unknown',
+      scanDate: data.scanDate || '',
+      pagesScanned: data.pagesScanned || 0,
+      pagesWithVideo: data.pagesWithVideo || data.details?.length || 0,
+      uniquePlayers: data.uniquePlayers || Object.keys(data.playerSummary || {}).length,
+      canResume: (data._state?.queue?.length || 0) > 0 && !isDerivedScan(filename),
+      ...(typeof data.batchId === 'string' && data.batchId ? { batchId: data.batchId } : {}),
+      ...(typeof data.batchLabel === 'string' && data.batchLabel ? { batchLabel: data.batchLabel } : {}),
+    };
+  } catch {
+    return unknownScan(filename);
+  }
+}
+
+/**
+ * Summary of a scan JSON from its two ends. Every writer indents by two spaces and
+ * puts domain, scanDate and the page counts first; merge and batch summary put the
+ * batch last. A key at exactly two spaces is a top-level one.
+ *
+ * Not the same as parsing: a checkpoint counts as resumable whatever is left in its
+ * queue, any other file as not; counts the file doesn't state stay 0; and a batch
+ * stated mid-file (a scan.mjs report with a long failedUrls list) is not found.
+ */
+function summarizeScanJsonEnds(filename: string, path: string, size: number): ScanJsonSummary {
+  const fd = openSync(path, 'r');
+  let ends: string;
+  try {
+    const read = (position: number) => {
+      const buf = Buffer.alloc(LIST_ENDS_BYTES);
+      return buf.toString('utf-8', 0, readSync(fd, buf, 0, LIST_ENDS_BYTES, position));
+    };
+    ends = `${read(0)}\n${read(size - LIST_ENDS_BYTES)}`;
+  } finally {
+    closeSync(fd);
+  }
+  const top = (key: string, value: string) => ends.match(new RegExp(`^  "${key}": (${value}),?\\r?$`, 'm'))?.[1];
+  const str = (key: string): string => { const s = top(key, '"(?:[^"\\\\]|\\\\.)*"'); return s ? JSON.parse(s) : ''; };
+  const num = (key: string) => Number(top(key, '\\d+') ?? 0);
+  const batchId = str('batchId');
+  const batchLabel = str('batchLabel');
+  return {
+    filename,
+    domain: str('domain') || 'unknown',
+    scanDate: str('scanDate'),
+    pagesScanned: num('pagesScanned'),
+    pagesWithVideo: num('pagesWithVideo'),
+    uniquePlayers: num('uniquePlayers'),
+    canResume: top('checkpoint', 'true') !== undefined && !isDerivedScan(filename),
+    ...(batchId ? { batchId } : {}),
+    ...(batchLabel ? { batchLabel } : {}),
+  };
+}
+
 function listScansFromDisk(): ScanSummary[] {
   try {
-    const files = readdirSync(VIDEOSCAN_DIR)
+    const names = new Set(readdirSync(VIDEOSCAN_DIR));
+    const files = [...names]
       .filter(f => f.startsWith('videoscan-') && f.endsWith('.json'))
       .sort().reverse();
 
-    return files.map(filename => {
-      try {
-        const data = JSON.parse(readFileSync(join(VIDEOSCAN_DIR, filename), 'utf-8'));
-        const htmlFile = filename.replace('.json', '.html');
-        const pdfFile = filename.replace('.json', '.pdf');
-        const previewFile = filename.replace('.json', '-preview.html');
-        const previewPdfFile = filename.replace('.json', '-preview.pdf');
-        return {
-          filename,
-          domain: data.domain || 'unknown',
-          scanDate: data.scanDate || '',
-          pagesScanned: data.pagesScanned || 0,
-          pagesWithVideo: data.pagesWithVideo || data.details?.length || 0,
-          uniquePlayers: data.uniquePlayers || Object.keys(data.playerSummary || {}).length,
-          hasReport: existsSync(join(VIDEOSCAN_DIR, htmlFile)),
-          hasPdf: existsSync(join(VIDEOSCAN_DIR, pdfFile)),
-          hasPreview: existsSync(join(VIDEOSCAN_DIR, previewFile)),
-          hasPreviewPdf: existsSync(join(VIDEOSCAN_DIR, previewPdfFile)),
-          canResume: (data._state?.queue?.length || 0) > 0 && !isDerivedScan(filename),
-          ...(typeof data.batchId === 'string' && data.batchId ? { batchId: data.batchId } : {}),
-          ...(typeof data.batchLabel === 'string' && data.batchLabel ? { batchLabel: data.batchLabel } : {}),
-        };
-      } catch {
-        return {
-          filename,
-          domain: 'unknown',
-          scanDate: '',
-          pagesScanned: 0,
-          pagesWithVideo: 0,
-          uniquePlayers: 0,
-          hasReport: false,
-          hasPdf: false,
-          hasPreview: false,
-          hasPreviewPdf: false,
-          canResume: false,
-        };
-      }
-    });
+    // Rebuilt per listing, which drops the entries of files that are gone.
+    const seen: typeof diskSummaries = new Map();
+    const scans = files.map(filename => ({
+      ...cachedScanJsonSummary(filename, seen),
+      hasReport: names.has(filename.replace('.json', '.html')),
+      hasPdf: names.has(filename.replace('.json', '.pdf')),
+      hasPreview: names.has(filename.replace('.json', '-preview.html')),
+      hasPreviewPdf: names.has(filename.replace('.json', '-preview.pdf')),
+    }));
+    diskSummaries = seen;
+    return scans;
   } catch {
     return [];
   }
