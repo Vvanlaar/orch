@@ -816,7 +816,7 @@ export async function wrapUpBatch(batchId: string): Promise<WrapUpResult> {
 }
 
 async function wrapUpBatchInner(batchId: string): Promise<WrapUpResult> {
-  const all = await listScans();
+  const all = await listScansOrThrow();
   // Skip an earlier wrap-up's summary: its `domain` is the batch label, so it
   // would group with the next summary and get merged into it below.
   const initial = all.filter(s => s.batchId === batchId && !isBatchSummary(s.filename));
@@ -863,7 +863,7 @@ async function wrapUpBatchInner(batchId: string): Promise<WrapUpResult> {
   // stale summary back in resurrects detections since corrected in the sources.
   // The `-merged.json` files written just above must stay — they are all that is
   // left of their domain once mergeScans archived the sources.
-  const after = (await listScans()).filter(s => s.batchId === batchId && !isBatchSummary(s.filename));
+  const after = (await listScansOrThrow()).filter(s => s.batchId === batchId && !isBatchSummary(s.filename));
   if (after.length === 0) throw new Error(`No scans left in batch ${batchId} after merge step`);
   await ensureLocal(after.map(s => s.filename));
 
@@ -1004,15 +1004,24 @@ export async function deleteScans(filenames: string[]): Promise<void> {
   log.info(`Deleted ${filenames.length} scan(s)`);
 }
 
+/** For display: a failed Supabase query falls back to whatever is on this machine's disk. */
 export async function listScans(): Promise<ScanSummary[]> {
-  if (isSupabaseConfigured()) {
-    try {
-      return (await dbListScans()).map(withResumeRule);
-    } catch {
-      return listScansFromDisk();
-    }
+  try {
+    return await listScansOrThrow();
+  } catch (err) {
+    log.warn(`Listing scans from Supabase failed, falling back to disk: ${err instanceof Error ? err.message : err}`);
+    return listScansFromDisk();
   }
-  return listScansFromDisk();
+}
+
+/**
+ * No disk fallback: wrap-up moves files and archives rows by this listing, and
+ * the syncs it does would fail along with the query, leaving disk and Supabase
+ * apart.
+ */
+async function listScansOrThrow(): Promise<ScanSummary[]> {
+  if (!isSupabaseConfigured()) return listScansFromDisk();
+  return (await dbListScans()).map(withResumeRule);
 }
 
 /**
