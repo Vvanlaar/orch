@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DETECTORS, detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, isFilterControl, pickConsent, isTranslatedCopy, translationPrefix, normalizeUrl, restoreQueue, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, capQueue, writeCheckpoint, createCheckpointSaver, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource, detectResponseRateLimit, createRateLimitError, createRefusalTracker, weighBatch } from "./scan.mjs";
+import { DETECTORS, detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, isFilterControl, pickConsent, isTranslatedCopy, translationPrefix, normalizeUrl, restoreQueue, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, capQueue, writeCheckpoint, replaceFile, createCheckpointSaver, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource, detectResponseRateLimit, createRateLimitError, createRefusalTracker, weighBatch } from "./scan.mjs";
 
 const names = (result) => result.map((r) => r.player).sort();
 
@@ -803,6 +803,8 @@ test("facet combinations in array parameters are skipped, a single value and pag
     // key[]= on two facets, upper- and lowercase escapes
     "https://waardwijzer.krimpenerwaard.nl/is/organisaties?q=&o1%5B%5D=19&o2%5B%5D=622595",
     "https://waardwijzer.krimpenerwaard.nl/is/organisaties?q=&o1%5b%5d=70&o2%5b%5d=98316",
+    // keys without a value
+    "https://www.example.nl/zoeken?a[]&b[]",
   ]) assert.equal(shouldSkipUrl(url), true, url);
   for (const url of [
     "https://www.ha-meer.nl/activiteiten",
@@ -818,8 +820,9 @@ test("facet combinations in array parameters are skipped, a single value and pag
     "https://www.example.nl/nieuws?page=2",
     // a repeated plain key is MAX_QUERY_KEY_REPEATS' call, and two are fine
     "https://www.example.nl/zoeken?filter=a&filter=b",
-    // brackets in a value are not a key
+    // brackets in a value are not a key, and a fragment is not the query
     "https://www.example.nl/zoeken?q=lijst[0]&r=lijst[1]",
+    "https://www.example.nl/zoeken?a[0]=1#b[0]=2",
   ]) assert.equal(shouldSkipUrl(url), false, url);
 });
 
@@ -975,6 +978,64 @@ test("normalizeUrl collapses a CMS param re-appended to itself", () => {
 test("normalizeUrl leaves a URL without repeated keys byte-identical", () => {
   const url = "https://example.nl/zoek?q=video%20speler&page=2&sort=date";
   assert.equal(normalizeUrl(url, "https://example.nl/"), url);
+});
+
+test("normalizeUrl collapses Drupal quicktabs variants onto the page", () => {
+  // jiphaarlemmermeer.nl: 4 rows for one page with one YouTube embed.
+  const page = "https://www.jiphaarlemmermeer.nl/pesten-geweld/grooming-sexting";
+  for (const variant of [page, `${page}?qt-vragen_formulier=0`, `${page}?qt-vragen_formulier=1`, `${page}?qt-vragen_formulier=2`]) {
+    assert.equal(normalizeUrl(variant, "https://www.jiphaarlemmermeer.nl/"), page, variant);
+  }
+  // Next to real parameters only the tab goes, wherever it sits.
+  assert.equal(
+    normalizeUrl("https://example.nl/nieuws?page=2&qt-tabs=1&sort=date", "https://example.nl/"),
+    "https://example.nl/nieuws?page=2&sort=date",
+  );
+  assert.equal(
+    normalizeUrl("https://example.nl/nieuws?qt-tabs=1&qt-zijbalk=0&page=2", "https://example.nl/"),
+    "https://example.nl/nieuws?page=2",
+  );
+  // On the root too: the root exemption is for the empty search alone.
+  assert.equal(normalizeUrl("https://example.nl/?qt-tabs=1", "https://example.nl/"), "https://example.nl/");
+  // Together with the verbatim-repeat rule, and through the --resume queue.
+  assert.equal(normalizeUrl("https://example.nl/nieuws?a=1&qt-tabs=0&a=1", "https://example.nl/"), "https://example.nl/nieuws?a=1");
+  assert.equal(normalizeUrl("https://example.nl/nieuws?qt-tabs=1&qt-tabs=1", "https://example.nl/"), "https://example.nl/nieuws");
+  assert.deepEqual(
+    restoreQueue([page, `${page}?qt-vragen_formulier=0`, `${page}?qt-vragen_formulier=2`], "https://www.jiphaarlemmermeer.nl/"),
+    [page],
+  );
+});
+
+test("normalizeUrl collapses an empty WordPress search onto the page", () => {
+  // dementiehaarlemmermeer.nl: 2 rows for one page.
+  const page = "https://dementiehaarlemmermeer.nl/dagbesteding-overzicht";
+  assert.equal(normalizeUrl(`${page}?s=`, "https://dementiehaarlemmermeer.nl/"), page);
+  assert.equal(normalizeUrl(`${page}?s`, "https://dementiehaarlemmermeer.nl/"), page);
+  assert.equal(normalizeUrl(`${page}?s=&paged=2`, "https://dementiehaarlemmermeer.nl/"), `${page}?paged=2`);
+  // The trailing slash goes first, so the page path is what the root check sees.
+  assert.equal(normalizeUrl(`${page}/?s=`, "https://dementiehaarlemmermeer.nl/"), page);
+  assert.equal(normalizeUrl(`${page}?s=&s=`, "https://dementiehaarlemmermeer.nl/"), page);
+  // An archive below the root has the search template for ?s= as well, but
+  // nothing in the URL sets it apart from a page: it collapses.
+  assert.equal(normalizeUrl("https://example.nl/category/nieuws/?s=", "https://example.nl/"), "https://example.nl/category/nieuws");
+});
+
+test("normalizeUrl keeps a real search and parameters that only resemble a tab", () => {
+  for (const url of [
+    "https://dementiehaarlemmermeer.nl/?s=zoekterm",
+    "https://dementiehaarlemmermeer.nl/dagbesteding-overzicht?s=zoekterm",
+    "https://dementiehaarlemmermeer.nl/?s=", // on the root this is the search template, not the home page
+    "https://dementiehaarlemmermeer.nl/?s=dag%20besteding&paged=2",
+    "https://example.nl/zoek?search=&sort=", // empty, but not WordPress's s
+    "https://example.nl/zoek?qs=&ss=",
+    "https://example.nl/producten?qt=5&qty=2", // no qt- prefix
+    "https://example.nl/producten?qt-filter=rood", // not a tab index
+    "https://example.nl/producten?qt-tabs=&qt-zijbalk=1a",
+    "https://example.nl/producten?QT-tabs=1&S=", // the CMS parameters are lower case
+    "https://example.nl/producten?id=12&page=3&utm_source=nieuwsbrief",
+  ]) {
+    assert.equal(normalizeUrl(url, "https://example.nl/"), url, url);
+  }
 });
 
 test("normalizeUrl still strips hash and trailing slash", () => {
@@ -1345,39 +1406,15 @@ test("writeCheckpoint writes the state --resume reads, in pieces", () => {
     assert.deepEqual(stored.details, [
       { url: "https://x.nl/pagina-1", players: [{ name: "YouTube", evidence: ["HTML: youtube.com/embed"] }] },
     ]);
-    // Only written when the queue bound was hit
     assert.equal("queueCapped" in stored, false);
 
-    // Nothing queued, nothing found: still JSON, and it replaces the file
-    writeCheckpoint("x.nl", [], new Set(["https://x.nl/"]), [], { file });
-    assert.deepEqual(JSON.parse(readFileSync(file, "utf-8"))._state, { visited: ["https://x.nl/"], queue: [] });
+    // Nothing queued, nothing found: still JSON, and it replaces the file.
+    // A queue that hit its bound says so, for the run that resumes from here
+    writeCheckpoint("x.nl", [], new Set(["https://x.nl/"]), [], { file, queueCapped: true });
+    const capped = JSON.parse(readFileSync(file, "utf-8"));
+    assert.deepEqual(capped._state, { visited: ["https://x.nl/"], queue: [] });
+    assert.equal(capped.queueCapped, true);
     assert.deepEqual(readdirSync(dir), ["videoscan-x.nl-INPROGRESS.json"]);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("writeCheckpoint records that the queue bound dropped URLs", () => {
-  const dir = mkdtempSync(join(tmpdir(), "videoscan-checkpoint-"));
-  const file = join(dir, "videoscan-x.nl-INPROGRESS.json");
-  try {
-    // A maze crawl killed after the bound hit: the queue it stored is already
-    // the trimmed one, so nothing but the flag says URLs are missing from it
-    const visited = new Set(["https://x.nl/", "https://x.nl/activiteiten"]);
-    const queue = ["https://x.nl/activiteiten?filter=1", "https://x.nl/activiteiten?filter=2"];
-    writeCheckpoint("x.nl", [], visited, queue, { file, queueCapped: true });
-
-    const stored = JSON.parse(readFileSync(file, "utf-8"));
-    assert.equal(stored.queueCapped, true);
-    // Next to the fields --resume and the runner already read, not instead of them
-    assert.equal(stored.checkpoint, true);
-    assert.equal(stored.pagesScanned, 2);
-    assert.deepEqual(stored._state, { visited: [...visited], queue });
-    assert.deepEqual(stored.details, []);
-
-    // Not sticky in the writer: the crawl decides, per write
-    writeCheckpoint("x.nl", [], visited, queue, { file, queueCapped: false });
-    assert.equal("queueCapped" in JSON.parse(readFileSync(file, "utf-8")), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1398,6 +1435,26 @@ test("writeCheckpoint throws when it cannot write, and keeps the previous checkp
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("replaceFile waits out a file held open, and gives up on anything else", () => {
+  const busy = (code) => Object.assign(new Error(`${code}: operation not permitted, rename`), { code });
+  // Windows while the orch server reads the checkpoint: EPERM, then free
+  let calls = 0;
+  const waits = [];
+  replaceFile("a.tmp", "a.json", () => { if (++calls <= 3) throw busy(calls === 2 ? "EBUSY" : "EPERM"); }, (ms) => waits.push(ms));
+  assert.equal(calls, 4);
+  assert.equal(waits.length, 3);
+
+  // Held for good: the error comes out, after a bounded number of tries
+  calls = 0;
+  assert.throws(() => replaceFile("a.tmp", "a.json", () => { calls++; throw busy("EPERM"); }, () => {}), /EPERM/);
+  assert.equal(calls, 10);
+
+  // Not a held file: no point waiting
+  calls = 0;
+  assert.throws(() => replaceFile("a.tmp", "a.json", () => { calls++; throw busy("ENOENT"); }, () => {}), /ENOENT/);
+  assert.equal(calls, 1);
 });
 
 test("a failed checkpoint is reported once, and once more when it works again", () => {
@@ -1428,8 +1485,8 @@ test("a checkpoint that keeps working says nothing", () => {
   const log = [];
   const calls = [];
   const save = createCheckpointSaver((...state) => calls.push(state), (line) => log.push(line));
-  assert.equal(save("x.nl", [], new Set(), ["https://x.nl/a"], { queueCapped: true }), true);
-  assert.deepEqual(calls, [["x.nl", [], new Set(), ["https://x.nl/a"], { queueCapped: true }]]);
+  assert.equal(save("x.nl", [], new Set(), ["https://x.nl/a"]), true);
+  assert.deepEqual(calls, [["x.nl", [], new Set(), ["https://x.nl/a"]]]);
   assert.deepEqual(log, []);
 });
 

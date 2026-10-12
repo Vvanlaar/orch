@@ -35,24 +35,23 @@ What "done" means:
   defaults to 50; the dashboard's big crawls are launched with far more). That
   ceiling is a stopping point, not a finish line, and wrap-up accepts the
   partial coverage as final.
-- **An empty queue is not proof either.** The queue is bounded at 100,000
-  (`--max-queue`); past that scan.mjs drops the lowest-ranked URLs. The report
-  JSON records it as top-level `queueCapped: true` (absent when it did not
-  happen), and so does the `-INPROGRESS.json` checkpoint. The flag is sticky:
-  a `--resume` keeps it, a merge or batch summary has it if any source did, and
-  the dashboard shows "queue capped — not fully covered" on the scan. The task
-  output says it too: `QUEUE FULL`, `| queue full` on the progress lines,
-  `Queue was full … did not cover the site` at the end. Reports written before
-  the flag existed lack it, so for those the task output is still the only
-  record. A queue that large has so far always been a filter or calendar
-  maze — look at what is queued before calling the site covered. Resuming
-  does not help: the dropped URLs are in no queue. The way out is a skip rule
-  for the maze and a fresh crawl; then delete the capped scan rather than
-  merging it with the new one, or the merge (and the batch summary) stays
-  marked capped.
+- **An empty queue is not proof either.** The queue is bounded (`MAX_QUEUE` in
+  scan.mjs, `--max-queue` per scan); past the bound scan.mjs drops the
+  lowest-ranked URLs. The scan's own JSON and its checkpoint then carry
+  `queueCapped: true`, also after a resume; a merged or summary report carries
+  it when any of its sources did, and the dashboard marks the scan "queue
+  capped — not fully covered". Reports written before the flag existed lack
+  it, so for those the task output is the only record: `QUEUE FULL`,
+  `| queue full` on the progress lines, `Queue was full … did not cover the
+  site` at the end. Every queue that got that large so far was a filter maze —
+  look at what is queued before calling the site covered. Resuming does not
+  help: the dropped URLs are in no queue. The way out is a skip rule for the
+  maze and a fresh crawl; then delete the capped scan rather than merging it
+  with the new one, or the merge (and the batch summary) stays marked capped.
 - **A stale checkpoint is not progress.** A heartbeat only says the loop turns.
-  If the task output shows `CHECKPOINT NOT SAVED`, or the `-INPROGRESS.json`
-  is much older than the heartbeat, a crash loses everything since that file.
+  If the task output shows `CHECKPOINT NOT SAVED` or `| checkpoint NOT saved`
+  on the progress lines, or the `-INPROGRESS.json` is much older than the
+  heartbeat, a crash loses everything since that file.
 - **A live scan in the SAME batch blocks wrap-up.** scan.mjs writes its JSON on
   exit, so a write landing after the merge silently undoes it.
 - **A running scan may not admit which batch it is in.** Only a scan launched
