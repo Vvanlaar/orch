@@ -130,6 +130,7 @@ p { font-size: 13px; line-height: 1.6; margin-bottom: 12px; }
 .stat-box { background: var(--bg-box); border: 1px solid var(--border-box); padding: 16px; text-align: center; border-radius: 8px; min-width: 160px;}
 .stat-box .number { font-family: 'Gustavo', sans-serif; font-size: 28px; font-weight: 700; color: var(--text-dark); margin-bottom: 4px; }
 .stat-box .label { font-size: 10px; text-transform: uppercase; color: var(--primary); font-weight: 700; letter-spacing: 0.5px; }
+.coverage-note { font-size: 11px; font-style: italic; color: #666; margin: 8px 0 0 0; line-height: 1.4; }
 
 .grid-3 { display: flex; flex-direction: column; gap: 20px; }
 
