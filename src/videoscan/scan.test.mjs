@@ -888,8 +888,11 @@ test("normalizeUrl collapses Drupal quicktabs variants onto the page", () => {
     normalizeUrl("https://example.nl/nieuws?qt-tabs=1&qt-zijbalk=0&page=2", "https://example.nl/"),
     "https://example.nl/nieuws?page=2",
   );
+  // On the root too: the root exemption is for the empty search alone.
+  assert.equal(normalizeUrl("https://example.nl/?qt-tabs=1", "https://example.nl/"), "https://example.nl/");
   // Together with the verbatim-repeat rule, and through the --resume queue.
   assert.equal(normalizeUrl("https://example.nl/nieuws?a=1&qt-tabs=0&a=1", "https://example.nl/"), "https://example.nl/nieuws?a=1");
+  assert.equal(normalizeUrl("https://example.nl/nieuws?qt-tabs=1&qt-tabs=1", "https://example.nl/"), "https://example.nl/nieuws");
   assert.deepEqual(
     restoreQueue([page, `${page}?qt-vragen_formulier=0`, `${page}?qt-vragen_formulier=2`], "https://www.jiphaarlemmermeer.nl/"),
     [page],
@@ -902,6 +905,12 @@ test("normalizeUrl collapses an empty WordPress search onto the page", () => {
   assert.equal(normalizeUrl(`${page}?s=`, "https://dementiehaarlemmermeer.nl/"), page);
   assert.equal(normalizeUrl(`${page}?s`, "https://dementiehaarlemmermeer.nl/"), page);
   assert.equal(normalizeUrl(`${page}?s=&paged=2`, "https://dementiehaarlemmermeer.nl/"), `${page}?paged=2`);
+  // The trailing slash goes first, so the page path is what the root check sees.
+  assert.equal(normalizeUrl(`${page}/?s=`, "https://dementiehaarlemmermeer.nl/"), page);
+  assert.equal(normalizeUrl(`${page}?s=&s=`, "https://dementiehaarlemmermeer.nl/"), page);
+  // An archive below the root has the search template for ?s= as well, but
+  // nothing in the URL sets it apart from a page: it collapses.
+  assert.equal(normalizeUrl("https://example.nl/category/nieuws/?s=", "https://example.nl/"), "https://example.nl/category/nieuws");
 });
 
 test("normalizeUrl keeps a real search and parameters that only resemble a tab", () => {
@@ -914,6 +923,8 @@ test("normalizeUrl keeps a real search and parameters that only resemble a tab",
     "https://example.nl/zoek?qs=&ss=",
     "https://example.nl/producten?qt=5&qty=2", // no qt- prefix
     "https://example.nl/producten?qt-filter=rood", // not a tab index
+    "https://example.nl/producten?qt-tabs=&qt-zijbalk=1a",
+    "https://example.nl/producten?QT-tabs=1&S=", // the CMS parameters are lower case
     "https://example.nl/producten?id=12&page=3&utm_source=nieuwsbrief",
   ]) {
     assert.equal(normalizeUrl(url, "https://example.nl/"), url, url);
