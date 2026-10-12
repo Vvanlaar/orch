@@ -34,15 +34,18 @@ What "done" means:
   defaults to 50; the dashboard's big crawls are launched with far more). That
   ceiling is a stopping point, not a finish line, and wrap-up accepts the
   partial coverage as final.
-- **An empty queue is not proof either.** The queue is bounded at 100,000
-  (`--max-queue`); past that scan.mjs drops the lowest-ranked URLs and says so
-  in the task output only: `QUEUE FULL`, `| queue full` on the progress lines,
-  `Queue was full … did not cover the site` at the end. The report JSON does
-  not record it. A queue that large has so far always been a filter or
-  calendar maze — look at what is queued before calling the site covered.
+- **An empty queue is not proof either.** The queue is bounded (`MAX_QUEUE` in
+  scan.mjs, `--max-queue` per scan); past the bound scan.mjs drops the
+  lowest-ranked URLs. The scan's own JSON and its checkpoint then carry
+  `queueCapped: true`, also after a resume; merged and summary reports do not
+  carry it yet, so check the sources. In the task output: `QUEUE FULL`,
+  `| queue full` on the progress lines, `Queue was full … did not cover the
+  site` at the end. Every queue that got that large so far was a filter maze —
+  look at what is queued before calling the site covered.
 - **A stale checkpoint is not progress.** A heartbeat only says the loop turns.
-  If the task output shows `CHECKPOINT NOT SAVED`, or the `-INPROGRESS.json`
-  is much older than the heartbeat, a crash loses everything since that file.
+  If the task output shows `CHECKPOINT NOT SAVED` or `| checkpoint NOT saved`
+  on the progress lines, or the `-INPROGRESS.json` is much older than the
+  heartbeat, a crash loses everything since that file.
 - **A live scan in the SAME batch blocks wrap-up.** scan.mjs writes its JSON on
   exit, so a write landing after the merge silently undoes it.
 - **A running scan may not admit which batch it is in.** Only a scan launched

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DETECTORS, detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, isFilterControl, pickConsent, isTranslatedCopy, translationPrefix, normalizeUrl, restoreQueue, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, capQueue, writeCheckpoint, createCheckpointSaver, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource, detectResponseRateLimit, createRateLimitError, createRefusalTracker, weighBatch } from "./scan.mjs";
+import { DETECTORS, detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, isFilterControl, pickConsent, isTranslatedCopy, translationPrefix, normalizeUrl, restoreQueue, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, capQueue, writeCheckpoint, replaceFile, createCheckpointSaver, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource, detectResponseRateLimit, createRateLimitError, createRefusalTracker, weighBatch } from "./scan.mjs";
 
 const names = (result) => result.map((r) => r.player).sort();
 
@@ -803,6 +803,8 @@ test("facet combinations in array parameters are skipped, a single value and pag
     // key[]= on two facets, upper- and lowercase escapes
     "https://waardwijzer.krimpenerwaard.nl/is/organisaties?q=&o1%5B%5D=19&o2%5B%5D=622595",
     "https://waardwijzer.krimpenerwaard.nl/is/organisaties?q=&o1%5b%5d=70&o2%5b%5d=98316",
+    // keys without a value
+    "https://www.example.nl/zoeken?a[]&b[]",
   ]) assert.equal(shouldSkipUrl(url), true, url);
   for (const url of [
     "https://www.ha-meer.nl/activiteiten",
@@ -818,8 +820,9 @@ test("facet combinations in array parameters are skipped, a single value and pag
     "https://www.example.nl/nieuws?page=2",
     // a repeated plain key is MAX_QUERY_KEY_REPEATS' call, and two are fine
     "https://www.example.nl/zoeken?filter=a&filter=b",
-    // brackets in a value are not a key
+    // brackets in a value are not a key, and a fragment is not the query
     "https://www.example.nl/zoeken?q=lijst[0]&r=lijst[1]",
+    "https://www.example.nl/zoeken?a[0]=1#b[0]=2",
   ]) assert.equal(shouldSkipUrl(url), false, url);
 });
 
@@ -1334,7 +1337,7 @@ test("writeCheckpoint writes the state --resume reads, in pieces", () => {
       { url: "https://x.nl/pagina-1", players: [{ player: "YouTube", evidence: ["HTML: youtube.com/embed"] }] },
       { url: "https://x.nl/pagina-2", players: [] },
     ];
-    writeCheckpoint("x.nl", results, visited, queue, file);
+    writeCheckpoint("x.nl", results, visited, queue, { file });
 
     const stored = JSON.parse(readFileSync(file, "utf-8"));
     assert.equal(stored.domain, "x.nl");
@@ -1345,10 +1348,14 @@ test("writeCheckpoint writes the state --resume reads, in pieces", () => {
     assert.deepEqual(stored.details, [
       { url: "https://x.nl/pagina-1", players: [{ name: "YouTube", evidence: ["HTML: youtube.com/embed"] }] },
     ]);
+    assert.equal("queueCapped" in stored, false);
 
-    // Nothing queued, nothing found: still JSON, and it replaces the file
-    writeCheckpoint("x.nl", [], new Set(["https://x.nl/"]), [], file);
-    assert.deepEqual(JSON.parse(readFileSync(file, "utf-8"))._state, { visited: ["https://x.nl/"], queue: [] });
+    // Nothing queued, nothing found: still JSON, and it replaces the file.
+    // A queue that hit its bound says so, for the run that resumes from here
+    writeCheckpoint("x.nl", [], new Set(["https://x.nl/"]), [], { file, queueCapped: true });
+    const capped = JSON.parse(readFileSync(file, "utf-8"));
+    assert.deepEqual(capped._state, { visited: ["https://x.nl/"], queue: [] });
+    assert.equal(capped.queueCapped, true);
     assert.deepEqual(readdirSync(dir), ["videoscan-x.nl-INPROGRESS.json"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -1359,17 +1366,37 @@ test("writeCheckpoint throws when it cannot write, and keeps the previous checkp
   const dir = mkdtempSync(join(tmpdir(), "videoscan-checkpoint-"));
   const file = join(dir, "videoscan-x.nl-INPROGRESS.json");
   try {
-    writeCheckpoint("x.nl", [], new Set(["https://x.nl/"]), ["https://x.nl/a"], file);
+    writeCheckpoint("x.nl", [], new Set(["https://x.nl/"]), ["https://x.nl/a"], { file });
     // An item that cannot be serialized, halfway the queue
     const queue = ["https://x.nl/b", 10n];
-    assert.throws(() => writeCheckpoint("x.nl", [], new Set(["https://x.nl/"]), queue, file), TypeError);
+    assert.throws(() => writeCheckpoint("x.nl", [], new Set(["https://x.nl/"]), queue, { file }), TypeError);
     assert.deepEqual(JSON.parse(readFileSync(file, "utf-8"))._state.queue, ["https://x.nl/a"]);
     assert.deepEqual(readdirSync(dir), ["videoscan-x.nl-INPROGRESS.json"]);
 
-    assert.throws(() => writeCheckpoint("x.nl", [], new Set(), [], join(dir, "missing", "checkpoint.json")), /ENOENT/);
+    assert.throws(() => writeCheckpoint("x.nl", [], new Set(), [], { file: join(dir, "missing", "checkpoint.json") }), /ENOENT/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("replaceFile waits out a file held open, and gives up on anything else", () => {
+  const busy = (code) => Object.assign(new Error(`${code}: operation not permitted, rename`), { code });
+  // Windows while the orch server reads the checkpoint: EPERM, then free
+  let calls = 0;
+  const waits = [];
+  replaceFile("a.tmp", "a.json", () => { if (++calls <= 3) throw busy(calls === 2 ? "EBUSY" : "EPERM"); }, (ms) => waits.push(ms));
+  assert.equal(calls, 4);
+  assert.equal(waits.length, 3);
+
+  // Held for good: the error comes out, after a bounded number of tries
+  calls = 0;
+  assert.throws(() => replaceFile("a.tmp", "a.json", () => { calls++; throw busy("EPERM"); }, () => {}), /EPERM/);
+  assert.equal(calls, 10);
+
+  // Not a held file: no point waiting
+  calls = 0;
+  assert.throws(() => replaceFile("a.tmp", "a.json", () => { calls++; throw busy("ENOENT"); }, () => {}), /ENOENT/);
+  assert.equal(calls, 1);
 });
 
 test("a failed checkpoint is reported once, and once more when it works again", () => {

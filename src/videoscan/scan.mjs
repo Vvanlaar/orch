@@ -834,9 +834,9 @@ function isLoginPage(url) {
 // www.ha-meer.nl/activiteiten?gemeente[0]=116&days[0]=1&days[1]=4&doelgroepen[0]=65&…
 // had 600,754 of them queued after 7,464 scanned (0 with video) when the crawl
 // died. ?tx_solr[filter][0]=…&tx_solr[filter][1]=… did the same to
-// werkenvoortilburg.nl (36,877 pages), leerplichtdoorstroompuntmiddenbrabant.nl
-// (12,660) and sportintilburg.nl (8,943). The links are plain <a>, so
-// isFilterControl never sees them.
+// werkenvoortilburg.nl (36,877 pages scanned),
+// leerplichtdoorstroompuntmiddenbrabant.nl (12,660) and sportintilburg.nl
+// (8,943). The links are plain <a>, so isFilterControl never sees them.
 //
 // An array parameter is key[N]= or key[]=, brackets raw or %5B%5D. One is a
 // single filter value and stays: those grow with the number of values, not
@@ -880,6 +880,8 @@ const CALENDAR_FIRST_YEAR = 1990;
 const CALENDAR_YEARS_AHEAD = 2;
 
 function isEndlessCalendarPage(url) {
+  // Nearly no URL is a calendar page: look before parsing
+  if (!CALENDAR_YEAR.test(url)) return false;
   let match;
   try {
     match = CALENDAR_YEAR.exec(new URL(url).pathname);
@@ -1218,9 +1220,9 @@ export function rebalanceQueue(queue, visited, retryNext) {
 // the queue until something gives: www.ha-meer.nl reached 600,778 queued URLs
 // of ~880 characters, a 537 MB checkpoint and a dead process. The largest
 // queue a scan in history ended with is 56,679; the crawls that got past
-// 100,000 were all filter mazes (ha-meer, and the three Tilburg sites at
-// ~125,000).
-export const MAX_QUEUE = 100_000;
+// 100,000 queued were all filter mazes (ha-meer, and the three Tilburg sites
+// at ~125,000).
+const MAX_QUEUE = 100_000;
 
 // Cut a freshly sorted queue back to `max`. The tail goes: the lowest-ranked
 // URLs, which a capped crawl reaches last or never. A dropped URL also leaves
@@ -2352,14 +2354,15 @@ function writeJsonArray(fd, items, indent) {
 // that moment out rather than report a checkpoint as lost.
 const RENAME_ATTEMPTS = 10;
 const RENAME_RETRY_MS = 200;
-function replaceFile(from, to) {
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+export function replaceFile(from, to, rename = renameSync, wait = sleepSync) {
   for (let attempt = 1; ; attempt++) {
     try {
-      renameSync(from, to);
+      rename(from, to);
       return;
     } catch (err) {
       if (attempt >= RENAME_ATTEMPTS || !["EPERM", "EBUSY", "EACCES"].includes(err.code)) throw err;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, RENAME_RETRY_MS);
+      wait(RENAME_RETRY_MS);
     }
   }
 }
@@ -2371,11 +2374,17 @@ function replaceFile(from, to) {
 // Throws when the write fails — see createCheckpointSaver. Goes to a .tmp
 // first, so a process killed halfway leaves the previous checkpoint, not half
 // of a new one.
-export function writeCheckpoint(domain, results, visited, queue, file = checkpointPath(domain)) {
+// queueCapped: the queue bound dropped URLs in this crawl. Stored, so the run
+// that resumes from here still knows its queue is a sample.
+export function writeCheckpoint(domain, results, visited, queue, { file = checkpointPath(domain), queueCapped = false } = {}) {
   const details = results
     .filter((r) => r.players.length > 0)
     .map((r) => ({ url: r.url, players: r.players.map((p) => ({ name: p.player, evidence: p.evidence })) }));
-  const head = JSON.stringify({ domain, checkpoint: true, scanDate: new Date().toISOString(), pagesScanned: visited.size }, null, 2);
+  const head = JSON.stringify(
+    { domain, checkpoint: true, scanDate: new Date().toISOString(), pagesScanned: visited.size, ...(queueCapped ? { queueCapped: true } : {}) },
+    null,
+    2,
+  );
   const tmp = `${file}.tmp`;
   try {
     const fd = openSync(tmp, "w");
@@ -2398,8 +2407,10 @@ export function writeCheckpoint(domain, results, visited, queue, file = checkpoi
 }
 
 // The checkpoint stays best-effort — a crawl is not stopped over it — but not
-// silent: ha-meer.nl's failed for four hours behind an empty catch. The first failure is said once, loudly, and so is the first write
-// that works again; the ones in between would only bury it.
+// silent: ha-meer.nl's failed for four hours behind an empty catch. The first
+// failure is said once, loudly, and so is the first write that works again;
+// the ones in between would only bury it. Returns whether the checkpoint is
+// saved, for the progress line: one line scrolls out of a task's output.
 export function createCheckpointSaver(write = writeCheckpoint, log = console.log) {
   let failing = false;
   return (...state) => {
@@ -2436,10 +2447,15 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   const refusals = createRefusalTracker();
   const retryCount = new Map();
   const MAX_RETRIES = 2;
+  // The queue bound has dropped URLs, in this run or the one it resumes: the
+  // queue is a sample of what the site links, and "queue empty" no longer
+  // means "site covered"
+  let queueFull = false;
 
   // Resume from previous scan state
   if (resumeFile) {
     const prev = JSON.parse(readFileSync(resumeFile, "utf-8"));
+    queueFull = prev.queueCapped === true;
 
     // `visited` is normalized with the same function as the queue below. Both
     // sides of the "have I seen this?" test have to speak one spelling: a URL
@@ -2602,17 +2618,16 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       console.log(chalk.gray(`  Sitemap: none found (or unreachable)`));
     }
   }
-  // Said once, when the bound first bites: from then on the queue is a sample
-  // of what the site links, and "queue empty" no longer means "site covered"
-  let queueFull = false;
+  // Said once, when the bound first bites; no count, the first trim is not
+  // the total
   const trimQueue = () => {
-    const dropped = capQueue(queue, queuedSet, maxQueue);
-    if (dropped > 0 && !queueFull) {
+    if (capQueue(queue, queuedSet, maxQueue) > 0 && !queueFull) {
       queueFull = true;
-      console.log(chalk.yellow.bold(`  ⚠ QUEUE FULL: ${dropped} URL(s) over the ${maxQueue} bound, the lowest-ranked are dropped from here on — check the queue for a filter or calendar maze`));
+      console.log(chalk.yellow.bold(`  ⚠ QUEUE FULL: more than ${maxQueue} URLs queued, the lowest-ranked are dropped from here on — check the queue for a filter or calendar maze`));
     }
   };
   const saveCheckpoint = createCheckpointSaver();
+  let checkpointSaved = true;
 
   // Also re-sorts a resumed queue, stored in whatever order the last run left it
   rebalanceQueue(queue, visited, retryNext);
@@ -2743,9 +2758,9 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       const ppm = elapsed > 0 ? (newlyScanned / elapsed).toFixed(1) : "0.0";
       const remaining = Math.min(queue.length, maxPages - visited.size);
       const etaMin = ppm > 0 ? (remaining / ppm).toFixed(1) : "?";
-      console.log(chalk.cyan(`  ── ${ppm} pages/min | queue=${queue.length} | ~${etaMin}min left | delay=${throttle.delay}ms | auto-conc=${throttle.concurrency} (base=${throttle.baseConcurrency})${queueFull ? " | queue full" : ""}`));
+      console.log(chalk.cyan(`  ── ${ppm} pages/min | queue=${queue.length} | ~${etaMin}min left | delay=${throttle.delay}ms | auto-conc=${throttle.concurrency} (base=${throttle.baseConcurrency})${queueFull ? " | queue full" : ""}${checkpointSaved ? "" : " | checkpoint NOT saved"}`));
       lastProgressAt = Date.now();
-      saveCheckpoint(domain, results, visited, [...refusals.waiting(), ...queue]);
+      checkpointSaved = saveCheckpoint(domain, results, visited, [...refusals.waiting(), ...queue], { queueCapped: queueFull });
     }
 
     // Recycle the browser between batches once we've scanned enough pages — a
@@ -2764,7 +2779,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   // resume asks again instead of losing them.
   queue.unshift(...refusals.waiting());
   if (queueFull) {
-    console.log(chalk.yellow(`  Queue was full (${maxQueue}): URLs were dropped unscanned, so this crawl did not cover the site`));
+    console.log(chalk.yellow(`  Queue was full (bound ${maxQueue}): URLs were dropped unscanned, so this crawl did not cover the site`));
   }
 
   await browser.close();
@@ -2779,6 +2794,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     pagesScanned: visited.size,
     _state: { visited: [...visited], queue },
     rateLimits: buildRateLimits(throttle),
+    queueCapped: queueFull,
   };
 }
 
@@ -3065,7 +3081,7 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
 
 // ── Report ──────────────────────────────────────────────────────────
 
-function generateReport({ domain, results, pagesScanned, _state, rateLimits, batchId, batchLabel, resumeFile }) {
+function generateReport({ domain, results, pagesScanned, _state, rateLimits, queueCapped, batchId, batchLabel, resumeFile }) {
   const playerSummary = {};
   const pagesWithPlayers = [];
   const pagesWithoutPlayers = [];
@@ -3190,6 +3206,8 @@ function generateReport({ domain, results, pagesScanned, _state, rateLimits, bat
     ...(pagesFailed > 0 ? { errorSummary, failedUrls } : {}),
     ...(batchId ? { batchId } : {}),
     ...(batchLabel ? { batchLabel } : {}),
+    // The queue bound dropped URLs: an empty queue below is not full coverage
+    ...(queueCapped ? { queueCapped: true } : {}),
     playerSummary: Object.fromEntries(
       Object.entries(playerSummary).map(([p, urls]) => [p, { count: urls.length, pages: urls }])
     ),
