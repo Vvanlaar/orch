@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Block until a batch started by scan-start.mjs has nothing pending or running.
 //
-//   node scan-watch.mjs <batchId> [--interval SEC] [--step N] [--once]
+//   node scan-watch.mjs <batchId> [--interval SEC] [--step N] [--stall-hours H] [--once]
 //
 // Meant to run in the background: it prints a line whenever the counts change
 // and exits when the batch settles. Exit 0 = every scan completed; 1 = settled
@@ -11,15 +11,23 @@
 // has no tasks. --once prints the state and exits 0 while the batch is still
 // busy. --step N exits 10 as soon as N scans have completed that no earlier
 // --step run named — the cue to validate those and start the watcher again.
+// It exits 11 when a running crawl has written no checkpoint for --stall-hours
+// (default 3): that crawl is stuck or lost in a link maze, and it holds up the
+// whole batch until someone stops it. Each stalled task is reported once.
 
 import { api, fail, parseArgs, readManifest, writeManifest } from './api.mjs';
-import { settle, taskLabel } from './logic.mjs';
+import { statSync } from 'fs';
+import { join } from 'path';
+import { bare, settle, stalledCrawls, taskLabel } from './logic.mjs';
+import { videoscanDir } from '../../videoscan-validate/scripts/lib.mjs';
 
-const { target: batchId, flags } = parseArgs(process.argv.slice(2), { '--interval': 'value', '--step': 'value', '--once': 'bool' },
-  'usage: scan-watch.mjs <batchId> [--interval SEC] [--step N] [--once]');
+const { target: batchId, flags } = parseArgs(process.argv.slice(2), { '--interval': 'value', '--step': 'value', '--stall-hours': 'value', '--once': 'bool' },
+  'usage: scan-watch.mjs <batchId> [--interval SEC] [--step N] [--stall-hours H] [--once]');
 const once = !!flags['--once'];
 const step = flags['--step'] === undefined ? 0 : Number(flags['--step']);
 if (!Number.isInteger(step) || step < 0) fail('--step must be a whole number');
+const stallHours = Number(flags['--stall-hours'] ?? 3);
+if (!(stallHours > 0)) fail('--stall-hours must be a positive number');
 const intervalSec = Number(flags['--interval'] ?? 60);
 // A NaN or 0 interval turns the loop into a flood of requests at a live service.
 if (!Number.isFinite(intervalSec) || intervalSec < 5) fail('--interval must be at least 5 seconds');
@@ -84,7 +92,7 @@ for (;;) {
 
   if (!busy || once) {
     for (const t of current.filter(t => !['completed', 'pending', 'running'].includes(t.status))) {
-      console.log(`  ${t.status}  #${t.id}  ${taskLabel(t)}${t.error ? `  — ${String(t.error).slice(0, 160)}` : ''}`);
+      console.log(`  ${t.status}  #${t.id}  ${taskLabel(t)}${t.error ? `  — ${String(t.error).replace(/\s+/g, ' ').slice(0, 160)}` : ''}`);
     }
     const notStarted = manifest?.notStarted ?? [];
     for (const n of notStarted) console.log(`  never started  ${n.target}  — ${n.error}`);
@@ -93,6 +101,26 @@ for (;;) {
     const clean = verdict === 'clean' && !notStarted.length;
     console.log(clean ? 'Batch settled — every scan completed.' : 'Batch settled — not every scan completed, see above.');
     process.exit(clean ? 0 : 1);
+  }
+
+  // A crawl that stopped checkpointing. Reported once per task (remembered in
+  // the manifest), so restarting the watcher does not wake the session again
+  // for a crawl the user chose to leave running.
+  const dir = videoscanDir();
+  const checkpoints = new Map();
+  for (const t of by.running || []) {
+    try {
+      const host = bare(new URL(t.context.scanUrl).hostname);
+      const st = statSync(join(dir, `videoscan-${host}-INPROGRESS.json`));
+      checkpoints.set(host, { mtimeMs: st.mtimeMs, size: st.size });
+    } catch { /* no checkpoint (yet), or no start URL */ }
+  }
+  const reported = new Set(manifest?.stalled ?? []);
+  const stalled = stalledCrawls(by.running || [], checkpoints, Date.now(), stallHours).filter(c => !reported.has(c.id));
+  if (stalled.length) {
+    for (const c of stalled) console.log(`  stalled  #${c.id}  ${c.host}  — no checkpoint for ${c.quietHours}h${c.sizeMB === null ? ' (never wrote one)' : ` (last one ${c.sizeMB} MB)`}`);
+    if (manifest) writeManifest({ ...readManifest(batchId), stalled: [...reported, ...stalled.map(c => c.id)] });
+    if (!once) process.exit(11);
   }
 
   if (step) {

@@ -50,6 +50,10 @@ launching:
   **`! a crawl of this host is LIVE`** is the same file with a crawl still
   writing it: `--apply` refuses the whole launch until it is done or the host
   is left out with `--exclude`.
+- **A site you cannot judge** — the homepage answers 403 or a bot check, so
+  neither the name nor the page says whose it is or how big — goes in
+  `--shared` too. `ha-meer.nl` was left at the full cap on that basis and
+  became the crawl that held the batch for three days.
 - **Bottomless hosts** (`archiefweb.eu`, a `beeldbank.*`, a raadsinformatie
   archive) run to the page cap. That is what `--max-pages` is for; the default
   20000 is the dashboard's, and a capped crawl is reported as cut off, not as
@@ -107,6 +111,7 @@ exits when nothing is pending or running:
 | 3 | only paused tasks left; someone has to resume or stop them |
 | 4 | the server stopped answering |
 | 10 | `--step N`: N scans completed that no earlier run named, batch still busy |
+| 11 | a running crawl wrote no checkpoint for `--stall-hours` (default 3) |
 
 **Validate as scans finish, not only at the end.** With `--step N` the watcher
 exits 10 each time N more scans have completed and names their hosts (which
@@ -134,6 +139,29 @@ Count pages, not rows, when a site serves one page under several URLs: an
 embed on `/page`, `/page?qt-tab=0`, `/page?qt-tab=1` (Drupal quicktabs) or
 `/page?s=` is one page with video, reported as three or four. Those rows are
 real detections, so they are not pruned — say so next to the number.
+
+**A stalled crawl (exit 11) holds the whole batch, so deal with it.** One
+site's listing page with filter links (`/activiteiten?doelgroepen[0]=…&filters[1]=…`)
+is a different URL for every combination: `ha-meer.nl` had 7,973 pages scanned,
+no video, and 600,778 URLs queued. Its checkpoint grew to 537 MB — the most one
+JSON string can hold — after which checkpoints fail without a word, the
+process dies, the service resumes it, and the resumed crawl sits there with a
+beating heartbeat and no output. It ran three days before anyone looked. A
+heartbeat is not progress; the checkpoint's age is. When the watcher reports
+one, look at the checkpoint (pages scanned, queue length, which path section
+the visited URLs are in) and tell the user: stop it, or stop it and start it
+again capped with `--batch`. Do not wait for it. Two things to know first:
+
+- Stopping the batch's last running task settles the batch, and the service
+  merges at once. Queue the re-scans and prune what is disproved **before**
+  the stop — afterwards the scan files are archived.
+- A stopped crawl is a failed task: its pages are not in the organisation
+  report. Say so in the report-back, with what it had scanned.
+
+Seen on the same run, and worth a line in the report-back when a crawl hits
+its cap: a council site spent 9,807 of its 20,000 pages on `/kalender`, and
+an iBabs site 19,237 of 20,000 on document viewers (`/Agenda/Document/…`).
+The cap was reached; the site was not covered.
 
 **Re-scan what timed out — at every wake, not after the batch.**
 
@@ -221,6 +249,11 @@ URL is checked first — an unreachable image does not fail the render, it
 leaves the cover empty. The service stores both inside the scan JSON, so later
 regenerations from the dashboard keep them. If the questions were never
 answered, ask now rather than shipping the slug as a title.
+
+Check the result instead of trusting the exit code: the scan JSON has a
+`reportOptions` block with both values, the HTML's `<title>` carries the title
+and the cover URL is in it. The PDF cannot be rendered here (no poppler), so
+say that the cover was checked in the HTML, not seen.
 
 ## Reporting back
 

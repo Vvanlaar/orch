@@ -2,7 +2,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyGroupUrls, buildPlan, isTransient, chunk, retryPlan, pickReportFiles, scanKey, settle, MAX_ATTEMPTS } from './logic.mjs';
+import { classifyGroupUrls, buildPlan, isTransient, chunk, retryPlan, pickReportFiles, scanKey, settle, stalledCrawls, MAX_ATTEMPTS } from './logic.mjs';
 
 const isDerived = (f) => f.endsWith('-merged.json') || f.endsWith('-summary.json');
 
@@ -147,6 +147,28 @@ test('pickReportFiles: after a wrap-up the summary is the report', () => {
 
 test('pickReportFiles: a batch of one site with one file reports on that file', () => {
   assert.deepEqual(pickReportFiles([{ filename: 'videoscan-a.nl-1.json', domain: 'a.nl', batchId: 'site-a.nl-1' }], 'site-a.nl-1', isDerived), ['videoscan-a.nl-1.json']);
+});
+
+test('stalledCrawls: a long-running crawl whose checkpoint went quiet', () => {
+  const H = 3_600_000;
+  const now = Date.parse('2026-10-12T12:00:00Z');
+  const crawl = (id, host, startedHoursAgo, extra = {}) => ({ id, status: 'running', startedAt: new Date(now - startedHoursAgo * H).toISOString(), context: { scanUrl: `https://www.${host}/` }, ...extra });
+  const checkpoints = new Map([
+    ['stuck.nl', { mtimeMs: now - 36 * H, size: 537 * 1_048_576 }],
+    ['busy.nl', { mtimeMs: now - 0.1 * H, size: 4 * 1_048_576 }],
+  ]);
+  const tasks = [
+    crawl(1, 'stuck.nl', 60),
+    crawl(2, 'busy.nl', 60), // old crawl, fresh checkpoint: working
+    crawl(3, 'new.nl', 1), // no checkpoint yet, but only just started
+    crawl(4, 'silent.nl', 10), // ten hours in and never wrote one
+    { ...crawl(5, 'stuck.nl', 60), status: 'pending' },
+    { ...crawl(6, 'stuck.nl', 60), context: { scanUrl: 'https://stuck.nl/a', urls: ['https://stuck.nl/a'] } }, // a URL list keeps no checkpoint
+  ];
+  assert.deepEqual(stalledCrawls(tasks, checkpoints, now, 3), [
+    { id: 1, host: 'stuck.nl', quietHours: 36, sizeMB: 537 },
+    { id: 4, host: 'silent.nl', quietHours: 10, sizeMB: null },
+  ]);
 });
 
 const task = (id, status, context) => ({ id, status, context });

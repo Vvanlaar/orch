@@ -158,6 +158,31 @@ export function taskLabel(task) {
 }
 
 /**
+ * Running crawls that have stopped making progress. scan.mjs rewrites its
+ * `…-INPROGRESS.json` checkpoint every crawl batch, so a crawl that has run for
+ * hours with a checkpoint hours old is stuck — or its queue has grown past what
+ * one JSON string can hold (~512 MB) and the write fails silently, which is a
+ * crawl lost in a filter-link maze that will not end either. A heartbeat is no
+ * proof of life here: it kept beating for 36 hours on such a crawl.
+ * `checkpoints`: bare host → { mtimeMs, size } (absent = no checkpoint file).
+ */
+export function stalledCrawls(tasks, checkpoints, now, hours) {
+  const limit = hours * 3_600_000;
+  const out = [];
+  for (const t of tasks) {
+    if (t.status !== 'running' || t.context?.urls?.length) continue;
+    const ranFor = now - Date.parse(t.startedAt || '');
+    if (!(ranFor >= limit)) continue; // also skips an unparseable start time
+    let host;
+    try { host = hostOf(t.context.scanUrl); } catch { continue; }
+    const cp = checkpoints.get(host);
+    const quietFor = cp ? now - cp.mtimeMs : ranFor;
+    if (quietFor >= limit) out.push({ id: t.id, host, quietHours: Math.floor(quietFor / 3_600_000), sizeMB: cp ? Math.round(cp.size / 1_048_576) : null });
+  }
+  return out;
+}
+
+/**
  * Where a batch stands. `verdict`: 'busy' while anything is pending or running;
  * 'empty' when there is no task at all (never read that as done); 'paused' when
  * only paused tasks keep it open; otherwise 'clean' or 'failed'.
