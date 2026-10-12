@@ -208,10 +208,24 @@ function formatNumber(n) {
   return n.toString();
 }
 
-// A crawl that hit scan.mjs's queue bound dropped URLs unscanned and says so
-// with `queueCapped`; a merge or batch summary has it when any source did.
+// A scan ends short of its site in three ways, each leaving links it found and
+// never followed:
+// - `queueCapped`: scan.mjs's queue bound dropped URLs, on filter mazes like
+//   www.ha-meer.nl's;
+// - a queue left over: the crawl stopped before it ran out of links — on its
+//   --max-pages budget, which is how most crawls of a large site end, or on a
+//   pause or a kill;
+// - `queueCleared`: wrap-up accepted that as final and emptied the queue
+//   (finalizeScan in videoscan-runner.ts), so only the mark is left.
+// A merge or batch summary carries the two flags when any source did.
+function isPartialScan(scanData) {
+  return scanData.queueCapped === true
+    || scanData.queueCleared === true
+    || (scanData._state?.queue?.length || 0) > 0;
+}
+
 // Without this line the "Pagina's gescand" box reads as the whole site, on
-// exactly the sites where it is not: filter mazes like www.ha-meer.nl's.
+// exactly the scans where it is not.
 // "Links", not "pagina's": what a maze queues is mostly filter variants of
 // pages the scan did visit.
 // A batch summary covers several sites, and so does a labelled merge, which
@@ -219,7 +233,7 @@ function formatNumber(n) {
 // of werkenvoortilburg.nl with a capped sportintilburg.nl that had no video
 // has all its details on one host.
 function coverageNote(scanData) {
-  if (scanData.queueCapped !== true) return "";
+  if (!isPartialScan(scanData)) return "";
   const hosts = new Set();
   const urls = [...(scanData._state?.visited || []), ...(scanData.details || []).map((d) => d.url)];
   for (const url of urls) {
@@ -246,6 +260,7 @@ function generateReport(scanData, socialData, options = {}) {
 
   const pages = [];
   let pageNum = 1; // cover has no page number
+  const coverage = coverageNote(scanData);
 
   // ── Cover page ──
   const introText = `Deze Video quickscan biedt inzicht in de aanwezigheid en prestaties, het aantal videospelers, toegankelijkheid en privacy van de videocontent binnen de <strong class="text-primary">${orgNameCap}-domeinen</strong>. Afsluitend worden er een aantal aanbevelingen gepresenteerd.`;
@@ -358,7 +373,7 @@ function generateReport(scanData, socialData, options = {}) {
     orgName: orgNameCap,
     pagesWithVideo: String(pagesWithVideo),
     statsBoxes,
-    coverageNote: coverageNote(scanData),
+    coverageNote: coverage,
     sectionTableRows,
     pieChart,
     detailTable,
@@ -380,6 +395,7 @@ function generateReport(scanData, socialData, options = {}) {
   <div class="page">
     <h1><span class="highlight-line">Pagina's met video</span></h1>
     <p>Hieronder alle <strong class="text-primary">${details.length} pagina's</strong> waar video is aangetroffen op de onderzochte ${orgNameCap}-domeinen.</p>
+${coverage}
     <table>
       <thead><tr><th style="width:32px">#</th><th>Pagina</th><th>Players</th></tr></thead>
       <tbody>

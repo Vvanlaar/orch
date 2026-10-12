@@ -1414,6 +1414,13 @@ test("writeCheckpoint writes the state --resume reads, in pieces", () => {
     const capped = JSON.parse(readFileSync(file, "utf-8"));
     assert.deepEqual(capped._state, { visited: ["https://x.nl/"], queue: [] });
     assert.equal(capped.queueCapped, true);
+    assert.equal("queueCleared" in capped, false);
+
+    // A resumed scan whose queue wrap-up emptied keeps that mark through a crash
+    writeCheckpoint("x.nl", [], new Set(["https://x.nl/"]), [], { file, queueCleared: true });
+    const cleared = JSON.parse(readFileSync(file, "utf-8"));
+    assert.equal(cleared.queueCleared, true);
+    assert.equal("queueCapped" in cleared, false);
     assert.deepEqual(readdirSync(dir), ["videoscan-x.nl-INPROGRESS.json"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });

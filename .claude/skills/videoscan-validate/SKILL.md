@@ -34,7 +34,13 @@ What "done" means:
   usually because it reached the `--max-pages` its caller passed (the API
   defaults to 50; the dashboard's big crawls are launched with far more). That
   ceiling is a stopping point, not a finish line, and wrap-up accepts the
-  partial coverage as final.
+  partial coverage as final: it empties the queue and marks the scan
+  `queueCleared: true`. The customer report prints a "niet volledig gescand"
+  note for a scan with a queue left, `queueCleared` or `queueCapped`; scans
+  wrapped up before the mark existed have neither queue nor mark. Wrap-up
+  merges same-domain scans before it clears queues, so a retry that covered
+  the site leaves no mark. A scan marked in an earlier wrap-up keeps it through
+  later merges: delete it rather than merge it once a full crawl supersedes it.
 - **An empty queue is not proof either.** The queue is bounded (`MAX_QUEUE` in
   scan.mjs, `--max-queue` per scan); past the bound scan.mjs drops the
   lowest-ranked URLs. The scan's own JSON and its checkpoint then carry

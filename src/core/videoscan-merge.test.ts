@@ -107,6 +107,13 @@ describe('mergeScansData', () => {
     expect('queueCapped' in mergeScansData([scan({ queueCapped: false }), scan()])).toBe(false);
   });
 
+  it('carries queueCleared the same way', () => {
+    // Wrap-up finalizes each scan, then merges same-domain scans: the merge must
+    // still say a queue was cleared on the way.
+    expect(mergeScansData([scan({ queueCleared: true }), scan()]).queueCleared).toBe(true);
+    expect('queueCleared' in mergeScansData([scan(), scan()])).toBe(false);
+  });
+
   it('still unions visited and drops already-visited URLs from the queue', () => {
     const merged = mergeScansData([
       scan({ _state: { visited: ['https://example.nl/a'], queue: ['https://example.nl/b'] } }),
