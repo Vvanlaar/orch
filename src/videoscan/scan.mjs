@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { chromium } from "playwright";
 import chalk from "chalk";
-import { readFileSync, writeFileSync, existsSync, statSync, readdirSync, unlinkSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, statSync, readdirSync, unlinkSync, openSync, writeSync, closeSync, renameSync } from "fs";
 import { basename, dirname, join } from "path";
 import { fileURLToPath } from "url";
 import os from "node:os";
@@ -864,6 +864,70 @@ function isLoginPage(url) {
   }
 }
 
+// Facet combinations. A listing whose filter links carry the whole selection as
+// array parameters has one URL per subset of its checkboxes:
+// www.ha-meer.nl/activiteiten?gemeente[0]=116&days[0]=1&days[1]=4&doelgroepen[0]=65&…
+// had 600,754 of them queued after 7,464 scanned (0 with video) when the crawl
+// died. ?tx_solr[filter][0]=…&tx_solr[filter][1]=… did the same to
+// werkenvoortilburg.nl (36,877 pages scanned),
+// leerplichtdoorstroompuntmiddenbrabant.nl (12,660) and sportintilburg.nl
+// (8,943). The links are plain <a>, so isFilterControl never sees them.
+//
+// An array parameter is key[N]= or key[]=, brackets raw or %5B%5D. One is a
+// single filter value and stays: those grow with the number of values, not
+// with their combinations, and ha-meer pages its listing as
+// ?gemeente[0]=116&pagina=2 — gemeente[0] rides on every link there, so the
+// second array parameter is the first real filter. A named key is an address,
+// not a filter: ?tx_news_pi1[action]=detail&tx_news_pi1[news]=42 is one TYPO3
+// article. ?filter=a&filter=b stays MAX_QUERY_KEY_REPEATS' business.
+// Of 769,775 scanned URLs the rule takes 60,958, on 35 sites; the only ones
+// with a player are 787 on boijmans.nl, whose TikTok embed is on 19,885 of its
+// 19,995 pages. Of ha-meer's 600,778 queued URLs it leaves 24.
+const ARRAY_PARAM_KEY = /(?:\[|%5B)\d*(?:\]|%5D)$/i;
+const MAX_ARRAY_PARAMS = 1;
+
+function isFacetCombination(url) {
+  const start = url.indexOf("?");
+  if (start === -1) return false;
+  let arrayParams = 0;
+  for (const param of url.slice(start + 1).split("#")[0].split("&")) {
+    const eq = param.indexOf("=");
+    if (!ARRAY_PARAM_KEY.test(eq === -1 ? param : param.slice(0, eq))) continue;
+    arrayParams++;
+    if (arrayParams > MAX_ARRAY_PARAMS) return true;
+  }
+  return false;
+}
+
+// Endless calendars. gemeenteoplossingen council sites link the previous and
+// the next year from /kalender/<year>, with no first or last one:
+// gemeenteraad.haarlemmermeer.nl has been walked from /kalender/1799 to
+// /kalender/4583, 9,472 of the 20,000 pages of its last crawl, and dronten,
+// dordrecht, ridderkerk, den helder, weert and venlo the same way. 10,218 such
+// pages in scan history, 0 with a player.
+// Years a meeting can be in stay — the meetings on these sites run 2006..2027,
+// and those calendar pages (726) are a way to reach them. Four digits exactly:
+// with the walk cut at both ends a longer number is not a year but an id or a
+// date. Only /kalender/: the number after /event/ is an id
+// (posthuistheater.nl/order/add/event/6133).
+const CALENDAR_YEAR = /\/kalender\/(\d{4})(?:\/|$)/i;
+const CALENDAR_FIRST_YEAR = 1990;
+const CALENDAR_YEARS_AHEAD = 2;
+
+function isEndlessCalendarPage(url) {
+  // Nearly no URL is a calendar page: look before parsing
+  if (!CALENDAR_YEAR.test(url)) return false;
+  let match;
+  try {
+    match = CALENDAR_YEAR.exec(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+  if (!match) return false;
+  const year = Number(match[1]);
+  return year < CALENDAR_FIRST_YEAR || year > new Date().getFullYear() + CALENDAR_YEARS_AHEAD;
+}
+
 export function shouldSkipUrl(url, startUrl) {
   const skip = [
     /\.(pdf|zip|png|jpg|jpeg|gif|svg|webp|mp4|mp3|wav|doc|docx|xls|xlsx|ppt|pptx|css|js|xbri|xbrl|xml|csv)(\?|$)/i,
@@ -886,12 +950,24 @@ export function shouldSkipUrl(url, startUrl) {
     // 1,376 of a 2,823-page crawl on them, schouwen-duiveland.nl 776 of 1,565.
     /\/google-translate-informatie(?:[/?#]|$)/i,
     /[?&]tx_opengemeententranslategoogle/i,
+    // iBabs document viewers, one per document of every meeting:
+    // /Agenda/Document/<guid>?documentId=…, /Reports/Document/<guid>,
+    // /Document/View/<guid>. haarlemmermeer.bestuurlijkeinformatie.nl spent
+    // 19,027 of 20,000 pages on them and got to 514 meetings. 29,510 in scan
+    // history on four iBabs sites, 0 with a player: there the video is on the
+    // meeting itself (/Agenda/Index/<guid>, 144 of the 155 pages with one).
+    // In the path only, not in a ?returnUrl= on some other page.
+    /^[^?#]*\/Document\/(?:View\/)?[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}(?:[/?#]|$)/i,
   ];
   if (skip.some((r) => r.test(url))) return true;
 
   if (isLoginPage(url)) return true;
 
   if (isCrawlerTrap(url)) return true;
+
+  if (isFacetCombination(url)) return true;
+
+  if (isEndlessCalendarPage(url)) return true;
 
   if (isTranslatedCopy(url, startUrl)) return true;
 
@@ -1173,6 +1249,29 @@ export function rebalanceQueue(queue, visited, retryNext) {
   reprioritizeQueue(queue, visited);
   queue.unshift(...retryNext);
   retryNext.length = 0;
+}
+
+// Queue bound. A site that mints URLs faster than the crawl scans them grows
+// the queue until something gives: www.ha-meer.nl reached 600,778 queued URLs
+// of ~880 characters, a 537 MB checkpoint and a dead process. The largest
+// queue a scan in history ended with is 56,679; the crawls that got past
+// 100,000 queued were all filter mazes (ha-meer, and the three Tilburg sites
+// at ~125,000).
+const MAX_QUEUE = 100_000;
+
+// Cut a freshly sorted queue back to `max`. The tail goes: the lowest-ranked
+// URLs, which a capped crawl reaches last or never. A dropped URL also leaves
+// queuedSet, so the next link to it queues and ranks it again, and the meta
+// cache, which would otherwise keep its string alive. Returns how many went.
+export function capQueue(queue, queuedSet, max = MAX_QUEUE) {
+  const dropped = queue.length - max;
+  if (dropped <= 0) return 0;
+  for (let i = max; i < queue.length; i++) {
+    queuedSet.delete(queue[i]);
+    urlMetaCache.delete(queue[i]);
+  }
+  queue.length = max;
+  return dropped;
 }
 
 async function acceptCookies(page) {
@@ -2278,19 +2377,114 @@ export function restoreRows(details, startUrl) {
 function checkpointPath(domain) {
   return `videoscan-${domain}-INPROGRESS.json`;
 }
-function writeCheckpoint(domain, results, visited, queue) {
-  try {
-    const details = results
-      .filter((r) => r.players.length > 0)
-      .map((r) => ({ url: r.url, players: r.players.map((p) => ({ name: p.player, evidence: p.evidence })) }));
-    writeFileSync(
-      checkpointPath(domain),
-      JSON.stringify({ domain, checkpoint: true, scanDate: new Date().toISOString(), pagesScanned: visited.size, _state: { visited: [...visited], queue }, details }, null, 2)
-    );
-  } catch { /* checkpoint is best-effort */ }
+
+// writeSync may write less than it was given; a checkpoint cut short that way
+// would be renamed into place as if it were whole
+function writeAll(fd, text) {
+  const buffer = Buffer.from(text);
+  for (let offset = 0; offset < buffer.length;) offset += writeSync(fd, buffer, offset);
 }
 
-async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile = null, concurrency = DEFAULT_CONCURRENCY, delay = 200, sitemap = true, maxSitemapUrls = 5000, controlFile = null } = {}) {
+// One JSON array, an item per line, CHECKPOINT_CHUNK items per write
+const CHECKPOINT_CHUNK = 1000;
+function writeJsonArray(fd, items, indent) {
+  let lines = [];
+  let written = false;
+  const flush = () => {
+    if (lines.length === 0) return;
+    writeAll(fd, (written ? ",\n" : "\n") + lines.join(",\n"));
+    written = true;
+    lines = [];
+  };
+  writeAll(fd, "[");
+  for (const item of items) {
+    lines.push(`${indent}  ${JSON.stringify(item)}`);
+    if (lines.length >= CHECKPOINT_CHUNK) flush();
+  }
+  flush();
+  writeAll(fd, written ? `\n${indent}]` : "]");
+}
+
+// Windows refuses to rename onto a file another process has open, and the orch
+// server reads the checkpoint (sync, scan list) for a moment at a time. Wait
+// that moment out rather than report a checkpoint as lost.
+const RENAME_ATTEMPTS = 10;
+const RENAME_RETRY_MS = 200;
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+export function replaceFile(from, to, rename = renameSync, wait = sleepSync) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      rename(from, to);
+      return;
+    } catch (err) {
+      if (attempt >= RENAME_ATTEMPTS || !["EPERM", "EBUSY", "EACCES"].includes(err.code)) throw err;
+      wait(RENAME_RETRY_MS);
+    }
+  }
+}
+
+// Written in pieces, never as one JSON.stringify of the whole state: that is a
+// single string, and a V8 string ends at 536,870,888 characters. ha-meer.nl's
+// checkpoint got to 536,824,765 bytes; every write after it threw, and the
+// crawl that died four hours later was resumed from that one.
+// Throws when the write fails — see createCheckpointSaver. Goes to a .tmp
+// first, so a process killed halfway leaves the previous checkpoint, not half
+// of a new one.
+// queueCapped: the queue bound dropped URLs in this crawl. Stored, so the run
+// that resumes from here still knows its queue is a sample.
+export function writeCheckpoint(domain, results, visited, queue, { file = checkpointPath(domain), queueCapped = false } = {}) {
+  const details = results
+    .filter((r) => r.players.length > 0)
+    .map((r) => ({ url: r.url, players: r.players.map((p) => ({ name: p.player, evidence: p.evidence })) }));
+  const head = JSON.stringify(
+    { domain, checkpoint: true, scanDate: new Date().toISOString(), pagesScanned: visited.size, ...(queueCapped ? { queueCapped: true } : {}) },
+    null,
+    2,
+  );
+  const tmp = `${file}.tmp`;
+  try {
+    const fd = openSync(tmp, "w");
+    try {
+      writeAll(fd, `${head.slice(0, -2)},\n  "_state": {\n    "visited": `);
+      writeJsonArray(fd, visited, "    ");
+      writeAll(fd, `,\n    "queue": `);
+      writeJsonArray(fd, queue, "    ");
+      writeAll(fd, `\n  },\n  "details": `);
+      writeJsonArray(fd, details, "  ");
+      writeAll(fd, "\n}\n");
+    } finally {
+      closeSync(fd);
+    }
+    replaceFile(tmp, file);
+  } catch (err) {
+    try { unlinkSync(tmp); } catch { /* never created, or already renamed */ }
+    throw err;
+  }
+}
+
+// The checkpoint stays best-effort — a crawl is not stopped over it — but not
+// silent: ha-meer.nl's failed for four hours behind an empty catch. The first
+// failure is said once, loudly, and so is the first write that works again;
+// the ones in between would only bury it. Returns whether the checkpoint is
+// saved, for the progress line: one line scrolls out of a task's output.
+export function createCheckpointSaver(write = writeCheckpoint, log = console.log) {
+  let failing = false;
+  return (...state) => {
+    try {
+      write(...state);
+      if (failing) log(chalk.green("  ✓ Checkpoint saved again"));
+      failing = false;
+    } catch (err) {
+      if (!failing) {
+        log(chalk.red.bold(`  ✗ CHECKPOINT NOT SAVED: ${err.message} — a crash from here on resumes from the last one that was; the next checkpoint tries again`));
+      }
+      failing = true;
+    }
+    return !failing;
+  };
+}
+
+async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile = null, concurrency = DEFAULT_CONCURRENCY, delay = 200, sitemap = true, maxSitemapUrls = 5000, controlFile = null, maxQueue = MAX_QUEUE } = {}) {
   let browser = await launchScanBrowser();
   // Recycle the whole browser process every N pages. Over a long crawl the
   // single browser accumulates state (and Chrome's DNS resolver can degrade,
@@ -2309,10 +2503,15 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   const refusals = createRefusalTracker();
   const retryCount = new Map();
   const MAX_RETRIES = 2;
+  // The queue bound has dropped URLs, in this run or the one it resumes: the
+  // queue is a sample of what the site links, and "queue empty" no longer
+  // means "site covered"
+  let queueFull = false;
 
   // Resume from previous scan state
   if (resumeFile) {
     const prev = JSON.parse(readFileSync(resumeFile, "utf-8"));
+    queueFull = prev.queueCapped === true;
 
     // `visited` is normalized with the same function as the queue below. Both
     // sides of the "have I seen this?" test have to speak one spelling: a URL
@@ -2473,8 +2672,20 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       console.log(chalk.gray(`  Sitemap: none found (or unreachable)`));
     }
   }
+  // Said once, when the bound first bites; no count, the first trim is not
+  // the total
+  const trimQueue = () => {
+    if (capQueue(queue, queuedSet, maxQueue) > 0 && !queueFull) {
+      queueFull = true;
+      console.log(chalk.yellow.bold(`  ⚠ QUEUE FULL: more than ${maxQueue} URLs queued, the lowest-ranked are dropped from here on — check the queue for a filter or calendar maze`));
+    }
+  };
+  const saveCheckpoint = createCheckpointSaver();
+  let checkpointSaved = true;
+
   // Also re-sorts a resumed queue, stored in whatever order the last run left it
   rebalanceQueue(queue, visited, retryNext);
+  trimQueue();
 
   let batchNum = 0;
   let lastProgressAt = Date.now();
@@ -2585,6 +2796,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     // sections just scanned drop back behind the ones still under-sampled.
     // Before the checkpoint, so it stores the sorted queue and the retries.
     rebalanceQueue(queue, visited, retryNext);
+    trimQueue();
 
     // Recovery check: if no rate limits this batch and cooldown expired
     if (!batchHadRateLimit && throttle.rateLimitHits > 0) {
@@ -2592,16 +2804,17 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     }
     autoTuner.proposeNext(throttle, domain);
 
-    // Progress stats every 30s
+    // Progress stats every 30s. The dashboard parses this line up to "min left"
+    // and its auto-conc part (videoscan-progress.ts): anything new goes last.
     if (Date.now() - lastProgressAt > 30_000) {
       const elapsed = (Date.now() - scanStartTime) / 60_000;
       const newlyScanned = visited.size - resumeBaseline;
       const ppm = elapsed > 0 ? (newlyScanned / elapsed).toFixed(1) : "0.0";
       const remaining = Math.min(queue.length, maxPages - visited.size);
       const etaMin = ppm > 0 ? (remaining / ppm).toFixed(1) : "?";
-      console.log(chalk.cyan(`  ── ${ppm} pages/min | queue=${queue.length} | ~${etaMin}min left | delay=${throttle.delay}ms | auto-conc=${throttle.concurrency} (base=${throttle.baseConcurrency})`));
+      console.log(chalk.cyan(`  ── ${ppm} pages/min | queue=${queue.length} | ~${etaMin}min left | delay=${throttle.delay}ms | auto-conc=${throttle.concurrency} (base=${throttle.baseConcurrency})${queueFull ? " | queue full" : ""}${checkpointSaved ? "" : " | checkpoint NOT saved"}`));
       lastProgressAt = Date.now();
-      writeCheckpoint(domain, results, visited, [...refusals.waiting(), ...queue]);
+      checkpointSaved = saveCheckpoint(domain, results, visited, [...refusals.waiting(), ...queue], { queueCapped: queueFull });
     }
 
     // Recycle the browser between batches once we've scanned enough pages — a
@@ -2619,10 +2832,15 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   // Stopped (page cap, pause) before their retry: back in the queue, so a
   // resume asks again instead of losing them.
   queue.unshift(...refusals.waiting());
+  if (queueFull) {
+    console.log(chalk.yellow(`  Queue was full (bound ${maxQueue}): URLs were dropped unscanned, so this crawl did not cover the site`));
+  }
 
   await browser.close();
   autoTuner.cleanup();
   try { unlinkSync(checkpointPath(domain)); } catch { /* no checkpoint to clean */ }
+  // Left by an earlier run of this domain that was killed mid-write
+  try { unlinkSync(`${checkpointPath(domain)}.tmp`); } catch { /* none */ }
 
   return {
     domain,
@@ -2630,6 +2848,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     pagesScanned: visited.size,
     _state: { visited: [...visited], queue },
     rateLimits: buildRateLimits(throttle),
+    queueCapped: queueFull,
   };
 }
 
@@ -2916,7 +3135,7 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
 
 // ── Report ──────────────────────────────────────────────────────────
 
-function generateReport({ domain, results, pagesScanned, _state, rateLimits, batchId, batchLabel, resumeFile }) {
+function generateReport({ domain, results, pagesScanned, _state, rateLimits, queueCapped, batchId, batchLabel, resumeFile }) {
   const playerSummary = {};
   const pagesWithPlayers = [];
   const pagesWithoutPlayers = [];
@@ -3041,6 +3260,8 @@ function generateReport({ domain, results, pagesScanned, _state, rateLimits, bat
     ...(pagesFailed > 0 ? { errorSummary, failedUrls } : {}),
     ...(batchId ? { batchId } : {}),
     ...(batchLabel ? { batchLabel } : {}),
+    // The queue bound dropped URLs: an empty queue below is not full coverage
+    ...(queueCapped ? { queueCapped: true } : {}),
     playerSummary: Object.fromEntries(
       Object.entries(playerSummary).map(([p, urls]) => [p, { count: urls.length, pages: urls }])
     ),
@@ -3086,6 +3307,7 @@ ${chalk.bold("Opties:")}
   --urls <urls|file>    Scan explicit URLs (comma-separated or JSON file path)
   --no-sitemap          Skip sitemap-based URL discovery
   --max-sitemap-urls <n> Max URLs uit sitemap toevoegen aan queue (standaard: 5000)
+  --max-queue <n>       Max URLs in de queue; de laagst gerangschikte vallen af (standaard: ${MAX_QUEUE})
   --control-file <path> JSON file polled per batch for live { paused } overrides
   --batch-id <id>       Stamp scan output with a batch identifier (for grouping in dashboard)
   --batch-label <text>  Stamp scan output with a human-readable batch label
@@ -3181,9 +3403,11 @@ async function main() {
   const maxPages = parseInt(args[args.indexOf("--max-pages") + 1]) || 50;
   const sitemap = !args.includes("--no-sitemap");
   const maxSitemapUrls = parseInt(args[args.indexOf("--max-sitemap-urls") + 1]) || 5000;
+  const maxQueueArg = parseInt(flagValue("--max-queue"));
+  const maxQueue = maxQueueArg > 0 ? maxQueueArg : MAX_QUEUE;
 
   try {
-    const scanResult = await crawlSite(url, { maxPages, timeout, resumeFile, concurrency, delay, sitemap, maxSitemapUrls, controlFile });
+    const scanResult = await crawlSite(url, { maxPages, timeout, resumeFile, concurrency, delay, sitemap, maxSitemapUrls, controlFile, maxQueue });
     generateReport({ ...scanResult, batchId, batchLabel, resumeFile });
   } catch (err) {
     console.error(chalk.red(`Scan mislukt: ${err.message}`));
