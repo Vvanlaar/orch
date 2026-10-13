@@ -208,6 +208,29 @@ function formatNumber(n) {
   return n.toString();
 }
 
+// A crawl that hit scan.mjs's queue bound dropped URLs unscanned and says so
+// with `queueCapped`; a merge or batch summary has it when any source did.
+// Without this line the "Pagina's gescand" box reads as the whole site, on
+// exactly the sites where it is not: filter mazes like www.ha-meer.nl's.
+// "Links", not "pagina's": what a maze queues is mostly filter variants of
+// pages the scan did visit.
+// A batch summary covers several sites, and so does a labelled merge, which
+// only shows in the hosts it scanned: the visited list, not `details`. A merge
+// of werkenvoortilburg.nl with a capped sportintilburg.nl that had no video
+// has all its details on one host.
+function coverageNote(scanData) {
+  if (scanData.queueCapped !== true) return "";
+  const hosts = new Set();
+  const urls = [...(scanData._state?.visited || []), ...(scanData.details || []).map((d) => d.url)];
+  for (const url of urls) {
+    try { hosts.add(new URL(url).hostname.replace(/^www\./, "")); } catch {}
+  }
+  const text = scanData.isSummary === true || hosts.size > 1
+    ? "Niet elke website in dit overzicht is volledig gescand: op een of meer websites zijn meer links gevonden dan de scan heeft gevolgd. De cijfers gelden voor het gescande deel."
+    : "Deze website is niet volledig gescand: er zijn meer links gevonden dan de scan heeft gevolgd. De cijfers gelden voor het gescande deel.";
+  return `<p class="coverage-note">${text}</p>`;
+}
+
 // ── Full report ──
 
 function generateReport(scanData, socialData, options = {}) {
@@ -335,6 +358,7 @@ function generateReport(scanData, socialData, options = {}) {
     orgName: orgNameCap,
     pagesWithVideo: String(pagesWithVideo),
     statsBoxes,
+    coverageNote: coverageNote(scanData),
     sectionTableRows,
     pieChart,
     detailTable,
@@ -563,6 +587,7 @@ function generatePreviewReport(scanData, options = {}) {
     pagesWithVideo: String(pagesWithVideo),
     playerCount: String(players.length),
     videoEmbeds: String(totalVideos),
+    coverageNote: coverageNote(scanData),
     pieChart,
     privacyFlags,
     accessibilityFlags,

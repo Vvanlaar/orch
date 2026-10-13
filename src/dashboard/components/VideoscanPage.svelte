@@ -517,6 +517,11 @@
     return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   }
 
+  // An empty queue reads as "Done" whether or not URLs were dropped on the way,
+  // so the row has to say it. Worded for merges and batch summaries too: they
+  // carry the flag when any of their sources did.
+  const QUEUE_CAPPED_TITLE = 'A crawl behind this scan hit its queue bound and dropped the lowest-ranked URLs unscanned, so coverage is not complete — even when the queue is empty. Check the site for a filter or calendar maze.';
+
   function coverage(scan: ScanSummary): number {
     if (scan.pagesScanned === 0) return 0;
     return Math.round((scan.pagesWithVideo / scan.pagesScanned) * 100);
@@ -794,6 +799,9 @@
                       </div>
                     </div>
                     <div class="sc-right">
+                      {#if scan.queueCapped}
+                        <span class="sc-capped" title={QUEUE_CAPPED_TITLE}>queue capped — not fully covered</span>
+                      {/if}
                       {#if !scan.canResume && scan.pagesScanned > 0}
                         <span class="sc-done">Done</span>
                       {/if}
@@ -969,6 +977,9 @@
                   <div>
                     <span class="side-domain">{scan.domain}</span>
                     <span class="side-meta">{scan.pagesScanned} pg · {scan.pagesWithVideo} vid</span>
+                    {#if scan.queueCapped}
+                      <span class="sc-capped" title={QUEUE_CAPPED_TITLE}>queue capped</span>
+                    {/if}
                   </div>
                   {#if live}
                     <span class="sb sb-live" title="Already running — see live panel"><span class="dom-live-dot"></span>Running…</span>
@@ -1673,6 +1684,18 @@
     background: rgba(16, 185, 129, 0.1);
     padding: 2px 7px;
     border-radius: 4px;
+  }
+
+  .sc-capped {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--warning);
+    background: rgba(245, 158, 11, 0.1);
+    padding: 2px 7px;
+    border-radius: 4px;
+    cursor: help;
   }
 
   .sc-btns {
