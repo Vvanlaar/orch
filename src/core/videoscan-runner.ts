@@ -579,6 +579,8 @@ interface ScanData {
   batchLabel?: string;
   /** The crawl hit scan.mjs's queue bound and dropped URLs unscanned. Only present when true. */
   queueCapped?: boolean;
+  /** Wrap-up emptied a queue the crawl had left (finalizeScan). Only present when true. */
+  queueCleared?: boolean;
 }
 
 /**
@@ -676,6 +678,10 @@ export function mergeScansData(scansData: ScanData[]): ScanData {
   // still a site that was not covered. A full re-crawl after the maze is fixed
   // supersedes the capped scan instead: delete that one, do not merge it in.
   const queueCapped = scansData.some(s => s.queueCapped === true);
+  // Same for a queue wrap-up cleared: those URLs are gone from the union too.
+  // Wrap-up merges before it finalizes, so this is a scan finalized earlier
+  // ("+ URLs" into it, or a reopened batch wrapped up again).
+  const queueCleared = scansData.some(s => s.queueCleared === true);
 
   return {
     domain: scansData[0].domain,
@@ -689,6 +695,7 @@ export function mergeScansData(scansData: ScanData[]): ScanData {
     ...(batchId ? { batchId } : {}),
     ...(batchLabel ? { batchLabel } : {}),
     ...(queueCapped ? { queueCapped } : {}),
+    ...(queueCleared ? { queueCleared } : {}),
   };
 }
 
@@ -744,6 +751,9 @@ export function mergeScans(filenames: string[], label?: string): MergeResult {
 /**
  * Clears `_state.queue` on a scan so it's no longer treated as resumable.
  * Used by the batch wrap-up flow to accept partial coverage as final.
+ * Marks the scan `queueCleared`: with the queue gone nothing else in the file
+ * says the crawl stopped early, and the customer report (report.mjs) would
+ * present "Pagina's gescand" as the whole site.
  * Returns true when the file was actually rewritten.
  */
 export function finalizeScan(filename: string): boolean {
@@ -752,6 +762,7 @@ export function finalizeScan(filename: string): boolean {
   const data = JSON.parse(readFileSync(path, 'utf-8')) as ScanData;
   if (!data._state || (data._state.queue?.length ?? 0) === 0) return false;
   data._state.queue = [];
+  data.queueCleared = true;
   writeFileSync(path, JSON.stringify(data, null, 2));
   return true;
 }
@@ -797,14 +808,6 @@ export interface WrapUpResult {
   mergedDomains: string[];
 }
 
-/**
- * One-click batch finalization:
- *   1. Clear the queue on every scan in the batch that still has one, merges included.
- *   2. Consolidate any same-domain duplicates via mergeScans (archives sources).
- *   3. Produce a cross-domain summary JSON + HTML/PDF report.
- *
- * Caller is responsible for marking the batch closed in batch-state.
- */
 async function ensureLocal(filenames: string[]): Promise<void> {
   for (const f of filenames) {
     if (existsSync(join(VIDEOSCAN_DIR, f))) continue;
@@ -815,6 +818,14 @@ async function ensureLocal(filenames: string[]): Promise<void> {
 
 const wrapUpInFlight = new Set<string>();
 
+/**
+ * One-click batch finalization:
+ *   1. Consolidate any same-domain duplicates via mergeScans (archives sources).
+ *   2. Clear the queue on every scan left in the batch that still has one, merges included.
+ *   3. Produce a cross-domain summary JSON + HTML/PDF report.
+ *
+ * Caller is responsible for marking the batch closed in batch-state.
+ */
 export async function wrapUpBatch(batchId: string): Promise<WrapUpResult> {
   if (wrapUpInFlight.has(batchId)) throw new Error(`Wrap-up already in progress for batch ${batchId}`);
   wrapUpInFlight.add(batchId);
@@ -837,17 +848,6 @@ async function wrapUpBatchInner(batchId: string): Promise<WrapUpResult> {
   // mergeScans / summarizeBatch read files synchronously — make sure every
   // candidate is on disk before we hand it to them.
   await ensureLocal(initial.map(s => s.filename));
-
-  const finalized: string[] = [];
-  for (const s of initial) {
-    // Not gated on canResume: that is false for a batch-stamped -merged.json,
-    // whose queue would then outlive the wrap-up. finalizeScan is a no-op on an
-    // empty queue.
-    if (finalizeScan(s.filename)) {
-      finalized.push(s.filename);
-      await syncScanToSupabase(s.filename);
-    }
-  }
 
   // Same-domain consolidation: when retries / resumes left multiple JSONs
   // per host, fold them into one canonical scan. Usually applies to the
@@ -876,6 +876,22 @@ async function wrapUpBatchInner(batchId: string): Promise<WrapUpResult> {
   const after = (await listScans()).filter(s => s.batchId === batchId && !isBatchSummary(s.filename));
   if (after.length === 0) throw new Error(`No scans left in batch ${batchId} after merge step`);
   await ensureLocal(after.map(s => s.filename));
+
+  // After the merges, not before: a merge's queue is its sources' queues minus
+  // what any of them visited. A run that stopped on its budget and a retry that
+  // covered the site merge to an empty queue; finalized first, the first run
+  // was marked queueCleared and the customer report called a covered site
+  // "niet volledig gescand".
+  const finalized: string[] = [];
+  for (const s of after) {
+    // Not gated on canResume: that is false for a batch-stamped -merged.json,
+    // whose queue would then outlive the wrap-up. finalizeScan is a no-op on an
+    // empty queue.
+    if (finalizeScan(s.filename)) {
+      finalized.push(s.filename);
+      await syncScanToSupabase(s.filename);
+    }
+  }
 
   const { filename: summaryFilename } = summarizeBatch(after.map(s => s.filename), batchId, batchLabel);
 

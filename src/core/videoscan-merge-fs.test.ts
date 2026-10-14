@@ -63,8 +63,8 @@ describe('mergeScans', () => {
 
 describe('queueCapped through wrap-up', () => {
   it('survives finalizeScan, which rewrites the file to clear the queue', () => {
-    // The case the flag exists for: once the queue is cleared, nothing else in
-    // the file says the crawl stopped short.
+    // finalizeScan rewrites the whole file: the flag the crawl wrote must come
+    // out the other side, next to the queueCleared mark finalizeScan adds.
     const name = 'videoscan-d.nl-2026-04-01T00-00-00.json';
     scan(name, 'd.nl', '2026-04-01T00:00:00.000Z', 'https://d.nl/', {
       queueCapped: true,
@@ -75,6 +75,26 @@ describe('queueCapped through wrap-up', () => {
 
     expect(stored(name)._state.queue).toEqual([]);
     expect(stored(name).queueCapped).toBe(true);
+    expect(stored(name).queueCleared).toBe(true);
+  });
+
+  it('finalizeScan marks the scan whose queue it cleared, and only that one', () => {
+    const partial = 'videoscan-g.nl-2026-06-01T00-00-00.json';
+    scan(partial, 'g.nl', '2026-06-01T00:00:00.000Z', 'https://g.nl/', {
+      _state: { visited: ['https://g.nl/'], queue: ['https://g.nl/nieuws?page=2'] },
+    });
+    const complete = 'videoscan-h.nl-2026-06-01T00-00-00.json';
+    scan(complete, 'h.nl', '2026-06-01T00:00:00.000Z', 'https://h.nl/');
+
+    expect(finalizeScan(partial)).toBe(true);
+    expect(stored(partial).queueCleared).toBe(true);
+    // Nothing queued, nothing cleared: the file is left as it was
+    expect(finalizeScan(complete)).toBe(false);
+    expect('queueCleared' in stored(complete)).toBe(false);
+
+    // The batch summary built after it still knows
+    const summary = summarizeBatch([partial, complete], 'batch-3', 'Batch three');
+    expect(stored(summary.filename).queueCleared).toBe(true);
   });
 
   it('marks a batch summary when one of its scans was capped', () => {

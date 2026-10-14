@@ -2405,13 +2405,21 @@ export function replaceFile(from, to, rename = renameSync, wait = sleepSync) {
 // first, so a process killed halfway leaves the previous checkpoint, not half
 // of a new one.
 // queueCapped: the queue bound dropped URLs in this crawl. Stored, so the run
-// that resumes from here still knows its queue is a sample.
-export function writeCheckpoint(domain, results, visited, queue, { file = checkpointPath(domain), queueCapped = false } = {}) {
+// that resumes from here still knows its queue is a sample. queueCleared: the
+// same for a queue wrap-up emptied before this run resumed the scan.
+export function writeCheckpoint(domain, results, visited, queue, { file = checkpointPath(domain), queueCapped = false, queueCleared = false } = {}) {
   const details = results
     .filter((r) => r.players.length > 0)
     .map((r) => ({ url: r.url, players: r.players.map((p) => ({ name: p.player, evidence: p.evidence })) }));
   const head = JSON.stringify(
-    { domain, checkpoint: true, scanDate: new Date().toISOString(), pagesScanned: visited.size, ...(queueCapped ? { queueCapped: true } : {}) },
+    {
+      domain,
+      checkpoint: true,
+      scanDate: new Date().toISOString(),
+      pagesScanned: visited.size,
+      ...(queueCapped ? { queueCapped: true } : {}),
+      ...(queueCleared ? { queueCleared: true } : {}),
+    },
     null,
     2,
   );
@@ -2481,11 +2489,16 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   // queue is a sample of what the site links, and "queue empty" no longer
   // means "site covered"
   let queueFull = false;
+  // Wrap-up emptied this scan's queue before it was resumed (finalizeScan in
+  // videoscan-runner.ts). Those URLs are in no queue: a resume that runs dry
+  // would otherwise rewrite the file as a crawl that covered the site.
+  let queueCleared = false;
 
   // Resume from previous scan state
   if (resumeFile) {
     const prev = JSON.parse(readFileSync(resumeFile, "utf-8"));
     queueFull = prev.queueCapped === true;
+    queueCleared = prev.queueCleared === true;
 
     // `visited` is normalized with the same function as the queue below. Both
     // sides of the "have I seen this?" test have to speak one spelling: a URL
@@ -2790,7 +2803,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       const etaMin = ppm > 0 ? (remaining / ppm).toFixed(1) : "?";
       console.log(chalk.cyan(`  ── ${ppm} pages/min | queue=${queue.length} | ~${etaMin}min left | delay=${throttle.delay}ms | auto-conc=${throttle.concurrency} (base=${throttle.baseConcurrency})${queueFull ? " | queue full" : ""}${checkpointSaved ? "" : " | checkpoint NOT saved"}`));
       lastProgressAt = Date.now();
-      checkpointSaved = saveCheckpoint(domain, results, visited, [...refusals.waiting(), ...queue], { queueCapped: queueFull });
+      checkpointSaved = saveCheckpoint(domain, results, visited, [...refusals.waiting(), ...queue], { queueCapped: queueFull, queueCleared });
     }
 
     // Recycle the browser between batches once we've scanned enough pages — a
@@ -2825,6 +2838,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     _state: { visited: [...visited], queue },
     rateLimits: buildRateLimits(throttle),
     queueCapped: queueFull,
+    queueCleared,
   };
 }
 
@@ -3111,7 +3125,7 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
 
 // ── Report ──────────────────────────────────────────────────────────
 
-function generateReport({ domain, results, pagesScanned, _state, rateLimits, queueCapped, batchId, batchLabel, resumeFile }) {
+function generateReport({ domain, results, pagesScanned, _state, rateLimits, queueCapped, queueCleared, batchId, batchLabel, resumeFile }) {
   const playerSummary = {};
   const pagesWithPlayers = [];
   const pagesWithoutPlayers = [];
@@ -3238,6 +3252,8 @@ function generateReport({ domain, results, pagesScanned, _state, rateLimits, que
     ...(batchLabel ? { batchLabel } : {}),
     // The queue bound dropped URLs: an empty queue below is not full coverage
     ...(queueCapped ? { queueCapped: true } : {}),
+    // Carried over from the resumed file: wrap-up emptied its queue
+    ...(queueCleared ? { queueCleared: true } : {}),
     playerSummary: Object.fromEntries(
       Object.entries(playerSummary).map(([p, urls]) => [p, { count: urls.length, pages: urls }])
     ),

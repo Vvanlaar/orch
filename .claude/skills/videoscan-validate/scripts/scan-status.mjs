@@ -87,6 +87,9 @@ for (const [id, b] of [...batches].sort((a, b) => b[1].scans.length - a[1].scans
   // (the bound exists for filter mazes like ha-meer.nl's).
   for (const s of members.filter(s => s.queueCapped)) console.log(`  ! ${s.domain} hit the queue bound — URLs were dropped unscanned, the site is not fully covered`);
 
+  // Wrapped up before: "0 queued" here is a queue that was emptied, not a crawl that ran out
+  for (const s of members.filter(s => s.queueCleared)) console.log(`  ! ${s.domain} stopped early and wrap-up cleared its queue — partial coverage, accepted as final`);
+
   if (blockers.length) {
     for (const b2 of blockers) console.log(`  · ${b2}`);
   } else if (live.length) {

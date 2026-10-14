@@ -58,6 +58,28 @@ test("an uncapped scan's report carries no coverage note", () => {
   }
 });
 
+test("a scan that stopped on its page budget is not the whole site either", () => {
+  // Queue left: the crawl hit --max-pages
+  const queueLeft = scan({ _state: { visited: [], queue: ["https://www.gemeente.nl/zorg/pagina-2"] } });
+  assert.ok(render(queueLeft).includes(ONE_SITE));
+  assert.ok(render(queueLeft, "--preview").includes(ONE_SITE));
+  // Wrap-up emptied that queue and left its mark
+  assert.ok(render(scan({ queueCleared: true })).includes(ONE_SITE));
+  // Only a real `true` counts
+  assert.equal(render(scan({ queueCleared: false })).includes(ONE_SITE), false);
+});
+
+test("the full list of video pages repeats the note", () => {
+  const count = (html) => html.split('<p class="coverage-note">').length - 1;
+  assert.equal(count(render(scan({ queueCapped: true }))), 1);
+  // One on the overview page, one above the list that reads as an inventory
+  assert.equal(count(render(scan({ queueCapped: true }), "--all-video-pages")), 2);
+  assert.equal(count(render(scan(), "--all-video-pages")), 0);
+  const queueLeft = scan({ _state: { visited: [], queue: ["https://www.gemeente.nl/zorg/pagina-2"] } });
+  assert.equal(count(render(queueLeft, "--all-video-pages")), 2);
+  assert.equal(count(render(scan({ queueCleared: true }), "--all-video-pages")), 2);
+});
+
 test("the preview carries the same note", () => {
   assert.ok(render(scan({ queueCapped: true }), "--preview").includes(ONE_SITE));
   const clean = render(scan(), "--preview");
