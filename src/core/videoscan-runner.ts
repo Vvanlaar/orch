@@ -329,7 +329,7 @@ async function scanAndReport(taskId: number, options: VideoscanOptions): Promise
   });
 }
 
-export async function generateReport(jsonFilename: string, options?: ReportOptions): Promise<{ htmlFile?: string; pdfFile?: string }> {
+export async function generateReport(jsonFilename: string, options?: ReportOptions): Promise<{ htmlFile?: string; pdfFile?: string; sync?: SyncResult }> {
   const jsonPath = join(VIDEOSCAN_DIR, jsonFilename);
   if (!existsSync(jsonPath)) await downloadFile(jsonFilename, VIDEOSCAN_DIR);
   if (!existsSync(jsonPath)) throw new Error(`JSON file not found: ${jsonFilename}`);
@@ -354,8 +354,8 @@ export async function generateReport(jsonFilename: string, options?: ReportOptio
     log.warn(`PDF generation failed for ${jsonFilename}: ${err}`);
   }
 
-  await syncScanToSupabase(jsonFilename);
-  return { htmlFile, pdfFile };
+  const sync = await syncScanToSupabase(jsonFilename);
+  return { htmlFile, pdfFile, sync };
 }
 
 export async function generatePreview(jsonFilename: string, options?: ReportOptions): Promise<{ htmlFile?: string; pdfFile?: string }> {
@@ -616,8 +616,9 @@ export function isBatchSummary(filename: string): boolean {
 }
 
 /**
- * scan.mjs's coverage flags — a copy of COVERAGE_FLAGS in src/videoscan/coverage.mjs,
- * which the runner cannot import (dist/ has no src/videoscan). The full list of
+ * scan.mjs's coverage flags — a copy of COVERAGE_FLAGS in src/videoscan/coverage.mjs.
+ * A static import from the built dist/core would look in dist/videoscan, which tsc
+ * does not emit. coverage.test.mjs checks the two lists match; the full list of
  * places a new flag touches is in coverage.mjs.
  */
 const COVERAGE_FLAGS = ['queueCapped', 'queueCleared'] as const;
@@ -756,26 +757,29 @@ export function mergeScans(filenames: string[], label?: string): MergeResult {
 
 /**
  * Puts a merge's sources back from archived/ and deletes the merged file, for a
- * wrap-up that cannot use the merge. Returns false when any step failed.
+ * wrap-up that cannot use the merge. Returns the steps that failed, to do by hand.
  */
-function undoMerge({ filename, archivedFiles }: MergeResult): boolean {
+async function undoMerge({ filename, archivedFiles }: MergeResult): Promise<string[]> {
   const archiveDir = join(VIDEOSCAN_DIR, 'archived');
-  let ok = true;
+  const failed: string[] = [];
   for (const f of archivedFiles) {
     try {
       renameSync(join(archiveDir, f), join(VIDEOSCAN_DIR, f));
     } catch (err) {
       log.warn(`Could not move ${f} back from archived/: ${err}`);
-      ok = false;
+      failed.push(`move ${f} back from archived/`);
     }
   }
   try {
     unlinkSync(join(VIDEOSCAN_DIR, filename));
   } catch (err) {
     log.warn(`Could not delete the undone merge ${filename}: ${err}`);
-    ok = false;
+    failed.push(`delete ${filename}`);
   }
-  return ok;
+  // The upload can succeed before the row fails: no stored copy without a row.
+  // Best effort — a retry writes the same name over it anyway.
+  await deleteScanFiles(filename).catch(err => log.warn(`Could not delete ${filename} from storage: ${err}`));
+  return failed;
 }
 
 /**
@@ -854,7 +858,9 @@ const wrapUpInFlight = new Set<string>();
  *   2. Clear the queue on every scan left in the batch that still has one, merges included.
  *   3. Produce a cross-domain summary JSON + HTML/PDF report.
  *
- * Caller is responsible for marking the batch closed in batch-state.
+ * Throws, leaving the batch open, when a merge, a cleared scan or the summary
+ * does not sync to Supabase; each step is undone first, so wrapping up again
+ * redoes it. Caller is responsible for marking the batch closed in batch-state.
  */
 export async function wrapUpBatch(batchId: string): Promise<WrapUpResult> {
   if (wrapUpInFlight.has(batchId)) throw new Error(`Wrap-up already in progress for batch ${batchId}`);
@@ -900,8 +906,8 @@ async function wrapUpBatchInner(batchId: string): Promise<WrapUpResult> {
     // retry starts from the sources as they were.
     const sync = await syncScanToSupabase(mergedFile);
     if (!sync.ok) {
-      const undone = undoMerge(merge);
-      throw new Error(`Could not sync the merge of ${domain} to Supabase (${sync.error}); the summary would leave ${domain} out. ${undone ? 'The merge was undone: fix the sync and wrap up again.' : `Undoing the merge failed too: move ${merge.archivedFiles.join(', ')} back from archived/ and delete ${mergedFile} before wrapping up again.`}`);
+      const failed = await undoMerge(merge);
+      throw new Error(`Could not sync the merge of ${domain} to Supabase (${sync.error}); the summary would leave ${domain} out. ${failed.length ? `Undoing the merge failed in part — by hand: ${failed.join('; ')}; then fix the sync and wrap up again.` : 'The merge was undone: fix the sync and wrap up again.'}`);
     }
     if (isSupabaseConfigured()) await dbArchiveVideoscans(sources);
     mergedDomains.push(domain);
@@ -922,31 +928,41 @@ async function wrapUpBatchInner(batchId: string): Promise<WrapUpResult> {
   // was marked queueCleared and the customer report called a covered site
   // "niet volledig gescand".
   const finalized: string[] = [];
+  const unsynced: string[] = [];
   for (const s of after) {
     // Not gated on canResume: that is false for a batch-stamped -merged.json,
     // whose queue would then outlive the wrap-up. finalizeScan is a no-op on an
     // empty queue.
-    if (finalizeScan(s.filename)) {
+    const path = join(VIDEOSCAN_DIR, s.filename);
+    const before = existsSync(path) ? readFileSync(path, 'utf-8') : null;
+    if (!finalizeScan(s.filename)) continue;
+    const sync = await syncScanToSupabase(s.filename);
+    if (sync.ok) {
       finalized.push(s.filename);
-      // The summary reads the local file, which is right; the stored row keeps
-      // its queue and no mark until a sync works
-      const sync = await syncScanToSupabase(s.filename);
-      if (!sync.ok) log.warn(`Finalized ${s.filename} but could not sync it: ${sync.error} — the dashboard still lists it as resumable`);
+      continue;
     }
+    // The stored row keeps its queue and no mark, and a retry would find the
+    // local queue empty and never sync the file again. Put it back as it was:
+    // the retry finalizes and syncs it then.
+    if (before !== null) writeFileSync(path, before);
+    unsynced.push(`${s.filename} (${sync.error})`);
+  }
+  if (unsynced.length) {
+    throw new Error(`Could not sync ${unsynced.join(', ')} to Supabase after clearing its queue; the queue was put back and the batch stays open. Fix the sync and wrap up again.`);
   }
 
   const { filename: summaryFilename } = summarizeBatch(after.map(s => s.filename), batchId, batchLabel);
 
+  // generateReport syncs the summary; when report.mjs fails it never gets that
+  // far, so the summary is synced here then. The caller closes the batch on
+  // success: a summary the dashboard cannot list must not close it.
+  let summarySync: SyncResult | undefined;
   try {
-    await generateReport(summaryFilename);
+    summarySync = (await generateReport(summaryFilename)).sync;
   } catch (err) {
     log.warn(`Summary report generation failed for ${summaryFilename}: ${err}`);
   }
-
-  // generateReport syncs too but only logs a failure, and when report.mjs fails
-  // it never gets there. The caller closes the batch on success: a summary the
-  // dashboard cannot list must not close it.
-  const summarySync = await syncScanToSupabase(summaryFilename);
+  if (!summarySync) summarySync = await syncScanToSupabase(summaryFilename);
   if (!summarySync.ok) {
     throw new Error(`Wrote the summary ${summaryFilename} but could not sync it to Supabase (${summarySync.error}); the batch stays open. Fix the sync and wrap up again.`);
   }

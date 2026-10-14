@@ -40,10 +40,10 @@ What "done" means:
   `queueCleared` or `queueCapped`, and the dashboard marks a `queueCleared`
   scan "stopped early — not fully covered". The flags are listed in
   `src/videoscan/coverage.mjs`. Scans wrapped up before the mark existed have
-  neither queue nor mark. A merge or a summary that fails to sync to Supabase
-  stops the wrap-up with an error and leaves the batch open (a failed merge is
-  undone on disk), instead of leaving a domain out of the summary; fix the sync
-  and wrap up again. Wrap-up
+  neither queue nor mark. A merge, a cleared scan or a summary that fails to
+  sync to Supabase (row or storage upload) stops the wrap-up with an error and
+  leaves the batch open; the merge is undone and the queue put back first, so
+  fix the sync and wrap up again. Wrap-up
   merges same-domain scans before it clears queues, so a retry that covered
   the site leaves no mark. A scan marked in an earlier wrap-up keeps it through
   later merges: delete it rather than merge it once a full crawl supersedes it.

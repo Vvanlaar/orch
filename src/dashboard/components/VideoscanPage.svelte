@@ -804,7 +804,8 @@
                     <div class="sc-right">
                       {#if scan.queueCapped}
                         <span class="sc-capped" title={QUEUE_CAPPED_TITLE}>queue capped — not fully covered</span>
-                      {:else if scan.queueCleared}
+                      {/if}
+                      {#if scan.queueCleared}
                         <span class="sc-capped" title={QUEUE_CLEARED_TITLE}>stopped early — not fully covered</span>
                       {/if}
                       {#if !scan.canResume && scan.pagesScanned > 0}

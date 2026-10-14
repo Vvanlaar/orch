@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { promisify } from "node:util";
 import { chromium } from "playwright";
 import { tmpdir } from "node:os";
@@ -11,14 +11,34 @@ import { fileURLToPath } from "node:url";
 import { COVERAGE_FLAGS, coverageFlags, isPartialScan } from "./coverage.mjs";
 
 const SCAN = join(dirname(fileURLToPath(import.meta.url)), "scan.mjs");
-// scan.mjs launches Playwright's Chromium even when it fetches nothing
-const NO_BROWSER = existsSync(chromium.executablePath()) ? false : "Playwright Chromium not installed";
+// scan.mjs launches a browser even when it fetches nothing: Chrome first, then
+// Playwright's Chromium (launchScanBrowser). Skip only when neither starts.
+async function noBrowser() {
+  for (const options of [{ channel: "chrome" }, {}]) {
+    try {
+      const browser = await chromium.launch({ headless: true, ...options });
+      await browser.close();
+      return false;
+    } catch { /* try the next one */ }
+  }
+  return "neither Chrome nor Playwright's Chromium launches";
+}
+const NO_BROWSER = await noBrowser();
 
 test("coverageFlags keeps the known flags that are true, and nothing else", () => {
   assert.deepEqual(coverageFlags({ queueCapped: true, queueCleared: true, batchId: "b" }), { queueCapped: true, queueCleared: true });
   assert.deepEqual(coverageFlags({ queueCapped: "true", queueCleared: false, stray: true }), {});
   assert.deepEqual(coverageFlags(undefined), {});
   assert.deepEqual(COVERAGE_FLAGS, ["queueCapped", "queueCleared"]);
+});
+
+test("the runner's copy of the flag list matches this one", () => {
+  // videoscan-runner.ts cannot import coverage.mjs from dist/; a flag added only
+  // here would silently drop out of merges and batch summaries
+  const runner = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../core/videoscan-runner.ts"), "utf-8");
+  const list = runner.match(/const COVERAGE_FLAGS = \[([^\]]*)\] as const/);
+  assert.ok(list, "COVERAGE_FLAGS not found in videoscan-runner.ts");
+  assert.deepEqual([...list[1].matchAll(/'([^']+)'/g)].map((m) => m[1]), COVERAGE_FLAGS);
 });
 
 test("isPartialScan: a flag, or links left in the queue", () => {
@@ -55,7 +75,9 @@ async function resume(stored) {
     assert.match(stdout, new RegExp(`VIDEOSCAN_JSON: ${name.replace(/\./g, "\\.")}`));
     return JSON.parse(readFileSync(join(dir, name), "utf-8"));
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    // A browser left behind by a killed run can still hold the dir on Windows:
+    // that must not hide the run's own error
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* temp dir */ }
   }
 }
 
