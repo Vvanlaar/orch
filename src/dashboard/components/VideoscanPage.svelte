@@ -521,6 +521,9 @@
   // so the row has to say it. Worded for merges and batch summaries too: they
   // carry the flag when any of their sources did.
   const QUEUE_CAPPED_TITLE = 'A crawl behind this scan hit its queue bound and dropped the lowest-ranked URLs unscanned, so coverage is not complete — even when the queue is empty. Check the site for a filter or calendar maze.';
+  // Wrap-up's counterpart: it empties the queue of a crawl that stopped early,
+  // which then reads "Done" like a crawl that ran out of links
+  const QUEUE_CLEARED_TITLE = 'A crawl behind this scan stopped with links still queued (page budget, pause or kill), and wrap-up accepted it as final and emptied the queue. Coverage is not complete.';
 
   function coverage(scan: ScanSummary): number {
     if (scan.pagesScanned === 0) return 0;
@@ -801,6 +804,8 @@
                     <div class="sc-right">
                       {#if scan.queueCapped}
                         <span class="sc-capped" title={QUEUE_CAPPED_TITLE}>queue capped — not fully covered</span>
+                      {:else if scan.queueCleared}
+                        <span class="sc-capped" title={QUEUE_CLEARED_TITLE}>stopped early — not fully covered</span>
                       {/if}
                       {#if !scan.canResume && scan.pagesScanned > 0}
                         <span class="sc-done">Done</span>
