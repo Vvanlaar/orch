@@ -7,6 +7,8 @@ import 'dotenv/config';
 import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { createClient } from '@supabase/supabase-js';
+import { dbUpsertVideoscan } from './videoscans.js';
+import { scanRow } from '../videoscan-row.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -121,29 +123,7 @@ async function migrateVideoscans() {
   for (const filename of files) {
     try {
       const data = JSON.parse(readFileSync(join(VIDEOSCAN_DIR, filename), 'utf-8'));
-      const htmlFile = filename.replace('.json', '.html');
-      const pdfFile = filename.replace('.json', '.pdf');
-
-      const { error } = await supabase.from('videoscans').upsert(
-        {
-          filename,
-          domain: data.domain || 'unknown',
-          scan_date: data.scanDate || new Date().toISOString(),
-          pages_scanned: data.pagesScanned || 0,
-          pages_with_video: data.pagesWithVideo || data.details?.length || 0,
-          unique_players: data.uniquePlayers || Object.keys(data.playerSummary || {}).length,
-          player_summary: data.playerSummary || {},
-          details: data.details || [],
-          scan_state: data._state || {},
-          has_report: existsSync(join(VIDEOSCAN_DIR, htmlFile)),
-          has_pdf: existsSync(join(VIDEOSCAN_DIR, pdfFile)),
-          can_resume: (data._state?.queue?.length || 0) > 0,
-          queue_capped: data.queueCapped === true,
-          queue_cleared: data.queueCleared === true,
-        },
-        { onConflict: 'filename' }
-      );
-      if (error) console.error(`  ${filename}: ${error.message}`);
+      await dbUpsertVideoscan(scanRow(data, filename, VIDEOSCAN_DIR));
     } catch (err) {
       console.error(`  ${filename}: ${err}`);
     }
