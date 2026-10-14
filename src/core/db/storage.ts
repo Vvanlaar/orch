@@ -60,11 +60,16 @@ export async function uploadScanFiles(jsonFilename: string, localDir: string): P
     `${base}-preview.pdf`,
   ];
 
-  await Promise.all(
+  // uploadFile logs a failed upload and returns false. Said here too, so
+  // syncScanToSupabase does not report a scan as synced that storage never got:
+  // wrap-up checks that result before it archives a merge's sources.
+  const results = await Promise.all(
     variants
       .filter(f => existsSync(join(localDir, f)))
-      .map(f => uploadFile(f, localDir))
+      .map(async f => ((await uploadFile(f, localDir)) ? null : f))
   );
+  const failed = results.filter((f): f is string => f !== null);
+  if (failed.length) throw new Error(`Upload failed: ${failed.join(', ')}`);
 }
 
 export async function deleteScanFiles(jsonFilename: string): Promise<void> {

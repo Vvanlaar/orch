@@ -11,6 +11,7 @@ import { readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { AUDIT_DATA, SCANNER_TO_AUDIT } from "./audit-data.mjs";
+import { isPartialScan } from "./coverage.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_DIR = join(__dirname, "templates");
@@ -208,24 +209,8 @@ function formatNumber(n) {
   return n.toString();
 }
 
-// A scan ends short of its site in three ways, each leaving links it found and
-// never followed:
-// - `queueCapped`: scan.mjs's queue bound dropped URLs, on filter mazes like
-//   www.ha-meer.nl's;
-// - a queue left over: the crawl stopped before it ran out of links — on its
-//   --max-pages budget, which is how most crawls of a large site end, or on a
-//   pause or a kill;
-// - `queueCleared`: wrap-up accepted that as final and emptied the queue
-//   (finalizeScan in videoscan-runner.ts), so only the mark is left.
-// A merge or batch summary carries the two flags when any source did.
-function isPartialScan(scanData) {
-  return scanData.queueCapped === true
-    || scanData.queueCleared === true
-    || (scanData._state?.queue?.length || 0) > 0;
-}
-
-// Without this line the "Pagina's gescand" box reads as the whole site, on
-// exactly the scans where it is not.
+// Which scans are partial: coverage.mjs. Without this line the "Pagina's
+// gescand" box reads as the whole site, on exactly the scans where it is not.
 // "Links", not "pagina's": a queue holds links the scan has not followed, and
 // in a maze most of them are filter variants of pages it did visit.
 // A batch summary covers several sites, and so does a labelled merge, which

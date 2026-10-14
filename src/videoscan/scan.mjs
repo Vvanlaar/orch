@@ -6,6 +6,7 @@ import { basename, dirname, join } from "path";
 import { fileURLToPath } from "url";
 import os from "node:os";
 import { acquire } from "./wake-lock.mjs";
+import { coverageFlags } from "./coverage.mjs";
 
 // ── Video Player Detectors ──────────────────────────────────────────
 // Each detector checks page HTML + network requests for a specific player.
@@ -2404,10 +2405,9 @@ export function replaceFile(from, to, rename = renameSync, wait = sleepSync) {
 // Throws when the write fails — see createCheckpointSaver. Goes to a .tmp
 // first, so a process killed halfway leaves the previous checkpoint, not half
 // of a new one.
-// queueCapped: the queue bound dropped URLs in this crawl. Stored, so the run
-// that resumes from here still knows its queue is a sample. queueCleared: the
-// same for a queue wrap-up emptied before this run resumed the scan.
-export function writeCheckpoint(domain, results, visited, queue, { file = checkpointPath(domain), queueCapped = false, queueCleared = false } = {}) {
+// coverage: the crawl's coverage flags (coverage.mjs). Stored, so the run that
+// resumes from here still knows links were dropped before it.
+export function writeCheckpoint(domain, results, visited, queue, { file = checkpointPath(domain), coverage = {} } = {}) {
   const details = results
     .filter((r) => r.players.length > 0)
     .map((r) => ({ url: r.url, players: r.players.map((p) => ({ name: p.player, evidence: p.evidence })) }));
@@ -2417,8 +2417,7 @@ export function writeCheckpoint(domain, results, visited, queue, { file = checkp
       checkpoint: true,
       scanDate: new Date().toISOString(),
       pagesScanned: visited.size,
-      ...(queueCapped ? { queueCapped: true } : {}),
-      ...(queueCleared ? { queueCleared: true } : {}),
+      ...coverageFlags(coverage),
     },
     null,
     2,
@@ -2443,6 +2442,11 @@ export function writeCheckpoint(domain, results, visited, queue, { file = checkp
     throw err;
   }
 }
+
+// Progress line + checkpoint interval. VIDEOSCAN_PROGRESS_MS shortens it for
+// coverage.test.mjs, which needs a checkpoint within seconds, not 30 (0 or
+// unset means 30 s; use 1 for every batch).
+const PROGRESS_MS = Number(process.env.VIDEOSCAN_PROGRESS_MS) || 30_000;
 
 // The checkpoint stays best-effort — a crawl is not stopped over it — but not
 // silent: ha-meer.nl's failed for four hours behind an empty catch. The first
@@ -2489,16 +2493,18 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   // queue is a sample of what the site links, and "queue empty" no longer
   // means "site covered"
   let queueFull = false;
-  // Wrap-up emptied this scan's queue before it was resumed (finalizeScan in
-  // videoscan-runner.ts). Those URLs are in no queue: a resume that runs dry
-  // would otherwise rewrite the file as a crawl that covered the site.
-  let queueCleared = false;
+  // Coverage flags of the file this run resumes (coverage.mjs). The links they
+  // stand for are in no queue: a resume that runs dry would otherwise rewrite
+  // the file as a crawl that covered the site.
+  let carried = {};
+  // What the report and the checkpoint say: carried over, plus this run's bound
+  const coverage = () => ({ ...carried, ...(queueFull ? { queueCapped: true } : {}) });
 
   // Resume from previous scan state
   if (resumeFile) {
     const prev = JSON.parse(readFileSync(resumeFile, "utf-8"));
-    queueFull = prev.queueCapped === true;
-    queueCleared = prev.queueCleared === true;
+    carried = coverageFlags(prev);
+    queueFull = carried.queueCapped === true;
 
     // `visited` is normalized with the same function as the queue below. Both
     // sides of the "have I seen this?" test have to speak one spelling: a URL
@@ -2795,7 +2801,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
 
     // Progress stats every 30s. The dashboard parses this line up to "min left"
     // and its auto-conc part (videoscan-progress.ts): anything new goes last.
-    if (Date.now() - lastProgressAt > 30_000) {
+    if (Date.now() - lastProgressAt > PROGRESS_MS) {
       const elapsed = (Date.now() - scanStartTime) / 60_000;
       const newlyScanned = visited.size - resumeBaseline;
       const ppm = elapsed > 0 ? (newlyScanned / elapsed).toFixed(1) : "0.0";
@@ -2803,7 +2809,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       const etaMin = ppm > 0 ? (remaining / ppm).toFixed(1) : "?";
       console.log(chalk.cyan(`  ── ${ppm} pages/min | queue=${queue.length} | ~${etaMin}min left | delay=${throttle.delay}ms | auto-conc=${throttle.concurrency} (base=${throttle.baseConcurrency})${queueFull ? " | queue full" : ""}${checkpointSaved ? "" : " | checkpoint NOT saved"}`));
       lastProgressAt = Date.now();
-      checkpointSaved = saveCheckpoint(domain, results, visited, [...refusals.waiting(), ...queue], { queueCapped: queueFull, queueCleared });
+      checkpointSaved = saveCheckpoint(domain, results, visited, [...refusals.waiting(), ...queue], { coverage: coverage() });
     }
 
     // Recycle the browser between batches once we've scanned enough pages — a
@@ -2837,8 +2843,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     pagesScanned: visited.size,
     _state: { visited: [...visited], queue },
     rateLimits: buildRateLimits(throttle),
-    queueCapped: queueFull,
-    queueCleared,
+    coverage: coverage(),
   };
 }
 
@@ -3125,7 +3130,7 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
 
 // ── Report ──────────────────────────────────────────────────────────
 
-function generateReport({ domain, results, pagesScanned, _state, rateLimits, queueCapped, queueCleared, batchId, batchLabel, resumeFile }) {
+function generateReport({ domain, results, pagesScanned, _state, rateLimits, coverage, batchId, batchLabel, resumeFile }) {
   const playerSummary = {};
   const pagesWithPlayers = [];
   const pagesWithoutPlayers = [];
@@ -3250,10 +3255,8 @@ function generateReport({ domain, results, pagesScanned, _state, rateLimits, que
     ...(pagesFailed > 0 ? { errorSummary, failedUrls } : {}),
     ...(batchId ? { batchId } : {}),
     ...(batchLabel ? { batchLabel } : {}),
-    // The queue bound dropped URLs: an empty queue below is not full coverage
-    ...(queueCapped ? { queueCapped: true } : {}),
-    // Carried over from the resumed file: wrap-up emptied its queue
-    ...(queueCleared ? { queueCleared: true } : {}),
+    // Links dropped unscanned (coverage.mjs): an empty queue below is not full coverage
+    ...coverageFlags(coverage),
     playerSummary: Object.fromEntries(
       Object.entries(playerSummary).map(([p, urls]) => [p, { count: urls.length, pages: urls }])
     ),
