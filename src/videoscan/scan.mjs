@@ -2443,6 +2443,11 @@ export function writeCheckpoint(domain, results, visited, queue, { file = checkp
   }
 }
 
+// Progress line + checkpoint interval. VIDEOSCAN_PROGRESS_MS shortens it for
+// coverage.test.mjs, which needs a checkpoint within seconds, not 30 (0 or
+// unset means 30 s; use 1 for every batch).
+const PROGRESS_MS = Number(process.env.VIDEOSCAN_PROGRESS_MS) || 30_000;
+
 // The checkpoint stays best-effort — a crawl is not stopped over it — but not
 // silent: ha-meer.nl's failed for four hours behind an empty catch. The first
 // failure is said once, loudly, and so is the first write that works again;
@@ -2796,7 +2801,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
 
     // Progress stats every 30s. The dashboard parses this line up to "min left"
     // and its auto-conc part (videoscan-progress.ts): anything new goes last.
-    if (Date.now() - lastProgressAt > 30_000) {
+    if (Date.now() - lastProgressAt > PROGRESS_MS) {
       const elapsed = (Date.now() - scanStartTime) / 60_000;
       const newlyScanned = visited.size - resumeBaseline;
       const ppm = elapsed > 0 ? (newlyScanned / elapsed).toFixed(1) : "0.0";

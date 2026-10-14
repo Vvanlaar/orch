@@ -43,7 +43,11 @@ What "done" means:
   neither queue nor mark. A merge, a cleared scan or a summary that fails to
   sync to Supabase (row or storage upload) stops the wrap-up with an error and
   leaves the batch open; the merge is undone and the queue put back first, so
-  fix the sync and wrap up again. Wrap-up
+  fix the sync and wrap up again. So does a summary report that fails; if it
+  keeps failing, close the batch without it:
+  `curl -s -X POST -H "Authorization: Bearer $ORCH_TOKEN" http://127.0.0.1:3011/api/videoscans/batches/<id>/close`.
+  A merge whose sources cannot all be moved to `archived/` (a report PDF open
+  in a viewer, an antivirus lock) is undone on the spot. Wrap-up
   merges same-domain scans before it clears queues, so a retry that covered
   the site leaves no mark. A scan marked in an earlier wrap-up keeps it through
   later merges: delete it rather than merge it once a full crawl supersedes it.
