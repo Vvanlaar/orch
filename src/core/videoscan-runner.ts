@@ -10,6 +10,7 @@ import { dbListScans, dbUpsertVideoscan, dbDeleteVideoscans, dbArchiveVideoscans
 import { downloadFile, uploadScanFiles, deleteScanFiles } from './db/storage.js';
 import { reportOptionsToArgs, type ReportOptions } from './report-args.js';
 import { applyStickyReportOptions } from './report-sticky.js';
+import { isDerivedScan, isBatchSummary, scanRow } from './videoscan-row.js';
 import type { ScanFileInfo } from './queue-helpers.js';
 
 export type { ReportOptions };
@@ -329,7 +330,7 @@ async function scanAndReport(taskId: number, options: VideoscanOptions): Promise
   });
 }
 
-export async function generateReport(jsonFilename: string, options?: ReportOptions): Promise<{ htmlFile?: string; pdfFile?: string }> {
+export async function generateReport(jsonFilename: string, options?: ReportOptions): Promise<{ htmlFile?: string; pdfFile?: string; sync?: SyncResult }> {
   const jsonPath = join(VIDEOSCAN_DIR, jsonFilename);
   if (!existsSync(jsonPath)) await downloadFile(jsonFilename, VIDEOSCAN_DIR);
   if (!existsSync(jsonPath)) throw new Error(`JSON file not found: ${jsonFilename}`);
@@ -354,8 +355,8 @@ export async function generateReport(jsonFilename: string, options?: ReportOptio
     log.warn(`PDF generation failed for ${jsonFilename}: ${err}`);
   }
 
-  await syncScanToSupabase(jsonFilename);
-  return { htmlFile, pdfFile };
+  const sync = await syncScanToSupabase(jsonFilename);
+  return { htmlFile, pdfFile, sync };
 }
 
 export async function generatePreview(jsonFilename: string, options?: ReportOptions): Promise<{ htmlFile?: string; pdfFile?: string }> {
@@ -579,39 +580,19 @@ interface ScanData {
   batchLabel?: string;
   /** The crawl hit scan.mjs's queue bound and dropped URLs unscanned. Only present when true. */
   queueCapped?: boolean;
+  /** Wrap-up emptied a queue the crawl had left (finalizeScan). Only present when true. */
+  queueCleared?: boolean;
 }
+
+export { isDerivedScan, isBatchSummary };
 
 /**
- * True for scans that are derived artifacts of other scans — a merge or a batch
- * summary — rather than the output of a crawl.
- *
- * These carry a `_state.queue` built from their sources (union minus visited),
- * so a queue-length test alone reads them as resumable. Resuming one would crawl
- * a queue no single run ever owned and write the results back over the merge, so
- * every caller that asks "can this be continued?" has to exclude them.
- *
- * Detected by filename because that is what merges and summaries have in common
- * on disk, including the ones written before this flag existed. Compared the
- * way NTFS resolves the name — case-insensitive, trailing dots and spaces
- * dropped — or `x-merged.JSON` passes the resume guard and opens the merge.
+ * scan.mjs's coverage flags — a copy of COVERAGE_FLAGS in src/videoscan/coverage.mjs.
+ * A static import from the built dist/core would look in dist/videoscan, which tsc
+ * does not emit. coverage.test.mjs checks the two lists match; the full list of
+ * places a new flag touches is in coverage.mjs.
  */
-export function isDerivedScan(filename: string): boolean {
-  const f = diskName(filename);
-  return f.endsWith('-merged.json') || f.endsWith('-summary.json');
-}
-
-function diskName(filename: string): string {
-  return filename.toLowerCase().replace(/[.\s]+$/, '');
-}
-
-/**
- * A batch summary is wrap-up's own output, so a re-wrap must not read it back.
- * Narrower than isDerivedScan on purpose: a `-merged.json` is a real domain's
- * scan whose sources mergeScans archived, so dropping it would lose the domain.
- */
-export function isBatchSummary(filename: string): boolean {
-  return diskName(filename).endsWith('-summary.json');
-}
+const COVERAGE_FLAGS = ['queueCapped', 'queueCleared'] as const;
 
 export function mergeScansData(scansData: ScanData[]): ScanData {
   // Merge details — dedupe by URL, keep entry with more players
@@ -670,12 +651,16 @@ export function mergeScansData(scansData: ScanData[]): ScanData {
     ? scansData.find(s => s.batchId === batchId && s.batchLabel)?.batchLabel
     : undefined;
 
-  // Capped if any source was. The URLs a capped crawl dropped are in nobody's
-  // queue, so the union above cannot bring them back: a filter-maze crawl like
-  // ha-meer.nl's, cut at the bound and merged with a clean 200-page rescan, is
-  // still a site that was not covered. A full re-crawl after the maze is fixed
-  // supersedes the capped scan instead: delete that one, do not merge it in.
-  const queueCapped = scansData.some(s => s.queueCapped === true);
+  // A coverage flag is set if any source has it. The links behind it are in
+  // nobody's queue, so the union above cannot bring them back: a filter-maze
+  // crawl like ha-meer.nl's, cut at the bound and merged with a clean 200-page
+  // rescan, is still a site that was not covered. A full re-crawl that
+  // supersedes the flagged scan replaces it instead: delete that one, do not
+  // merge it in. (Wrap-up's same-domain merge runs before it clears queues, so
+  // a queueCleared source there was finalized in an earlier wrap-up.)
+  const coverage = Object.fromEntries(
+    COVERAGE_FLAGS.filter(flag => scansData.some(s => s[flag] === true)).map(flag => [flag, true]),
+  );
 
   return {
     domain: scansData[0].domain,
@@ -688,7 +673,7 @@ export function mergeScansData(scansData: ScanData[]): ScanData {
     _state: { visited: [...visitedSet], queue: [...queueSet] },
     ...(batchId ? { batchId } : {}),
     ...(batchLabel ? { batchLabel } : {}),
-    ...(queueCapped ? { queueCapped } : {}),
+    ...coverage,
   };
 }
 
@@ -724,17 +709,26 @@ export function mergeScans(filenames: string[], label?: string): MergeResult {
 
   // Archive source files (move to archived/ subdir)
   const archiveDir = join(VIDEOSCAN_DIR, 'archived');
-  mkdirSync(archiveDir, { recursive: true });
   const archived: string[] = [];
-  for (const f of filenames) {
-    // Move JSON + associated HTML/PDF
-    for (const ext of ['.json', '.html', '.pdf']) {
-      const src = join(VIDEOSCAN_DIR, f.replace('.json', ext));
-      if (existsSync(src)) {
-        renameSync(src, join(archiveDir, f.replace('.json', ext)));
-        archived.push(f.replace('.json', ext));
+  try {
+    mkdirSync(archiveDir, { recursive: true });
+    for (const f of filenames) {
+      // Move JSON + associated HTML/PDF
+      for (const ext of ['.json', '.html', '.pdf']) {
+        const src = join(VIDEOSCAN_DIR, f.replace('.json', ext));
+        if (existsSync(src)) {
+          renameSync(src, join(archiveDir, f.replace('.json', ext)));
+          archived.push(f.replace('.json', ext));
+        }
       }
     }
+  } catch (err) {
+    // Windows refuses to move a file another process holds without share-delete
+    // (a report PDF open in a viewer, an antivirus or indexer lock). Half the
+    // sources archived next to a merge nobody uses is worse than no merge: put
+    // them back.
+    const failed = restoreMergeOnDisk({ filename: mergedFilename, archivedFiles: archived });
+    throw new Error(`Could not archive the sources of ${mergedFilename} (${err instanceof Error ? err.message : err}); ${failed.length ? `undoing the merge failed in part — by hand: ${failed.join('; ')}` : 'the merge was undone. Close the file and try again.'}`);
   }
 
   log.info(`Merged ${filenames.length} scans into ${mergedFilename} (${merged.pagesScanned} pages, ${merged.pagesWithVideo} with video)`);
@@ -742,8 +736,47 @@ export function mergeScans(filenames: string[], label?: string): MergeResult {
 }
 
 /**
+ * Puts a merge's sources back from archived/ and deletes the merged file.
+ * Returns the steps that failed, to do by hand.
+ */
+function restoreMergeOnDisk({ filename, archivedFiles }: MergeResult): string[] {
+  const archiveDir = join(VIDEOSCAN_DIR, 'archived');
+  const failed: string[] = [];
+  for (const f of archivedFiles) {
+    try {
+      renameSync(join(archiveDir, f), join(VIDEOSCAN_DIR, f));
+    } catch (err) {
+      log.warn(`Could not move ${f} back from archived/: ${err}`);
+      failed.push(`move ${f} back from archived/`);
+    }
+  }
+  try {
+    unlinkSync(join(VIDEOSCAN_DIR, filename));
+  } catch (err) {
+    log.warn(`Could not delete the undone merge ${filename}: ${err}`);
+    failed.push(`delete ${filename}`);
+  }
+  return failed;
+}
+
+/**
+ * restoreMergeOnDisk, plus the stored copy, for a wrap-up whose merge did not
+ * sync. Returns the steps that failed, to do by hand.
+ */
+async function undoMerge(merge: MergeResult): Promise<string[]> {
+  const failed = restoreMergeOnDisk(merge);
+  // The upload can succeed before the row fails: no stored copy without a row.
+  // Best effort — a retry writes the same name over it anyway.
+  await deleteScanFiles(merge.filename).catch(err => log.warn(`Could not delete ${merge.filename} from storage: ${err}`));
+  return failed;
+}
+
+/**
  * Clears `_state.queue` on a scan so it's no longer treated as resumable.
  * Used by the batch wrap-up flow to accept partial coverage as final.
+ * Marks the scan `queueCleared`: with the queue gone nothing else in the file
+ * says the crawl stopped early, and the customer report (report.mjs) would
+ * present "Pagina's gescand" as the whole site.
  * Returns true when the file was actually rewritten.
  */
 export function finalizeScan(filename: string): boolean {
@@ -752,6 +785,7 @@ export function finalizeScan(filename: string): boolean {
   const data = JSON.parse(readFileSync(path, 'utf-8')) as ScanData;
   if (!data._state || (data._state.queue?.length ?? 0) === 0) return false;
   data._state.queue = [];
+  data.queueCleared = true;
   writeFileSync(path, JSON.stringify(data, null, 2));
   return true;
 }
@@ -797,14 +831,6 @@ export interface WrapUpResult {
   mergedDomains: string[];
 }
 
-/**
- * One-click batch finalization:
- *   1. Clear the queue on every scan in the batch that still has one, merges included.
- *   2. Consolidate any same-domain duplicates via mergeScans (archives sources).
- *   3. Produce a cross-domain summary JSON + HTML/PDF report.
- *
- * Caller is responsible for marking the batch closed in batch-state.
- */
 async function ensureLocal(filenames: string[]): Promise<void> {
   for (const f of filenames) {
     if (existsSync(join(VIDEOSCAN_DIR, f))) continue;
@@ -815,6 +841,18 @@ async function ensureLocal(filenames: string[]): Promise<void> {
 
 const wrapUpInFlight = new Set<string>();
 
+/**
+ * One-click batch finalization:
+ *   1. Consolidate any same-domain duplicates via mergeScans (archives sources).
+ *   2. Clear the queue on every scan left in the batch that still has one, merges included.
+ *   3. Produce a cross-domain summary JSON + HTML/PDF report.
+ *
+ * Throws, leaving the batch open, when a merge cannot archive its sources or
+ * does not sync, when a cleared scan does not sync (both undone first, so
+ * wrapping up again redoes them), and when the summary does not sync or its
+ * report fails (the summary stays: a retry overwrites it). Caller is
+ * responsible for marking the batch closed in batch-state.
+ */
 export async function wrapUpBatch(batchId: string): Promise<WrapUpResult> {
   if (wrapUpInFlight.has(batchId)) throw new Error(`Wrap-up already in progress for batch ${batchId}`);
   wrapUpInFlight.add(batchId);
@@ -838,35 +876,7 @@ async function wrapUpBatchInner(batchId: string): Promise<WrapUpResult> {
   // candidate is on disk before we hand it to them.
   await ensureLocal(initial.map(s => s.filename));
 
-  const finalized: string[] = [];
-  for (const s of initial) {
-    // Not gated on canResume: that is false for a batch-stamped -merged.json,
-    // whose queue would then outlive the wrap-up. finalizeScan is a no-op on an
-    // empty queue.
-    if (finalizeScan(s.filename)) {
-      finalized.push(s.filename);
-      await syncScanToSupabase(s.filename);
-    }
-  }
-
-  // Same-domain consolidation: when retries / resumes left multiple JSONs
-  // per host, fold them into one canonical scan. Usually applies to the
-  // handful of domains with paused/resumed runs; most batches skip this.
-  const mergedDomains: string[] = [];
-  const byDomain = new Map<string, typeof initial>();
-  for (const s of initial) {
-    if (!s.domain || s.pagesScanned <= 0) continue;
-    if (!byDomain.has(s.domain)) byDomain.set(s.domain, []);
-    byDomain.get(s.domain)!.push(s);
-  }
-  for (const [domain, group] of byDomain) {
-    if (group.length < 2) continue;
-    const sources = group.map(g => g.filename);
-    const { filename: mergedFile } = mergeScans(sources);
-    await syncScanToSupabase(mergedFile);
-    if (isSupabaseConfigured()) await dbArchiveVideoscans(sources);
-    mergedDomains.push(domain);
-  }
+  const mergedDomains = await mergeSameDomain(initial);
 
   // Same exclusion as `initial`: an earlier summary carries this batchId, and
   // mergeScansData keeps whichever entry has more players per URL, so feeding a
@@ -877,15 +887,107 @@ async function wrapUpBatchInner(batchId: string): Promise<WrapUpResult> {
   if (after.length === 0) throw new Error(`No scans left in batch ${batchId} after merge step`);
   await ensureLocal(after.map(s => s.filename));
 
-  const { filename: summaryFilename } = summarizeBatch(after.map(s => s.filename), batchId, batchLabel);
+  // After the merges, not before: a merge's queue is its sources' queues minus
+  // what any of them visited. A run that stopped on its budget and a retry that
+  // covered the site merge to an empty queue; finalized first, the first run
+  // was marked queueCleared and the customer report called a covered site
+  // "niet volledig gescand".
+  const finalized = await finalizeAll(after);
+  const summary = await writeSummary(after.map(s => s.filename), batchId, batchLabel);
 
-  try {
-    await generateReport(summaryFilename);
-  } catch (err) {
-    log.warn(`Summary report generation failed for ${summaryFilename}: ${err}`);
+  return { batchId, summary, finalized, mergedDomains };
+}
+
+/**
+ * Same-domain consolidation: when retries / resumes left multiple JSONs per
+ * host, fold them into one canonical scan. Usually applies to the handful of
+ * domains with paused/resumed runs; most batches skip this. Returns the merged
+ * domains.
+ */
+async function mergeSameDomain(scans: ScanSummary[]): Promise<string[]> {
+  const mergedDomains: string[] = [];
+  const byDomain = new Map<string, ScanSummary[]>();
+  for (const s of scans) {
+    if (!s.domain || s.pagesScanned <= 0) continue;
+    if (!byDomain.has(s.domain)) byDomain.set(s.domain, []);
+    byDomain.get(s.domain)!.push(s);
   }
+  for (const [domain, group] of byDomain) {
+    if (group.length < 2) continue;
+    const sources = group.map(g => g.filename);
+    const merge = mergeScans(sources);
+    // The listing after the merges reads Supabase: a merge that did not sync is
+    // not in it, and the summary would leave its domain out without a word.
+    // Stop before the sources are archived there, and undo the merge on disk
+    // too, so a retry starts from the sources as they were.
+    const sync = await syncScanToSupabase(merge.filename);
+    if (!sync.ok) {
+      const failed = await undoMerge(merge);
+      throw new Error(`Could not sync the merge of ${domain} to Supabase (${sync.error}); the summary would leave ${domain} out. ${failed.length ? `Undoing the merge failed in part — by hand: ${failed.join('; ')}; then fix the sync and wrap up again.` : 'The merge was undone: fix the sync and wrap up again.'}`);
+    }
+    if (isSupabaseConfigured()) await dbArchiveVideoscans(sources);
+    mergedDomains.push(domain);
+  }
+  return mergedDomains;
+}
 
-  return { batchId, summary: summaryFilename, finalized, mergedDomains };
+/** Clears and syncs every queue left in the batch. Returns the scans it cleared. */
+async function finalizeAll(scans: ScanSummary[]): Promise<string[]> {
+  const finalized: string[] = [];
+  const unsynced: string[] = [];
+  for (const s of scans) {
+    // Not gated on canResume: that is false for a batch-stamped -merged.json,
+    // whose queue would then outlive the wrap-up. finalizeScan is a no-op on an
+    // empty queue.
+    const path = join(VIDEOSCAN_DIR, s.filename);
+    const before = existsSync(path) ? readFileSync(path, 'utf-8') : null;
+    if (!finalizeScan(s.filename)) continue;
+    const sync = await syncScanToSupabase(s.filename);
+    if (sync.ok) {
+      finalized.push(s.filename);
+      continue;
+    }
+    // The stored row keeps its queue and no mark, and a retry would find the
+    // local queue empty and never sync the file again. Put it back as it was:
+    // the retry finalizes and syncs it then.
+    if (before !== null) writeFileSync(path, before);
+    unsynced.push(`${s.filename} (${sync.error})`);
+  }
+  if (unsynced.length) {
+    throw new Error(`Could not sync ${unsynced.join(', ')} to Supabase after clearing its queue; the queue was put back and the batch stays open. Fix the sync and wrap up again.`);
+  }
+  return finalized;
+}
+
+/**
+ * Writes, reports and syncs the batch summary. Returns its filename. The caller
+ * closes the batch on success, so this throws when the summary is not in
+ * Supabase or has no report: the report is the deliverable the batch is closed
+ * for, and a closed batch hides its Wrap up button.
+ */
+async function writeSummary(filenames: string[], batchId: string, batchLabel: string): Promise<string> {
+  const { filename } = summarizeBatch(filenames, batchId, batchLabel);
+
+  // generateReport syncs the summary; when report.mjs fails it never gets that
+  // far, so the summary is synced here then
+  let sync: SyncResult | undefined;
+  let reportError: string | undefined;
+  try {
+    const report = await generateReport(filename);
+    sync = report.sync;
+    if (!report.htmlFile) reportError = 'report.mjs wrote no HTML';
+  } catch (err) {
+    reportError = err instanceof Error ? err.message : String(err);
+    log.warn(`Summary report generation failed for ${filename}: ${reportError}`);
+  }
+  if (!sync) sync = await syncScanToSupabase(filename);
+  if (!sync.ok) {
+    throw new Error(`Wrote the summary ${filename} but could not sync it to Supabase (${sync.error}); the batch stays open. Fix the sync and wrap up again.`);
+  }
+  if (reportError) {
+    throw new Error(`Wrote the summary ${filename} but its report failed (${reportError}); the batch stays open. Fix the report and wrap up again, or close the batch without it (POST /api/videoscans/batches/${batchId}/close).`);
+  }
+  return filename;
 }
 
 export type SyncResult = { ok: true } | { ok: false; error: string };
@@ -898,34 +1000,12 @@ export async function syncScanToSupabase(jsonFilename: string): Promise<SyncResu
 
   try {
     const data = JSON.parse(readFileSync(jsonPath, 'utf-8'));
-    const htmlFile = jsonFilename.replace('.json', '.html');
-    const pdfFile = jsonFilename.replace('.json', '.pdf');
-    const previewFile = jsonFilename.replace('.json', '-preview.html');
-    const previewPdfFile = jsonFilename.replace('.json', '-preview.pdf');
 
     // Upload files to Supabase Storage
     await uploadScanFiles(jsonFilename, VIDEOSCAN_DIR);
 
     // Upsert metadata row
-    await dbUpsertVideoscan({
-      filename: jsonFilename,
-      domain: data.domain || 'unknown',
-      scanDate: data.scanDate || new Date().toISOString(),
-      pagesScanned: data.pagesScanned || 0,
-      pagesWithVideo: data.pagesWithVideo || data.details?.length || 0,
-      uniquePlayers: data.uniquePlayers || Object.keys(data.playerSummary || {}).length,
-      playerSummary: data.playerSummary || {},
-      details: data.details || [],
-      scanState: data._state || {},
-      hasReport: existsSync(join(VIDEOSCAN_DIR, htmlFile)),
-      hasPdf: existsSync(join(VIDEOSCAN_DIR, pdfFile)),
-      hasPreview: existsSync(join(VIDEOSCAN_DIR, previewFile)),
-      hasPreviewPdf: existsSync(join(VIDEOSCAN_DIR, previewPdfFile)),
-      canResume: (data._state?.queue?.length || 0) > 0 && !isDerivedScan(jsonFilename),
-      queueCapped: data.queueCapped === true,
-      batchId: typeof data.batchId === 'string' ? data.batchId : undefined,
-      batchLabel: typeof data.batchLabel === 'string' ? data.batchLabel : undefined,
-    });
+    await dbUpsertVideoscan(scanRow(data, jsonFilename, VIDEOSCAN_DIR));
 
     log.info(`Synced ${jsonFilename} to Supabase`);
     return { ok: true };
@@ -952,6 +1032,8 @@ export interface ScanSummary {
   batchLabel?: string;
   /** The crawl dropped queued URLs at its queue bound: not fully covered, even with an empty queue. */
   queueCapped?: boolean;
+  /** Wrap-up emptied a queue the crawl had left: not fully covered, though it reads as done. */
+  queueCleared?: boolean;
 }
 
 function listScansFromDisk(): ScanSummary[] {
@@ -982,6 +1064,7 @@ function listScansFromDisk(): ScanSummary[] {
           ...(typeof data.batchId === 'string' && data.batchId ? { batchId: data.batchId } : {}),
           ...(typeof data.batchLabel === 'string' && data.batchLabel ? { batchLabel: data.batchLabel } : {}),
           ...(data.queueCapped === true ? { queueCapped: true } : {}),
+          ...(data.queueCleared === true ? { queueCleared: true } : {}),
         };
       } catch {
         return {

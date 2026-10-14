@@ -1992,6 +1992,19 @@ app.post('/api/videoscans/batches/:batchId/open', (req, res) => {
   res.json({ ok: true });
 });
 
+// Closes a batch without a wrap-up: the way out when its summary report keeps
+// failing (report.mjs out of heap on a 100-domain summary), since wrap-up only
+// closes a batch whose report was written
+app.post('/api/videoscans/batches/:batchId/close', (req, res) => {
+  const { batchId } = req.params;
+  if (!batchId) {
+    res.status(400).json({ error: 'batchId required' });
+    return;
+  }
+  markBatchClosed(batchId);
+  res.json({ ok: true });
+});
+
 app.get('/api/videoscans/files/:filename', asyncHandler(async (req, res) => {
   const filename = validateScanFilename(req.params.filename);
   if (!filename) {

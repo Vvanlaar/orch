@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll } from 'vitest';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'fs';
+import { mkdtempSync, writeFileSync, readFileSync, readdirSync, existsSync, mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -27,6 +27,23 @@ function stored(filename: string) {
 }
 
 describe('mergeScans', () => {
+  it('puts the sources back and drops the merge when archiving one fails', () => {
+    const sources = ['videoscan-m.nl-2026-08-01T00-00-00.json', 'videoscan-m.nl-2026-08-02T00-00-00.json'];
+    scan(sources[0], 'm.nl', '2026-08-01T00:00:00.000Z', 'https://m.nl/a');
+    scan(sources[1], 'm.nl', '2026-08-02T00:00:00.000Z', 'https://m.nl/b');
+    // The second source cannot move: its place in archived/ is taken by a
+    // non-empty directory, as a file locked by another process would refuse
+    mkdirSync(join(dir, 'archived', sources[1]), { recursive: true });
+    writeFileSync(join(dir, 'archived', sources[1], 'x'), '');
+
+    expect(() => mergeScans(sources)).toThrow(/Could not archive the sources of videoscan-m\.nl-.*the merge was undone/);
+
+    for (const f of sources) expect(existsSync(join(dir, f))).toBe(true);
+    expect(readdirSync(dir).some(f => f.startsWith('videoscan-m.nl') && f.endsWith('-merged.json'))).toBe(false);
+    expect(existsSync(join(dir, 'archived', sources[0]))).toBe(false);
+    rmSync(join(dir, 'archived', sources[1]), { recursive: true, force: true });
+  });
+
   it('does not archive its own output when a source merge already has the name', () => {
     // Wrap-up re-merging a batch-stamped merge with an older same-domain scan:
     // the merge is the newest source, so its name is the one mergeScans builds.
@@ -63,8 +80,8 @@ describe('mergeScans', () => {
 
 describe('queueCapped through wrap-up', () => {
   it('survives finalizeScan, which rewrites the file to clear the queue', () => {
-    // The case the flag exists for: once the queue is cleared, nothing else in
-    // the file says the crawl stopped short.
+    // finalizeScan rewrites the whole file: the flag the crawl wrote must come
+    // out the other side, next to the queueCleared mark finalizeScan adds.
     const name = 'videoscan-d.nl-2026-04-01T00-00-00.json';
     scan(name, 'd.nl', '2026-04-01T00:00:00.000Z', 'https://d.nl/', {
       queueCapped: true,
@@ -75,6 +92,26 @@ describe('queueCapped through wrap-up', () => {
 
     expect(stored(name)._state.queue).toEqual([]);
     expect(stored(name).queueCapped).toBe(true);
+    expect(stored(name).queueCleared).toBe(true);
+  });
+
+  it('finalizeScan marks the scan whose queue it cleared, and only that one', () => {
+    const partial = 'videoscan-g.nl-2026-06-01T00-00-00.json';
+    scan(partial, 'g.nl', '2026-06-01T00:00:00.000Z', 'https://g.nl/', {
+      _state: { visited: ['https://g.nl/'], queue: ['https://g.nl/nieuws?page=2'] },
+    });
+    const complete = 'videoscan-h.nl-2026-06-01T00-00-00.json';
+    scan(complete, 'h.nl', '2026-06-01T00:00:00.000Z', 'https://h.nl/');
+
+    expect(finalizeScan(partial)).toBe(true);
+    expect(stored(partial).queueCleared).toBe(true);
+    // Nothing queued, nothing cleared: the file is left as it was
+    expect(finalizeScan(complete)).toBe(false);
+    expect('queueCleared' in stored(complete)).toBe(false);
+
+    // The batch summary built after it still knows
+    const summary = summarizeBatch([partial, complete], 'batch-3', 'Batch three');
+    expect(stored(summary.filename).queueCleared).toBe(true);
   });
 
   it('marks a batch summary when one of its scans was capped', () => {
