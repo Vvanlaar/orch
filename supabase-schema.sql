@@ -56,10 +56,13 @@ CREATE TABLE IF NOT EXISTS videoscans (
   has_report BOOLEAN NOT NULL DEFAULT false,
   has_pdf BOOLEAN NOT NULL DEFAULT false,
   can_resume BOOLEAN NOT NULL DEFAULT false,
+  queue_capped BOOLEAN NOT NULL DEFAULT false,
   archived BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_videoscans_domain ON videoscans(domain);
+-- The crawl hit scan.mjs's queue bound and dropped URLs unscanned
+ALTER TABLE videoscans ADD COLUMN IF NOT EXISTS queue_capped BOOLEAN NOT NULL DEFAULT false;
 
 -- Feedback (replaces .orch-feedback.json)
 CREATE TABLE IF NOT EXISTS feedback (

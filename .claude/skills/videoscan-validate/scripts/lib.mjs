@@ -54,6 +54,10 @@ export function listScans(dir = videoscanDir()) {
           pagesWithVideo: d.pagesWithVideo ?? (d.details?.length || 0),
           uniquePlayers: d.uniquePlayers ?? Object.keys(d.playerSummary || {}).length,
           queued: d._state?.queue?.length || 0,
+          // scan.mjs dropped queued URLs at its --max-queue bound
+          queueCapped: d.queueCapped === true,
+          // wrap-up emptied a queue the crawl had left
+          queueCleared: d.queueCleared === true,
           batchId: d.batchId,
           batchLabel: d.batchLabel,
           // The flag is lost when a summary goes through a merge ("+ URLs"), so

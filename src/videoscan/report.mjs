@@ -208,6 +208,43 @@ function formatNumber(n) {
   return n.toString();
 }
 
+// A scan ends short of its site in three ways, each leaving links it found and
+// never followed:
+// - `queueCapped`: scan.mjs's queue bound dropped URLs, on filter mazes like
+//   www.ha-meer.nl's;
+// - a queue left over: the crawl stopped before it ran out of links — on its
+//   --max-pages budget, which is how most crawls of a large site end, or on a
+//   pause or a kill;
+// - `queueCleared`: wrap-up accepted that as final and emptied the queue
+//   (finalizeScan in videoscan-runner.ts), so only the mark is left.
+// A merge or batch summary carries the two flags when any source did.
+function isPartialScan(scanData) {
+  return scanData.queueCapped === true
+    || scanData.queueCleared === true
+    || (scanData._state?.queue?.length || 0) > 0;
+}
+
+// Without this line the "Pagina's gescand" box reads as the whole site, on
+// exactly the scans where it is not.
+// "Links", not "pagina's": a queue holds links the scan has not followed, and
+// in a maze most of them are filter variants of pages it did visit.
+// A batch summary covers several sites, and so does a labelled merge, which
+// only shows in the hosts it scanned: the visited list, not `details`. A merge
+// of werkenvoortilburg.nl with a capped sportintilburg.nl that had no video
+// has all its details on one host.
+function coverageNote(scanData) {
+  if (!isPartialScan(scanData)) return "";
+  const hosts = new Set();
+  const urls = [...(scanData._state?.visited || []), ...(scanData.details || []).map((d) => d.url)];
+  for (const url of urls) {
+    try { hosts.add(new URL(url).hostname.replace(/^www\./, "")); } catch {}
+  }
+  const text = scanData.isSummary === true || hosts.size > 1
+    ? "Niet elke website in dit overzicht is volledig gescand: op een of meer websites zijn meer links gevonden dan de scan heeft gevolgd. De cijfers gelden voor het gescande deel."
+    : "Deze website is niet volledig gescand: er zijn meer links gevonden dan de scan heeft gevolgd. De cijfers gelden voor het gescande deel.";
+  return `<p class="coverage-note">${text}</p>`;
+}
+
 // ── Full report ──
 
 function generateReport(scanData, socialData, options = {}) {
@@ -223,6 +260,7 @@ function generateReport(scanData, socialData, options = {}) {
 
   const pages = [];
   let pageNum = 1; // cover has no page number
+  const coverage = coverageNote(scanData);
 
   // ── Cover page ──
   const introText = `Deze Video quickscan biedt inzicht in de aanwezigheid en prestaties, het aantal videospelers, toegankelijkheid en privacy van de videocontent binnen de <strong class="text-primary">${orgNameCap}-domeinen</strong>. Afsluitend worden er een aantal aanbevelingen gepresenteerd.`;
@@ -335,6 +373,7 @@ function generateReport(scanData, socialData, options = {}) {
     orgName: orgNameCap,
     pagesWithVideo: String(pagesWithVideo),
     statsBoxes,
+    coverageNote: coverage,
     sectionTableRows,
     pieChart,
     detailTable,
@@ -356,6 +395,7 @@ function generateReport(scanData, socialData, options = {}) {
   <div class="page">
     <h1><span class="highlight-line">Pagina's met video</span></h1>
     <p>Hieronder alle <strong class="text-primary">${details.length} pagina's</strong> waar video is aangetroffen op de onderzochte ${orgNameCap}-domeinen.</p>
+${coverage}
     <table>
       <thead><tr><th style="width:32px">#</th><th>Pagina</th><th>Players</th></tr></thead>
       <tbody>
@@ -563,6 +603,7 @@ function generatePreviewReport(scanData, options = {}) {
     pagesWithVideo: String(pagesWithVideo),
     playerCount: String(players.length),
     videoEmbeds: String(totalVideos),
+    coverageNote: coverageNote(scanData),
     pieChart,
     privacyFlags,
     accessibilityFlags,

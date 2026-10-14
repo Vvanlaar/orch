@@ -12,6 +12,7 @@ export interface ScanSummary {
   canResume: boolean;
   batchId?: string;
   batchLabel?: string;
+  queueCapped?: boolean;
 }
 
 let scans = $state<ScanSummary[]>([]);

@@ -21,7 +21,8 @@ named "Vince (admin)"). Export it once: `export ORCH_TOKEN=<admin token>`.
 
 `scan-status.mjs [target]` — target is a batch id, part of a batch label, or a
 domain. It reports, per batch: running scans, queued-but-unfinished scans,
-dead hosts, duplicate scan files, and whether the batch is already closed.
+dead hosts, duplicate scan files, scans that hit the queue bound (`!` lines,
+a note rather than a blocker), and whether the batch is already closed.
 
 What "done" means:
 
@@ -33,7 +34,31 @@ What "done" means:
   usually because it reached the `--max-pages` its caller passed (the API
   defaults to 50; the dashboard's big crawls are launched with far more). That
   ceiling is a stopping point, not a finish line, and wrap-up accepts the
-  partial coverage as final.
+  partial coverage as final: it empties the queue and marks the scan
+  `queueCleared: true`. The customer report prints a "… volledig gescand"
+  note (`<p class="coverage-note">`) for a scan with a queue left,
+  `queueCleared` or `queueCapped`; scans
+  wrapped up before the mark existed have neither queue nor mark. Wrap-up
+  merges same-domain scans before it clears queues, so a retry that covered
+  the site leaves no mark. A scan marked in an earlier wrap-up keeps it through
+  later merges: delete it rather than merge it once a full crawl supersedes it.
+- **An empty queue is not proof either.** The queue is bounded (`MAX_QUEUE` in
+  scan.mjs, `--max-queue` per scan); past the bound scan.mjs drops the
+  lowest-ranked URLs. The scan's own JSON and its checkpoint then carry
+  `queueCapped: true`, also after a resume; a merged or summary report carries
+  it when any of its sources did, and the dashboard marks the scan "queue
+  capped — not fully covered". Reports written before the flag existed lack
+  it, so for those the task output is the only record: `QUEUE FULL`,
+  `| queue full` on the progress lines, `Queue was full … did not cover the
+  site` at the end. Every queue that got that large so far was a filter maze —
+  look at what is queued before calling the site covered. Resuming does not
+  help: the dropped URLs are in no queue. The way out is a skip rule for the
+  maze and a fresh crawl; then delete the capped scan rather than merging it
+  with the new one, or the merge (and the batch summary) stays marked capped.
+- **A stale checkpoint is not progress.** A heartbeat only says the loop turns.
+  If the task output shows `CHECKPOINT NOT SAVED` or `| checkpoint NOT saved`
+  on the progress lines, or the `-INPROGRESS.json` is much older than the
+  heartbeat, a crash loses everything since that file.
 - **A live scan in the SAME batch blocks wrap-up.** scan.mjs writes its JSON on
   exit, so a write landing after the merge silently undoes it.
 - **A running scan may not admit which batch it is in.** Only a scan launched

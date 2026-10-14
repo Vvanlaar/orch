@@ -38,7 +38,7 @@ if (unfiled.length) {
   for (const s of unfiled) {
     const beat = hb.find(h => h.hostname === s.domain);
     const state = beat?.live ? 'LIVE' : beat ? `stopped ${fmtAge(beat.ageMs)} ago` : 'no heartbeat';
-    console.log(`  ${s.domain}  ${s.pagesScanned} scanned, ${s.queued} queued  (${state})`);
+    console.log(`  ${s.domain}  ${s.pagesScanned} scanned, ${s.queued} queued${s.queueCapped ? ', queue capped' : ''}  (${state})`);
   }
   console.log('  These belong to no batch on disk. If one covers a host in the batch you are');
   console.log('  about to wrap up, finish or stop it first — its exit write lands after the merge.');
@@ -81,6 +81,14 @@ for (const [id, b] of [...batches].sort((a, b) => b[1].scans.length - a[1].scans
   const perDomain = new Map();
   for (const s of members) if (s.domain && s.pagesScanned > 0) perDomain.set(s.domain, (perDomain.get(s.domain) || 0) + 1);
   for (const [d, n] of perDomain) if (n > 1) blockers.push(`${d} has ${n} scan files — wrap-up will merge them`);
+
+  // A note, not a blocker: no resume brings the dropped URLs back, so there is
+  // nothing to finish first. Said so "no queue left" is not read as "covered"
+  // (the bound exists for filter mazes like ha-meer.nl's).
+  for (const s of members.filter(s => s.queueCapped)) console.log(`  ! ${s.domain} hit the queue bound — URLs were dropped unscanned, the site is not fully covered`);
+
+  // Wrapped up before: "0 queued" here is a queue that was emptied, not a crawl that ran out
+  for (const s of members.filter(s => s.queueCleared)) console.log(`  ! ${s.domain} stopped early and wrap-up cleared its queue — partial coverage, accepted as final`);
 
   if (blockers.length) {
     for (const b2 of blockers) console.log(`  · ${b2}`);

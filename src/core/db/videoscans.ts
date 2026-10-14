@@ -17,6 +17,7 @@ interface VideoscanRow {
   has_preview: boolean;
   has_preview_pdf: boolean;
   can_resume: boolean;
+  queue_capped: boolean;
   archived: boolean;
   created_at: string;
   batch_id: string | null;
@@ -38,6 +39,7 @@ function rowToSummary(row: VideoscanRow): ScanSummary {
     canResume: row.can_resume,
     ...(row.batch_id ? { batchId: row.batch_id } : {}),
     ...(row.batch_label ? { batchLabel: row.batch_label } : {}),
+    ...(row.queue_capped ? { queueCapped: true } : {}),
   };
 }
 
@@ -45,7 +47,7 @@ export async function dbListScans(): Promise<ScanSummary[]> {
   // Only select columns used by rowToSummary — exclude large details/scan_state/player_summary JSONB
   const { data, error } = await getSupabase()
     .from('videoscans')
-    .select('filename, domain, scan_date, pages_scanned, pages_with_video, unique_players, has_report, has_pdf, has_preview, has_preview_pdf, can_resume, batch_id, batch_label')
+    .select('filename, domain, scan_date, pages_scanned, pages_with_video, unique_players, has_report, has_pdf, has_preview, has_preview_pdf, can_resume, batch_id, batch_label, queue_capped')
     .eq('archived', false)
     .order('scan_date', { ascending: false });
 
@@ -68,6 +70,7 @@ export async function dbUpsertVideoscan(scan: {
   hasPreview: boolean;
   hasPreviewPdf: boolean;
   canResume: boolean;
+  queueCapped: boolean;
   batchId?: string;
   batchLabel?: string;
 }): Promise<void> {
@@ -89,6 +92,7 @@ export async function dbUpsertVideoscan(scan: {
         has_preview: scan.hasPreview,
         has_preview_pdf: scan.hasPreviewPdf,
         can_resume: scan.canResume,
+        queue_capped: scan.queueCapped,
         batch_id: scan.batchId ?? null,
         batch_label: scan.batchLabel ?? null,
       },
