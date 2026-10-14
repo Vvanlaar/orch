@@ -75,6 +75,9 @@ test("the full list of video pages repeats the note", () => {
   // One on the overview page, one above the list that reads as an inventory
   assert.equal(count(render(scan({ queueCapped: true }), "--all-video-pages")), 2);
   assert.equal(count(render(scan(), "--all-video-pages")), 0);
+  const queueLeft = scan({ _state: { visited: [], queue: ["https://www.gemeente.nl/zorg/pagina-2"] } });
+  assert.equal(count(render(queueLeft, "--all-video-pages")), 2);
+  assert.equal(count(render(scan({ queueCleared: true }), "--all-video-pages")), 2);
 });
 
 test("the preview carries the same note", () => {

@@ -185,7 +185,7 @@
 
   async function handleWrapUp(batchId: string, label: string) {
     if (wrappingUp) return;
-    if (!confirm(`Wrap up "${label}"? This will finalize any partial scans, merge same-domain duplicates, generate a summary report, and mark the batch closed.`)) return;
+    if (!confirm(`Wrap up "${label}"? This will merge same-domain duplicates, finalize any partial scans, generate a summary report, and mark the batch closed.`)) return;
     wrappingUp = batchId;
     error = '';
     try {
@@ -749,7 +749,7 @@
                 <span class="bat-meta">{batch.domains.length} {batch.domains.length === 1 ? 'site' : 'sites'} · {batch.scanCount} {batch.scanCount === 1 ? 'scan' : 'scans'}{batchClosed ? ' · closed' : ''}</span>
               </button>
               {#if batch.batchId !== UNGROUPED_BATCH && !batchClosed}
-                <button class="wrap-btn" onclick={() => handleWrapUp(batch.batchId, batch.label)} disabled={wrappingUp !== null} title="Finalize partial scans, merge duplicates, generate summary report, mark batch closed">
+                <button class="wrap-btn" onclick={() => handleWrapUp(batch.batchId, batch.label)} disabled={wrappingUp !== null} title="Merge duplicates, finalize partial scans, generate summary report, mark batch closed">
                   {wrappingUp === batch.batchId ? 'Wrapping up…' : 'Wrap up'}
                 </button>
               {:else if batchClosed}

@@ -75,6 +75,7 @@ describe('queueCapped through wrap-up', () => {
 
     expect(stored(name)._state.queue).toEqual([]);
     expect(stored(name).queueCapped).toBe(true);
+    expect(stored(name).queueCleared).toBe(true);
   });
 
   it('finalizeScan marks the scan whose queue it cleared, and only that one', () => {

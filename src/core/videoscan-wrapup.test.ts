@@ -26,7 +26,7 @@ afterAll(() => {
 
 function scan(filename: string, domain: string, batchId: string, visited: string[], queue: string[]) {
   writeFileSync(join(dir, filename), JSON.stringify({
-    domain, scanDate: `2026-07-0${visited.length}T00:00:00.000Z`,
+    domain, scanDate: `2026-07-${String(visited.length).padStart(2, '0')}T00:00:00.000Z`,
     pagesScanned: visited.length, pagesWithVideo: 0, uniquePlayers: 0,
     playerSummary: {}, details: [],
     _state: { visited, queue },

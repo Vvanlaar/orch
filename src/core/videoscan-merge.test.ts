@@ -108,8 +108,8 @@ describe('mergeScansData', () => {
   });
 
   it('carries queueCleared the same way', () => {
-    // Wrap-up finalizes each scan, then merges same-domain scans: the merge must
-    // still say a queue was cleared on the way.
+    // A scan finalized in an earlier wrap-up, merged again ("+ URLs", or a
+    // reopened batch): the merge must still say a queue was cleared.
     expect(mergeScansData([scan({ queueCleared: true }), scan()]).queueCleared).toBe(true);
     expect('queueCleared' in mergeScansData([scan(), scan()])).toBe(false);
   });

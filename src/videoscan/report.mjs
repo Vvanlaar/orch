@@ -226,8 +226,8 @@ function isPartialScan(scanData) {
 
 // Without this line the "Pagina's gescand" box reads as the whole site, on
 // exactly the scans where it is not.
-// "Links", not "pagina's": what a maze queues is mostly filter variants of
-// pages the scan did visit.
+// "Links", not "pagina's": a queue holds links the scan has not followed, and
+// in a maze most of them are filter variants of pages it did visit.
 // A batch summary covers several sites, and so does a labelled merge, which
 // only shows in the hosts it scanned: the visited list, not `details`. A merge
 // of werkenvoortilburg.nl with a capped sportintilburg.nl that had no video

@@ -808,14 +808,6 @@ export interface WrapUpResult {
   mergedDomains: string[];
 }
 
-/**
- * One-click batch finalization:
- *   1. Consolidate any same-domain duplicates via mergeScans (archives sources).
- *   2. Clear the queue on every scan left in the batch that still has one, merges included.
- *   3. Produce a cross-domain summary JSON + HTML/PDF report.
- *
- * Caller is responsible for marking the batch closed in batch-state.
- */
 async function ensureLocal(filenames: string[]): Promise<void> {
   for (const f of filenames) {
     if (existsSync(join(VIDEOSCAN_DIR, f))) continue;
@@ -826,6 +818,14 @@ async function ensureLocal(filenames: string[]): Promise<void> {
 
 const wrapUpInFlight = new Set<string>();
 
+/**
+ * One-click batch finalization:
+ *   1. Consolidate any same-domain duplicates via mergeScans (archives sources).
+ *   2. Clear the queue on every scan left in the batch that still has one, merges included.
+ *   3. Produce a cross-domain summary JSON + HTML/PDF report.
+ *
+ * Caller is responsible for marking the batch closed in batch-state.
+ */
 export async function wrapUpBatch(batchId: string): Promise<WrapUpResult> {
   if (wrapUpInFlight.has(batchId)) throw new Error(`Wrap-up already in progress for batch ${batchId}`);
   wrapUpInFlight.add(batchId);
