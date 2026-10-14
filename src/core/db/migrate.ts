@@ -139,6 +139,7 @@ async function migrateVideoscans() {
           has_pdf: existsSync(join(VIDEOSCAN_DIR, pdfFile)),
           can_resume: (data._state?.queue?.length || 0) > 0,
           queue_capped: data.queueCapped === true,
+          queue_cleared: data.queueCleared === true,
         },
         { onConflict: 'filename' }
       );

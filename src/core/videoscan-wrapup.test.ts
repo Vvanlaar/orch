@@ -17,7 +17,7 @@ vi.mock('playwright', () => ({
 // VIDEOSCAN_DIR is read when the runner loads, so point it at a temp dir first.
 const dir = mkdtempSync(join(tmpdir(), 'orch-wrapup-'));
 process.env.VIDEOSCAN_DIR = dir;
-const { wrapUpBatch } = await import('./videoscan-runner.js');
+const { wrapUpBatch, listScans } = await import('./videoscan-runner.js');
 
 afterAll(() => {
   rmSync(dir, { recursive: true, force: true });
@@ -70,5 +70,17 @@ describe('wrapUpBatch', () => {
       expect(stored(f).queueCleared).toBe(true);
     }
     expect(stored(result.summary).queueCleared).toBe(true);
+  });
+});
+
+describe('listScans from disk', () => {
+  it('lists the queueCleared mark, which the dashboard shows as "stopped early"', async () => {
+    scan('videoscan-v.nl-2026-07-01T00-00-00.json', 'v.nl', 'listing', ['https://v.nl/'], ['https://v.nl/a']);
+    scan('videoscan-u.nl-2026-07-01T00-00-00.json', 'u.nl', 'listing', ['https://u.nl/'], []);
+    await wrapUpBatch('listing');
+
+    const listed = (await listScans()).filter(s => s.batchId === 'listing' && !s.filename.endsWith('-summary.json'));
+    expect(listed.find(s => s.domain === 'v.nl')).toMatchObject({ queueCleared: true, canResume: false });
+    expect('queueCleared' in listed.find(s => s.domain === 'u.nl')!).toBe(false);
   });
 });
