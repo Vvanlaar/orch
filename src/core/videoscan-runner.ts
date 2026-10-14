@@ -939,6 +939,8 @@ export interface ScanSummary {
   canResume: boolean;
   batchId?: string;
   batchLabel?: string;
+  /** The crawl dropped queued URLs at its queue bound: not fully covered, even with an empty queue. */
+  queueCapped?: boolean;
 }
 
 /** What a listing takes from inside the scan JSON; the has* flags are other files in the dir. */
@@ -972,7 +974,7 @@ function cachedScanJsonSummary(filename: string, seen: typeof diskSummaries): Sc
     seen.set(filename, entry);
     return entry.summary;
   } catch (err) {
-    // Locked, or gone since the readdir. Not cached: the next listing reads it again.
+    // Could not be read: locked, or gone since the readdir. Not cached: the next listing reads it again.
     log.warn(`Scan file ${filename} could not be read for the listing: ${err instanceof Error ? err.message : err}`);
     return unknownScan(filename);
   }
@@ -998,6 +1000,7 @@ function summarizeScanJson(filename: string, size: number): ScanJsonSummary {
       canResume: (data._state?.queue?.length || 0) > 0 && !isDerivedScan(filename),
       ...(typeof data.batchId === 'string' && data.batchId ? { batchId: data.batchId } : {}),
       ...(typeof data.batchLabel === 'string' && data.batchLabel ? { batchLabel: data.batchLabel } : {}),
+      ...(data.queueCapped === true ? { queueCapped: true } : {}),
     };
   } catch {
     return unknownScan(filename);
@@ -1006,12 +1009,13 @@ function summarizeScanJson(filename: string, size: number): ScanJsonSummary {
 
 /**
  * Summary of a scan JSON from its two ends. Every writer indents by two spaces and
- * puts domain, scanDate and the page counts first; merge and batch summary put the
- * batch last. A key at exactly two spaces is a top-level one.
+ * puts domain, scanDate and the page counts first; a checkpoint states queueCapped
+ * there too, and merge and batch summary put the batch and queueCapped near the end.
+ * A key at exactly two spaces is a top-level one.
  *
  * Not the same as parsing: a checkpoint counts as resumable whatever is left in its
- * queue, any other file as not; counts the file doesn't state stay 0; and a batch
- * stated mid-file (a scan.mjs report with a long failedUrls list) is not found.
+ * queue, any other file as not; counts the file doesn't state stay 0; and a batch or
+ * queueCapped stated mid-file (a scan.mjs report with a long failedUrls list) is not found.
  */
 function summarizeScanJsonEnds(filename: string, path: string, size: number): ScanJsonSummary {
   const fd = openSync(path, 'r');
@@ -1021,7 +1025,12 @@ function summarizeScanJsonEnds(filename: string, path: string, size: number): Sc
       const buf = Buffer.alloc(LIST_ENDS_BYTES);
       return buf.toString('utf-8', 0, readSync(fd, buf, 0, LIST_ENDS_BYTES, position));
     };
-    ends = `${read(0)}\n${read(size - LIST_ENDS_BYTES)}`;
+    // Without the line each read cuts through: "pagesScanned": 79|73 would read as 79.
+    const head = read(0);
+    const tail = read(size - LIST_ENDS_BYTES);
+    const lastBreak = head.lastIndexOf('\n');
+    const firstBreak = tail.indexOf('\n');
+    ends = `${lastBreak < 0 ? '' : head.slice(0, lastBreak)}\n${firstBreak < 0 ? '' : tail.slice(firstBreak + 1)}`;
   } finally {
     closeSync(fd);
   }
@@ -1040,6 +1049,7 @@ function summarizeScanJsonEnds(filename: string, path: string, size: number): Sc
     canResume: top('checkpoint', 'true') !== undefined && !isDerivedScan(filename),
     ...(batchId ? { batchId } : {}),
     ...(batchLabel ? { batchLabel } : {}),
+    ...(top('queueCapped', 'true') !== undefined ? { queueCapped: true } : {}),
   };
 }
 

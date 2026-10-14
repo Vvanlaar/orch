@@ -48,7 +48,7 @@ describe('listScans from disk', () => {
   it('summarises a scan from its JSON and the files next to it', async () => {
     const name = 'videoscan-a.nl-2026-01-01T00-00-00.json';
     write(name, {
-      domain: 'a.nl', scanDate: '2026-01-01T00:00:00.000Z', pagesScanned: 9, batchId: 'b1', batchLabel: 'Batch 1',
+      domain: 'a.nl', scanDate: '2026-01-01T00:00:00.000Z', pagesScanned: 9, batchId: 'b1', batchLabel: 'Batch 1', queueCapped: true,
       playerSummary: { YouTube: {}, Vimeo: {} }, details: [{}, {}, {}], _state: { visited: [], queue: ['https://a.nl/x'] },
     });
     writeFileSync(join(dir, name.replace('.json', '.html')), '');
@@ -56,7 +56,7 @@ describe('listScans from disk', () => {
 
     expect(await listed(name)).toEqual({
       filename: name, domain: 'a.nl', scanDate: '2026-01-01T00:00:00.000Z', pagesScanned: 9,
-      pagesWithVideo: 3, uniquePlayers: 2, canResume: true, batchId: 'b1', batchLabel: 'Batch 1',
+      pagesWithVideo: 3, uniquePlayers: 2, canResume: true, batchId: 'b1', batchLabel: 'Batch 1', queueCapped: true,
       hasReport: true, hasPdf: false, hasPreview: false, hasPreviewPdf: true,
     });
   });
@@ -91,14 +91,16 @@ describe('listScans from disk', () => {
 
   it('lists an oversized checkpoint from its header without parsing it', async () => {
     const name = 'videoscan-huge.nl-INPROGRESS.json';
-    // The start of a real checkpoint, then padded past the limit: no longer valid JSON,
-    // so a row with these values can only have come from the header.
+    // The start of a real checkpoint, with a nested decoy the two-space rule must skip,
+    // then padded past the limit: no longer valid JSON, so a row with these values can
+    // only have come from the header.
     writeFileSync(join(dir, name), [
       '{',
       '  "domain": "huge.nl",',
       '  "checkpoint": true,',
       '  "scanDate": "2026-10-10T22:53:06.708Z",',
       '  "pagesScanned": 7973,',
+      '  "queueCapped": true,',
       '  "_state": {',
       '    "pagesWithVideo": 5,',
       '    "visited": [',
@@ -109,7 +111,7 @@ describe('listScans from disk', () => {
     // Resumable, as an unfinished crawl: not to be shown as done.
     expect(await listed(name)).toEqual({
       filename: name, domain: 'huge.nl', scanDate: '2026-10-10T22:53:06.708Z', pagesScanned: 7973,
-      pagesWithVideo: 0, uniquePlayers: 0, canResume: true,
+      pagesWithVideo: 0, uniquePlayers: 0, canResume: true, queueCapped: true,
       hasReport: false, hasPdf: false, hasPreview: false, hasPreviewPdf: false,
     });
     await listScans();
@@ -128,6 +130,7 @@ describe('listScans from disk', () => {
       '  },',
       '  "batchId": "digi-big-1",',
       '  "batchLabel": "Digi import — \\"big\\"",',
+      '  "queueCapped": true,',
       '  "reportOptions": {',
       '    "orgName": "Gemeente Big"',
       '  }',
@@ -148,9 +151,22 @@ describe('listScans from disk', () => {
 
     expect(await listed(name)).toMatchObject({
       domain: 'big "org"', scanDate: '2026-01-01T00:00:00.000Z', pagesScanned: 67382, pagesWithVideo: 4135, uniquePlayers: 6,
-      canResume: false, batchId: 'digi-big-1', batchLabel: 'Digi import — "big"',
+      canResume: false, batchId: 'digi-big-1', batchLabel: 'Digi import — "big"', queueCapped: true,
     });
     expect(fullReads(name)).toBe(0);
+
+    rmSync(join(dir, name));
+  });
+
+  it('skips a line the 4 KB read cuts through', async () => {
+    const name = 'videoscan-cut.nl-INPROGRESS.json';
+    const start = ['{', '  "domain": "cut.nl",', '  "pad": "'].join('\n');
+    const cut = ['",', '  "pagesScanned": 79'].join('\n');
+    // The first read ends between 79 and 73.
+    writeFileSync(join(dir, name), [`${start}${'x'.repeat(4096 - start.length - cut.length)}${cut}73,`, ''].join('\n'));
+    truncateSync(join(dir, name), OVER_LIMIT);
+
+    expect(await listed(name)).toMatchObject({ domain: 'cut.nl', pagesScanned: 0 });
 
     rmSync(join(dir, name));
   });
