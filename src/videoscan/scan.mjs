@@ -709,6 +709,11 @@ export function normalizeUrl(url, base) {
       const parts = rawQuery.split("&");
       const kept = [...new Set(parts.filter((part) => !isSamePageParam(part, u.pathname)))];
       if (kept.length !== parts.length) u.search = kept.join("&");
+    } else {
+      // /pad? is /pad with an empty query: the parser keeps the bare ? in href.
+      // No site in the scan history links one yet; assigning "" drops it, and
+      // does nothing to a URL that has no query.
+      u.search = "";
     }
     return u.href;
   } catch {
@@ -2348,6 +2353,27 @@ async function createScanContext(browser) {
   return context;
 }
 
+/**
+ * The rows of the report a --resume continues, under the URLs today's
+ * normalizeUrl gives them. A report written before a rule existed lists one
+ * page once per spelling (www.jiphaarlemmermeer.nl: four rows for one page,
+ * three of them ?qt- variants). `visited` collapses on restore, and without
+ * this the rows would not: the resumed report would list more pages with video
+ * than the crawl counts as pages. A player joins the merged row once.
+ */
+export function restoreRows(details, startUrl) {
+  const rows = new Map();
+  for (const d of details) {
+    const url = normalizeUrl(d.url, startUrl) || d.url;
+    let row = rows.get(url);
+    if (!row) rows.set(url, (row = { url, players: [] }));
+    for (const p of d.players) {
+      if (!row.players.some((known) => known.player === p.name)) row.players.push({ player: p.name, evidence: p.evidence });
+    }
+  }
+  return [...rows.values()];
+}
+
 // Periodically persist crawl state so a long crawl killed mid-run (session
 // teardown, OOM, Ctrl-C) can be continued with --resume. The shape matches what
 // the resume path reads (_state.visited/queue + details). Written to a stable
@@ -2553,14 +2579,12 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     }
     queue = restored.length || storedQueue.length ? restored : [normalizeUrl(startUrl, startUrl)];
 
-    results = (prev.details || []).map((d) => ({
-      url: d.url,
-      players: d.players.map((p) => ({ player: p.name, evidence: p.evidence })),
-    }));
+    results = restoreRows(prev.details || [], startUrl);
     // A Set, not results.find per URL: that was O(visited x details), 15s on a
-    // 35k-page resume. Compared normalized, like `visited`, or a detail stored
-    // under ?x=1&x=1 gets a second, player-less row under its collapsed form.
-    const known = new Set(results.map((r) => normalizeUrl(r.url, startUrl) || r.url));
+    // 35k-page resume. The rows are normalized like `visited` (restoreRows), or
+    // a detail stored under ?x=1&x=1 gets a second, player-less row under its
+    // collapsed form.
+    const known = new Set(results.map((r) => r.url));
     for (const v of visited) {
       if (!known.has(v)) results.push({ url: v, players: [] });
     }
