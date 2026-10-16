@@ -1,0 +1,245 @@
+{
+  "_about": "Desk facts per player, keyed by scan.mjs DETECTORS name. Researched 2026-10-16 (see docs/superpowers/plans/2026-10-16-videoscan-sovereignty*.md). controlCountry: where the entity that can be compelled to hand over data sits (the operating company, not a foreign parent). delivery: eu (EU-run infrastructure) | mixed (EU region of a non-EU provider, or EU storage behind a non-EU CDN) | non-eu | unknown. tracking: what the vendor states for the default embed — none | analytics | ads | unknown; a scan measurement replaces it. openness 0-10 (open formats, export, open-source player); null = unknown. certifications: as stated by the vendor. verified: the ownership/control line has a primary or solid source and may be printed; anything else in a row only with 'according to the vendor'. Players without a row are unrated.",
+  "vendors": {
+    "YouTube": {
+      "company": "Google LLC", "hq": "US", "owner": "Alphabet Inc.", "ownerCountry": "US", "controlCountry": "US",
+      "type": "platform", "delivery": "non-eu", "tracking": "ads", "euOption": null, "openness": 1, "certifications": [],
+      "notes": "EEA controller Google Ireland Ltd; ultimate control US. youtube-nocookie defers cookies until play; Google data flows still occur on play.",
+      "sources": ["https://policies.google.com/privacy/embedded", "https://support.google.com/youtube/answer/171780"],
+      "verified": true
+    },
+    "Vimeo": {
+      "company": "Vimeo.com, Inc.", "hq": "US", "owner": "Bending Spoons S.p.A. (via Bending Spoons US Inc.), since 2025-11-24", "ownerCountry": "IT", "controlCountry": "US",
+      "type": "platform", "delivery": "non-eu", "tracking": "unknown",
+      "euOption": "Enterprise only: video files, transcripts, thumbnails, live streams in Belgium/Germany; metadata, analytics, logs and accounts stay outside the EU",
+      "openness": null, "certifications": ["ISO 27001", "ISO 27701", "SOC 2"],
+      "notes": "Italian parent does not make it EU: the operating company stays US. Sub-processors Akamai, AWS, Google, Cloudflare (all US).",
+      "sources": ["https://www.sec.gov/Archives/edgar/data/1837686/000110465925115501/tm2532050d1_8k.htm", "https://help.vimeo.com/hc/en-us/articles/33965163171601-About-Data-Residency-with-Vimeo-Enterprise", "https://vimeo.com/legal/enterprise-terms/subprocessors.md", "https://vimeo.com/features/security"],
+      "verified": true
+    },
+    "Spotify (podcast)": {
+      "company": "Spotify AB", "hq": "SE", "owner": "Spotify Technology S.A. (listed)", "ownerCountry": "LU", "controlCountry": "SE",
+      "type": "platform", "delivery": "non-eu", "tracking": "unknown", "euOption": null, "openness": 2, "certifications": [],
+      "notes": "EEA controller Spotify AB; a US subsidiary (Spotify USA Inc.) exists. Core backend on Google Cloud since 2016 (secondary source); edge measured on Fastly.",
+      "sources": ["https://www.spotify.com/nl/legal/privacy-policy/", "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company=spotify+technology&type=20-F"],
+      "verified": true
+    },
+    "Brightcove": {
+      "company": "Brightcove Inc.", "hq": "US", "owner": "Bending Spoons S.p.A., since 2025-02-04", "ownerCountry": "IT", "controlCountry": "US",
+      "type": "ovp", "delivery": "non-eu", "tracking": "unknown", "euOption": "master videos in one customer-chosen region (regions not published)",
+      "openness": null, "certifications": ["ISO 27001", "CSA STAR"],
+      "notes": "Privacy policy: primary processing facilities in the United States.",
+      "sources": ["https://www.brightcove.com/en/legal/privacy/", "https://trust.brightcove.com/", "https://www.brightcove.com/products/security"],
+      "verified": true
+    },
+    "Kaltura": {
+      "company": "Kaltura Inc.", "hq": "US", "owner": "listed (Nasdaq: KLTR)", "ownerCountry": "US", "controlCountry": "US",
+      "type": "ovp", "delivery": "non-eu", "tracking": "unknown", "euOption": "regional cloud (Ireland, Frankfurt); default hosting US",
+      "openness": null, "certifications": ["ISO 27001"],
+      "notes": "EEA data may go to affiliates in US, Singapore, Brazil, Israel. Cloud provider not named; edge measured on Akamai.",
+      "sources": ["https://corp.kaltura.com/legal/privacy/gdpr-faqs/", "https://knowledge.kaltura.com/help/reach-data-privacy-and-content-deletion"],
+      "verified": true
+    },
+    "Blue Billywig": {
+      "company": "Blue Billywig Group BV", "hq": "NL", "owner": "Blue Billywig Group BV (independent, per vendor)", "ownerCountry": "NL", "controlCountry": "NL",
+      "type": "ovp", "delivery": "mixed", "tracking": "unknown", "euOption": "EU locations by default (Scaleway storage, Bunny CDN)",
+      "openness": null, "certifications": ["ISO 27001"],
+      "notes": "Measured 2026-10-16: player front door bbvms.com on AWS CloudFront (US), cdn.bluebillywig.com on Bunny. Ownership and ISO 27001 are self-claims (certificate for tenders): confirm with a KvK extract before printing. Fill openness/tracking from product facts.",
+      "sources": ["https://www.bluebillywig.com/european-sovereign-ovp/"],
+      "verified": false,
+      "offerings": {
+        "Blue Billywig Sovereign": { "live": false, "delivery": "eu", "notes": "opt-in fully EU offering, in progress 2026-10; show in reports only when live" }
+      }
+    },
+    "PingVP": {
+      "company": "PingVP", "hq": "NL", "owner": "unknown", "ownerCountry": null, "controlCountry": "NL",
+      "type": "ovp", "delivery": "eu", "tracking": "none", "euOption": "EU only (CloudNL storage, Gcore CDN, per vendor)",
+      "openness": null, "certifications": [],
+      "notes": "Vendor: no third-party cookies, cookieless by default. No ISO 27001 certificate on current pages. Owner not public.",
+      "sources": ["https://en.pingvp.com/transparency-page/", "https://en.pingvp.com/security-compliance/"],
+      "verified": false
+    },
+    "DailyMotion": {
+      "company": "Dailymotion SA", "hq": "FR", "owner": "Canal+ (transferred from Vivendi, 2024)", "ownerCountry": "FR", "controlCountry": "FR",
+      "type": "platform", "delivery": "non-eu", "tracking": "ads", "euOption": null, "openness": 1, "certifications": [],
+      "notes": "US subsidiary Dailymotion Inc. (DPF) may process data. Streaming stack migrated to AWS. Privacy policy: many ad partners.",
+      "sources": ["https://legal.dailymotion.com/r/privacy?lang=nl", "https://echanges.dila.gouv.fr/OPENDATA/AMF/BWR/2024/09/FCBWR159165_20240920.pdf", "https://aws.amazon.com/fr/blogs/france/dailymotion-com-une-migration-record-pour-une-experience-video-revolutionnee"],
+      "verified": true
+    },
+    "TikTok": {
+      "company": "TikTok Technology Limited (EEA)", "hq": "IE", "owner": "ByteDance Ltd", "ownerCountry": "CN", "controlCountry": "CN",
+      "type": "social", "delivery": "non-eu", "tracking": "ads", "euOption": null, "openness": 0, "certifications": [],
+      "notes": "Project Clover EU enclave claims (Ireland, Norway) conflict with policy storage list (US, Malaysia, Singapore); check the live policy date before printing.",
+      "sources": ["https://www.tiktok.com/legal/page/eea/privacy-policy/en"],
+      "verified": true
+    },
+    "Instagram": {
+      "company": "Meta Platforms Ireland Ltd (EEA)", "hq": "US", "owner": "Meta Platforms, Inc.", "ownerCountry": "US", "controlCountry": "US",
+      "type": "social", "delivery": "non-eu", "tracking": "ads", "euOption": null, "openness": 0, "certifications": [],
+      "sources": ["https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001326801&type=10-K", "https://www.facebook.com/legal/terms"],
+      "verified": true
+    },
+    "Facebook Video": {
+      "company": "Meta Platforms Ireland Ltd (EEA)", "hq": "US", "owner": "Meta Platforms, Inc.", "ownerCountry": "US", "controlCountry": "US",
+      "type": "social", "delivery": "non-eu", "tracking": "ads", "euOption": null, "openness": 0, "certifications": [],
+      "sources": ["https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001326801&type=10-K", "https://www.facebook.com/legal/terms"],
+      "verified": true
+    },
+    "X (Twitter)": {
+      "company": "X Corp", "hq": "US", "owner": "X Corp (US); xAI/SpaceX chain per secondary sources only", "ownerCountry": "US", "controlCountry": "US",
+      "type": "social", "delivery": "non-eu", "tracking": "ads", "euOption": null, "openness": 0, "certifications": [],
+      "notes": "Print only 'US-controlled (X Corp)'; the 2026 ownership chain has no primary source.",
+      "sources": ["https://driveteslacanada.ca/news/spacex-completes-merger-with-xai/"],
+      "verified": true
+    },
+    "LinkedIn": {
+      "company": "LinkedIn Ireland Unlimited Company (EEA)", "hq": "US", "owner": "Microsoft Corporation", "ownerCountry": "US", "controlCountry": "US",
+      "type": "social", "delivery": "non-eu", "tracking": "ads", "euOption": null, "openness": 0, "certifications": [],
+      "sources": ["https://www.linkedin.com/legal/privacy-policy"],
+      "verified": true
+    },
+    "JW Player": {
+      "company": "JWP, Inc. (JWX, formerly JW Player + Connatix)", "hq": "US", "owner": "JWP, Inc.", "ownerCountry": "US", "controlCountry": "US",
+      "type": "ovp", "delivery": "non-eu", "tracking": "ads", "euOption": null, "openness": null, "certifications": [],
+      "notes": "All hosting/CDN sub-processors US-headquartered (AWS, CloudFront, Cloudflare, Edgecast, Fastly, Mux, Wowza). Merged with ad-tech company Connatix.",
+      "sources": ["https://jwx.com/legal/subprocessors/", "https://jwx.com/news/2024/10/09/jw-player-and-connatix-announce-merger"],
+      "verified": true
+    },
+    "Wistia": {
+      "company": "Wistia, Inc.", "hq": "US", "owner": "privately held", "ownerCountry": "US", "controlCountry": "US",
+      "type": "ovp", "delivery": "non-eu", "tracking": "analytics", "euOption": null, "openness": null, "certifications": [],
+      "notes": "Privacy policy: all personal information stored and processed in the United States.",
+      "sources": ["https://www.wistia.com/privacy"],
+      "verified": true
+    },
+    "Vidyard": {
+      "company": "Buildscale, Inc. d/b/a Vidyard", "hq": "CA", "owner": "privately held", "ownerCountry": "CA", "controlCountry": "CA",
+      "type": "ovp", "delivery": "non-eu", "tracking": "analytics", "euOption": null, "openness": null, "certifications": [],
+      "notes": "Canadian company; services hosted in the United States (AWS).",
+      "sources": ["https://www.vidyard.com/privacy/", "https://www.vidyard.com/security/"],
+      "verified": true
+    },
+    "Flowplayer": {
+      "company": "Flowplayer AB", "hq": "SE", "owner": "Wowza Media Systems (US, Clearhaven Partners), since 2022", "ownerCountry": "US", "controlCountry": "US",
+      "type": "ovp", "delivery": "unknown", "tracking": "none", "euOption": null, "openness": 6, "certifications": [],
+      "notes": "Vendor: native player sets no cookies; Google IMA ad plugin does. HLS player.",
+      "sources": ["https://flowplayer.com/blog/announcing-wowza-aquires-flowplayer", "https://docs.flowplayer.com/faq"],
+      "verified": true
+    },
+    "Panopto": {
+      "company": "Panopto, Inc.", "hq": "US", "owner": "K1 Investment Management (2021, secondary source)", "ownerCountry": "US", "controlCountry": "US",
+      "type": "ovp", "delivery": "mixed", "tracking": "unknown", "euOption": "customer-chosen AWS region incl. Ireland",
+      "openness": null, "certifications": ["ISO 27001", "ISO 27017", "ISO 27018", "SOC 2"],
+      "sources": ["https://support.panopto.com/s/article/Panopto-Cloud-Architecture", "https://compliance.panopto.com/subprocessors"],
+      "verified": false
+    },
+    "Hihaho": {
+      "company": "Hihaho", "hq": "NL", "owner": "unknown", "ownerCountry": null, "controlCountry": "NL",
+      "type": "interactive", "delivery": "mixed", "tracking": "unknown", "euOption": "app on AWS EU; uploaded video stored at JW Player (US)",
+      "openness": null, "certifications": ["ISO 27001"],
+      "notes": "ISO 27001 logo without date; earlier DigiTrust certificate expired 2025-11-23. US sub-processors incl. JW Player, Intercom, Datadog, OpenAI.",
+      "sources": ["https://www.hihaho.com/compliance-security-measures/"],
+      "verified": false
+    },
+    "Rijksoverheidsplayer": {
+      "company": "Rijksoverheid (Ministerie van AZ / DPC)", "hq": "NL", "owner": "Dutch State", "ownerCountry": "NL", "controlCountry": "NL",
+      "type": "ovp", "delivery": "non-eu", "tracking": "unknown", "euOption": null, "openness": null, "certifications": [],
+      "notes": "Operator/builder of rovid.nl not publicly documented. Measured: rijksoverheid.nl on Akamai, www.rovid.nl on Cloudflare (US CDNs).",
+      "sources": ["https://www.rijksoverheid.nl/privacy", "https://www.rijksoverheid.nl/cookies"],
+      "verified": false
+    },
+    "Vixy Video": {
+      "company": "Vixy BV", "hq": "NL", "owner": "co-owned by NEP The Netherlands (part of NEP Group Inc., US: Carlyle, 26North); stake unknown", "ownerCountry": "US", "controlCountry": "NL",
+      "type": "ovp", "delivery": "mixed", "tracking": "unknown", "euOption": "storage at NEP in NL; Akamai for international delivery",
+      "openness": 8, "certifications": ["ISO 27001"],
+      "notes": "Do not print 'Dutch-owned': the co-owner belongs to a US group. Progressive, HLS, DASH; originals kept.",
+      "sources": ["https://www.vixyvideo.com/about/", "https://www.vixyvideo.com/features/video-hosting/", "https://www.nepgroup.com/about"],
+      "verified": false
+    },
+    "Company Webcast": {
+      "company": "Company Webcast (Euronext Corporate Solutions)", "hq": "NL", "owner": "Euronext N.V. (majority, 51% since 2017)", "ownerCountry": "NL", "controlCountry": "NL",
+      "type": "webcast", "delivery": "mixed", "tracking": "unknown", "euOption": "EU servers (per vendor); measured AWS eu-west-1",
+      "openness": null, "certifications": ["ISO 27001"],
+      "sources": ["https://www.euronext.com/en/news/euronext-acquires-majority-stake-company-webcast", "https://www.corporatesolutions.euronext.com/"],
+      "verified": true
+    },
+    "iBabs": {
+      "company": "iBabs", "hq": "NL", "owner": "Euronext N.V. (100% since 2021-03-03)", "ownerCountry": "NL", "controlCountry": "NL",
+      "type": "webcast", "delivery": "mixed", "tracking": "unknown", "euOption": "measured AWS eu-west-1 (no public statement)",
+      "openness": null, "certifications": [],
+      "sources": ["https://euronext.com/en/about/media/euronext-press-releases/euronext-acquires-remaining-interest-ibabs"],
+      "verified": true
+    },
+    "StreamPartner": {
+      "company": "StreamPartner", "hq": "NL", "owner": "unknown", "ownerCountry": null, "controlCountry": "NL",
+      "type": "webcast", "delivery": "eu", "tracking": "unknown", "euOption": "hosted in NL (per vendor; measured Serverius)",
+      "openness": null, "certifications": [],
+      "sources": ["https://streampartner.nl/", "https://streampartner.nl/privacy"],
+      "verified": false
+    },
+    "Twitch": {
+      "company": "Twitch Interactive, Inc.", "hq": "US", "owner": "Amazon.com, Inc. (2014)", "ownerCountry": "US", "controlCountry": "US",
+      "type": "platform", "delivery": "non-eu", "tracking": "ads", "euOption": null, "openness": 0, "certifications": [],
+      "sources": ["https://en.wikipedia.org/wiki/Twitch_(service)"],
+      "verified": true
+    },
+    "Loom": {
+      "company": "Loom, Inc.", "hq": "US", "owner": "Atlassian (2023-11-30)", "ownerCountry": "US", "controlCountry": "US",
+      "type": "platform", "delivery": "non-eu", "tracking": "unknown", "euOption": null, "openness": null, "certifications": [],
+      "sources": ["https://www.businesswire.com/news/home/20231129694662/en/Atlassian-Completes-Acquisition-of-Loom", "https://www.atlassian.com/legal/privacy-policy"],
+      "verified": true
+    },
+    "Cloudflare Stream": {
+      "company": "Cloudflare, Inc.", "hq": "US", "owner": "listed (NYSE: NET)", "ownerCountry": "US", "controlCountry": "US",
+      "type": "infra", "delivery": "non-eu", "tracking": "unknown", "euOption": "not compatible with Regional Services; metadata boundary with caveats",
+      "openness": 8, "certifications": [],
+      "sources": ["https://developers.cloudflare.com/data-localization/compatibility/", "https://developers.cloudflare.com/stream/viewing-videos/download-videos/"],
+      "verified": true
+    },
+    "bunny.net Stream": {
+      "company": "BunnyWay d.o.o.", "hq": "SI", "owner": "independent (founder-led, secondary source)", "ownerCountry": "SI", "controlCountry": "SI",
+      "type": "infra", "delivery": "eu", "tracking": "unknown", "euOption": null, "openness": 7, "certifications": ["ISO 27001", "SOC 2"],
+      "notes": "Certifications announced in vendor blog posts; get the certificates before printing. Edges measured on DataCamp (CDN77, GB) address space.",
+      "sources": ["https://bunny.net/gdpr/sub-processors/", "https://bunny.net/blog/bunnynet-achieves-iso-27001-certification/", "https://bunny.net/stream/"],
+      "verified": false
+    },
+    "Mux": {
+      "company": "Mux, Inc.", "hq": "US", "owner": "privately held", "ownerCountry": "US", "controlCountry": "US",
+      "type": "infra", "delivery": "non-eu", "tracking": "analytics", "euOption": null, "openness": 8, "certifications": ["ISO 27001"],
+      "sources": ["https://www.mux.com/security", "https://www.mux.com/docs/"],
+      "verified": true
+    },
+    "23 Video": {
+      "company": "TwentyThree", "hq": "DK", "owner": "independent (per vendor)", "ownerCountry": "DK", "controlCountry": "DK",
+      "type": "ovp", "delivery": "mixed", "tracking": "unknown", "euOption": "EU hosting (UpCloud FI, AWS IE); Fastly (US) CDN",
+      "openness": null, "certifications": [],
+      "notes": "Annual PwC ISAE 3000 audit; ISO 27001 not confirmed.",
+      "sources": ["https://www.twentythree.com/subprocessors", "https://www.twentythree.com/gdpr"],
+      "verified": false
+    },
+    "Mediasite": {
+      "company": "Mediasite (Enghouse Systems)", "hq": "CA", "owner": "Enghouse Systems Ltd (2024-02-12)", "ownerCountry": "CA", "controlCountry": "CA",
+      "type": "ovp", "delivery": "unknown", "tracking": "unknown", "euOption": null, "openness": null, "certifications": [],
+      "sources": ["https://www.sec.gov/Archives/edgar/data/1029744/000143774924000618/sofo20240104_8k.htm"],
+      "verified": true
+    },
+    "SproutVideo": {
+      "company": "SproutVideo, LLC", "hq": "US", "owner": "privately held", "ownerCountry": "US", "controlCountry": "US",
+      "type": "ovp", "delivery": "non-eu", "tracking": "unknown", "euOption": null, "openness": null, "certifications": [],
+      "sources": ["https://sproutvideo.com/privacy"],
+      "verified": true
+    },
+    "PeerTube": {
+      "company": "self-hosted (Framasoft software)", "type": "engine", "openness": 10, "certifications": [],
+      "notes": "Each instance is run by its own operator: the measured host decides.",
+      "sources": ["https://joinpeertube.org"],
+      "verified": true
+    },
+    "Video.js": { "company": "self-hosted (open source)", "type": "engine", "openness": 10, "certifications": [], "sources": ["https://videojs.com"], "verified": true },
+    "MediaElement.js": { "company": "self-hosted (open source)", "type": "engine", "openness": 10, "certifications": [], "sources": ["https://www.mediaelementjs.com"], "verified": true },
+    "Plyr": { "company": "self-hosted (open source)", "type": "engine", "openness": 10, "certifications": [], "sources": ["https://plyr.io"], "verified": true },
+    "Clappr": { "company": "self-hosted (open source)", "type": "engine", "openness": 10, "certifications": [], "sources": ["https://github.com/clappr/clappr"], "verified": true },
+    "Shaka Player": { "company": "self-hosted (open source)", "type": "engine", "openness": 10, "certifications": [], "sources": ["https://github.com/shaka-project/shaka-player"], "verified": true },
+    "HTML5 native": { "company": "self-hosted", "type": "engine", "openness": 10, "certifications": [], "verified": true }
+  }
+}

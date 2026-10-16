@@ -75,6 +75,8 @@ ASN lookup: offline iptoasn.com dataset (public domain), cached in `videoscans/_
 ## Tasks
 
 ### Chunk 1 — Data + scoring (no scanner changes)
+**Done 2026-10-16:** `sovereignty/vendors.json` (40 players; `verified` = ownership line sourced), `sovereignty/score.mjs` (desk + measured; unknown desk values score half), `scripts/sovereignty-from-scans.mjs` (market view → `<scanDir>/_reports`). Vendor facts were re-checked; corrections vs Appendix B: Kaltura EU regions predate Apr 2026; DailyMotion owner Canal+; Vidyard Canadian, hosted in US; JW Player is now JWX (JWP Connatix); iBabs 100% Euronext (EUR 53.2m, 2021); Vixy co-owner NEP NL belongs to US NEP Group (Carlyle, 26North); 23 Video on UpCloud/AWS IE with Fastly CDN; PingVP shows no ISO certificate. First market view (desk-only, 137 sites with video): 121 E, 16 unrated (self-hosted engines, not measured).
+Open for BB: ownership/ISO 27001 are self-claims in the table (`verified: false`); openness/tracking for BB not filled.
 1. Create `vendors.json` from Appendix B; resolve all **[V]** rows → verify: every row has ≥1 source URL.
 2. Create `operators.json` (Google, Amazon, Microsoft, Akamai, Cloudflare, Fastly, Meta, ByteDance, Bunny, Leaseweb, OVH, Hetzner, Scaleway, KPN, …) → verify: unit test maps 20 known hosts.
 3. `score.mjs` pure functions + tests (weights, caps, unrated) → verify: `pnpm test` green.

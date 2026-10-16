@@ -7,6 +7,7 @@ import { DETECTORS, loadSeeds, dropEnginesUnderVendors } from "./scan.mjs";
 import { attributeRequest, createSovereigntyCollector, isFirstParty, pickSamples } from "./sovereignty/collect.mjs";
 import { classifyInfra, classifyService, loadAsnDb, parseAsnDb, resolveDns, resolveHosts } from "./sovereignty/resolve.mjs";
 import { gzipSync } from "node:zlib";
+import { gradeOf, measurePlayer, scorePlayer, scoreSite } from "./sovereignty/score.mjs";
 
 test("classifyService: longest suffix wins, company HQ decides EU", () => {
   assert.equal(classifyService("www.youtube-nocookie.com").company, "Google");
@@ -205,5 +206,118 @@ test("loadAsnDb: a bad download keeps the old copy", async () => {
     assert.equal(await loadAsnDb(join(dir, "none.gz"), { fetchImpl: async () => challenge, log: silent }), null);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── score.mjs ────────────────────────────────────────────────────────
+
+const usVendor = { controlCountry: "US", delivery: "non-eu", tracking: "ads", openness: 2, certifications: ["ISO 27001"], verified: true };
+const euVendor = { controlCountry: "NL", delivery: "eu", tracking: "none", openness: 8, certifications: ["ISO 27001", "NEN 7510"], verified: true };
+
+test("gradeOf: A ≥ 85 … E < 30, with SEAL levels", () => {
+  assert.deepEqual([85, 84, 70, 50, 30, 29, 0].map((n) => gradeOf(n).grade), ["A", "B", "B", "C", "D", "E", "E"]);
+  assert.equal(gradeOf(90).seal, "SEAL-4");
+});
+
+test("scorePlayer desk-only: EU vendor A, US vendor capped", () => {
+  const eu = scorePlayer("X", euVendor);
+  assert.deepEqual([eu.score, eu.grade, eu.measured], [98, "A", false]);
+  const us = scorePlayer("Y", { ...usVendor, delivery: "eu", tracking: "none", openness: 10, certifications: ["ISO 27001", "C5"] });
+  // 0 + 25 + 25 + 10 + 10 = 70, capped to 69 by US control
+  assert.deepEqual([us.score, us.grade], [69, "C"]);
+  assert.match(us.caps[0], /CLOUD Act/);
+  assert.equal(scorePlayer("Z", usVendor).grade, "E");
+  assert.equal(scorePlayer("Q", { ...euVendor, controlCountry: "GB" }).dims.J, 15);
+});
+
+test("scorePlayer: no vendor row → unrated, never guessed", () => {
+  assert.deepEqual(scorePlayer("Mystery", undefined), { player: "Mystery", rated: false, reasons: ["not in the vendor table"] });
+});
+
+const sovFixture = (overrides = {}) => ({
+  consent: { accepted: true, given: true, cookies: 3 },
+  hosts: {
+    "cdn.eu.nl": { eu: true, phases: { crawl: { requests: 6, pages: 2 }, pre: { requests: 0, pages: 0 }, play: { requests: 2, pages: 1 } } },
+    "edge.us.com": { eu: true, nonEuInfra: true, phases: { crawl: { requests: 2, pages: 2 }, pre: { requests: 0, pages: 0 }, play: { requests: 0, pages: 0 } } },
+    "ads.tracker.com": { eu: false, service: { category: "ads", company: "AdCo" }, phases: { crawl: { requests: 1, pages: 1 }, pre: { requests: 1, pages: 1 }, play: { requests: 0, pages: 0 } } },
+  },
+  cookies: [
+    { name: "sid", domain: "edge.us.com", session: true, maxDays: 0, firstParty: false, players: ["P"], eu: true, phases: { crawl: 1, pre: 1, play: 0 } },
+  ],
+  storage: {},
+  players: { P: { pages: { crawl: 2, pre: 1, play: 1 }, hosts: ["cdn.eu.nl", "edge.us.com"] } },
+  ...overrides,
+});
+
+test("measurePlayer: an EU service on a US CDN counts as non-EU delivery", () => {
+  const m = measurePlayer(sovFixture(), "P");
+  assert.equal(m.leakPhase, "pre");
+  assert.equal(m.euShare, 0.8); // 8 EU of 10 requests
+  assert.deepEqual(m.preConsent.trackingCookies, []);
+  assert.equal(m.preConsent.cookies.length, 1);
+  assert.equal(measurePlayer(sovFixture(), "Nope"), null);
+  assert.equal(measurePlayer(null, "P"), null);
+});
+
+test("scorePlayer measured: delivery and tracking from the scan win over desk", () => {
+  const r = scorePlayer("P", euVendor, measurePlayer(sovFixture(), "P"));
+  assert.equal(r.dims.D, 20); // 25 × 0.8
+  assert.equal(r.dims.T, 13); // session cookie only
+  assert.equal(r.measured, true);
+});
+
+test("scorePlayer measured: a persistent cookie before consent caps at D", () => {
+  const sov = sovFixture({
+    cookies: [{ name: "vuid", domain: "edge.us.com", session: false, maxDays: 400, firstParty: false, players: ["P"], eu: true, phases: { crawl: 1, pre: 1, play: 0 } }],
+  });
+  const r = scorePlayer("P", euVendor, measurePlayer(sov, "P"));
+  assert.equal(r.dims.T, 0);
+  assert.equal(r.score, 49);
+  assert.equal(r.grade, "D");
+  assert.match(r.caps[0], /vuid@edge.us.com/);
+});
+
+test("measurePlayer: without consent the crawl is the pre-consent phase", () => {
+  const sov = sovFixture({ consent: { accepted: false, given: false, cookies: 0 } });
+  sov.players.P.hosts.push("ads.tracker.com");
+  const m = measurePlayer(sov, "P");
+  assert.equal(m.leakPhase, "crawl");
+  assert.deepEqual(m.preConsent.adHosts, ["ads.tracker.com"]);
+});
+
+test("scorePlayer: self-hosted engine takes jurisdiction from its hosts", () => {
+  const engine = { type: "engine", openness: 10, verified: true };
+  assert.equal(scorePlayer("HTML5 native", engine).rated, false);
+  const r = scorePlayer("HTML5 native", engine, measurePlayer(sovFixture(), "P"));
+  assert.equal(r.dims.J, 24); // 30 × 0.8
+});
+
+test("scoreSite: worst player is the site grade; pages count at their worst player", () => {
+  const scan = {
+    domain: "s.nl",
+    playerSummary: { Good: { count: 2 }, Bad: { count: 1 }, Odd: { count: 1 } },
+    details: [
+      { url: "a", players: [{ name: "Good" }] },
+      { url: "b", players: [{ name: "Good" }, { name: "Bad" }] },
+      { url: "c", players: [{ name: "Odd" }] },
+    ],
+  };
+  const r = scoreSite(scan, { Good: euVendor, Bad: usVendor });
+  assert.equal(r.grade, "E");
+  assert.deepEqual(r.pagesPerGrade, { A: 1, E: 1, unrated: 1 });
+  assert.deepEqual(r.unrated, ["Odd"]);
+  assert.equal(r.measured, false);
+});
+
+test("vendors.json: keys are detector names; every vendor row is sourced", async () => {
+  const { loadVendors } = await import("./sovereignty/score.mjs");
+  const vendors = loadVendors();
+  for (const [name, v] of Object.entries(vendors)) {
+    assert.ok(DETECTORS[name], `${name} is not a detector`);
+    if (v.type === "engine") continue;
+    assert.ok(v.controlCountry, `${name}: controlCountry`);
+    assert.ok(v.sources?.length, `${name}: sources`);
+    assert.ok(["eu", "mixed", "non-eu", "unknown"].includes(v.delivery), `${name}: delivery`);
+    assert.ok(["none", "analytics", "ads", "unknown"].includes(v.tracking), `${name}: tracking`);
   }
 });
