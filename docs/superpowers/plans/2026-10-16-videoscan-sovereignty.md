@@ -102,6 +102,7 @@ As built: `src/videoscan/sovereignty/{collect,resolve}.mjs`, `operators.json`, t
 12. `report.mjs --topics <a11y,privacy,sovereignty>` + segment presets (media = privacy+sovereignty; govt/corporate = all). Keep it short. New sovereignty template (Dutch): site grade, per-player cards (grade, why, evidence hosts, pre-consent leaks), map of operators/countries, "BB as alternative" (BB Sovereign only if live), method + sources + date, disclaimer → verify: HTML + PDF of 2 real sites, visual check.
 
 ### Chunk 4 — Runner, dashboard, DB
+**Done 2026-10-16** (13, 14 minus report button, 15 `scan_mode` only): dashboard Mode select (Video/Sovereignty, 500 pages default), `mode` on `start-videoscan` (refused on `start-videoscan-urls`; URL-list subpages are skipped in sovereignty mode), `scanMode` on task/runner/list, badge in scan list, `videoscans.scan_mode` column applied to Supabase. Not yet: report button, `sovereignty` jsonb in DB, add-urls into a sovereignty scan keeps no sovereignty data.
 13. Runner/server: `mode` option for start-videoscan; report spawn for the new report → verify: API start returns task.
 14. Dashboard: mode toggle + 500 default + topic choice for the report + internal "full findings" view (all third parties, EU vs non-EU ratio) for the follow-up meeting → verify: browser check.
 15. Supabase: add `scan_mode text`, `sovereignty jsonb` on `videoscans` (+ fix schema drift: `has_preview`, `has_preview_pdf`, `batch_id`, `batch_label` missing in `supabase-schema.sql`) → verify: upsert of a sovereignty scan.

@@ -14,6 +14,7 @@ export interface ScanSummary {
   batchLabel?: string;
   queueCapped?: boolean;
   queueCleared?: boolean;
+  scanMode?: 'sovereignty';
 }
 
 let scans = $state<ScanSummary[]>([]);
@@ -50,10 +51,13 @@ export interface BatchCtx {
   label: string;
 }
 
-export function startScan(url: string, maxPages: number, delay: number, batch?: BatchCtx) {
+export type ScanMode = 'video' | 'sovereignty';
+
+export function startScan(url: string, maxPages: number, delay: number, batch?: BatchCtx, mode: ScanMode = 'video') {
   return apiJson('/api/actions/start-videoscan', {
     url, maxPages, delay,
     ...(batch ? { batchId: batch.id, batchLabel: batch.label } : {}),
+    ...(mode === 'sovereignty' ? { mode } : {}),
   });
 }
 

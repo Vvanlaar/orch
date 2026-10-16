@@ -66,6 +66,8 @@ CREATE INDEX IF NOT EXISTS idx_videoscans_domain ON videoscans(domain);
 ALTER TABLE videoscans ADD COLUMN IF NOT EXISTS queue_capped BOOLEAN NOT NULL DEFAULT false;
 -- Wrap-up emptied a queue the crawl had left (finalizeScan)
 ALTER TABLE videoscans ADD COLUMN IF NOT EXISTS queue_cleared BOOLEAN NOT NULL DEFAULT false;
+-- scan.mjs --mode the scan ran in (null = plain videoscan)
+ALTER TABLE videoscans ADD COLUMN IF NOT EXISTS scan_mode TEXT;
 
 -- Feedback (replaces .orch-feedback.json)
 CREATE TABLE IF NOT EXISTS feedback (

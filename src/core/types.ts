@@ -74,6 +74,7 @@ export interface TaskContext {
   targetFilename?: string; // merge into this existing scan after
   batchId?: string; // groups multiple videoscan tasks under one live block (e.g. digi import)
   batchLabel?: string; // human-readable label for the batch group header
+  scanMode?: 'sovereignty'; // scan.mjs --mode; a resume takes it from the scan file
   targetMachineId?: string; // pin task to a specific machine; only that machine claims it
 }
 

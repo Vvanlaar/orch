@@ -19,7 +19,7 @@ vi.mock('./client.js', () => ({
           filename: 'videoscan-x.nl-2026-07-01T00-00-00.json', domain: 'x.nl', scan_date: '2026-07-01T00:00:00Z',
           pages_scanned: 3, pages_with_video: 1, unique_players: 1, has_report: true, has_pdf: false,
           has_preview: false, has_preview_pdf: false, can_resume: false, batch_id: null, batch_label: null,
-          queue_capped: false, queue_cleared: true,
+          queue_capped: false, queue_cleared: true, scan_mode: 'sovereignty',
         }];
         return { eq: () => ({ order: async () => ({ data: rows, error: null }) }) };
       },
@@ -62,6 +62,26 @@ describe('queue_cleared column', () => {
       hasPreviewPdf: false, canResume: false, queueCapped: false, queueCleared: true,
     });
     expect(sent.upsert).toMatchObject({ queue_cleared: true, queue_capped: false });
+  });
+});
+
+describe('scan_mode column', () => {
+  it('is selected and read back as scanMode', async () => {
+    const [scan] = await dbListScans();
+    expect(sent.select).toContain('scan_mode');
+    expect(scan.scanMode).toBe('sovereignty');
+  });
+
+  it('is written from scanMode, null for a plain scan', async () => {
+    const row = {
+      filename: 'f.json', domain: 'x.nl', scanDate: '', pagesScanned: 0, pagesWithVideo: 0, uniquePlayers: 0,
+      playerSummary: {}, details: [], scanState: {}, hasReport: false, hasPdf: false, hasPreview: false,
+      hasPreviewPdf: false, canResume: false, queueCapped: false, queueCleared: false,
+    };
+    await dbUpsertVideoscan({ ...row, scanMode: 'sovereignty' });
+    expect(sent.upsert).toMatchObject({ scan_mode: 'sovereignty' });
+    await dbUpsertVideoscan(row);
+    expect(sent.upsert).toMatchObject({ scan_mode: null });
   });
 });
 
