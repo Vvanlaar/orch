@@ -1,6 +1,6 @@
 # Videoscan Sovereignty Quick Scan — Plan
 
-**Goal:** A videoscan mode that crawls ~500 pages of a prospect site, measures how European-sovereign each video player on it is, and produces a separate sales report (PDF).
+**Goal:** A videoscan mode that crawls ~500 pages of a prospect site, measures how European-sovereign each video player on it is, and adds a sovereignty topic to the quick-scan report (accessibility / privacy / sovereignty, selectable per segment).
 
 **Status:** plan, not started. Research notes: [Appendix A](#appendix-a--what-sovereignty-means). Player list: [Appendix B](#appendix-b--player-sovereignty-list-draft).
 
@@ -9,13 +9,26 @@
 | Topic | Decision |
 |---|---|
 | Purpose | Sales report for a prospect. BB is the alternative. Claims must hold up (cite, date, no overclaim). |
-| Measure | Network hosts → operator/country/ASN; cookies + storage before consent; whole-page third parties as an option (`--third-party`). |
-| Output | Own report/PDF, next to the current videoscan report. |
+| Measure | Network hosts → operator/country/ASN; cookies + storage before consent; whole-page third parties (always on since the meeting). |
+| Output | ~~Own report/PDF~~ → one report with selectable topics (see meeting decisions). |
 | Audience | Government/municipalities, media/publishers, corporates/education. |
 | Consent | Measure before AND after consent. |
 | Play click | Sample: per player type max 3 pages with a long settle (~8 s). |
 | Page choice | Reuse the newest scan of the domain: all its video pages first, then crawl up to 500. No scan → normal crawl. |
 | BB rating | BB has two offerings: "standard" (measured as is) and "BB Sovereign" (opt-in, fully EU, in progress). The report shows BB Sovereign only when a config flag says it is live. |
+
+## Decisions (sales meeting, 2026-10-16) — supersede the rows above where they conflict
+
+Source: machine transcript of the meeting recording (not in repo).
+
+| Topic | Decision |
+|---|---|
+| Report modes | One report, three topics: **accessibility**, **privacy** (cookie consent), **sovereignty**. Pick per segment: accessibility only, sovereignty only, or combined. Media: no accessibility. |
+| Scan scope | Always scan everything on the page (CMP/cookie wall, Google Analytics, fonts, other third parties). Extra checks on pages we already load = low cost. `--third-party` is no longer optional. |
+| Report scope | Short, video-focused quick scan. It is a lead magnet (website download, sales sequence) that leads to a 15-min meeting. Do not give everything away. |
+| Back pocket | Full-page findings stay internal (dashboard) for the follow-up meeting. Use them to show "only 1–2 non-EU modules → easy switch" vs "all US". |
+| Out of scope | Full-website sovereignty advice is not BB's core. A partner does that; refer, do not sell. |
+| Grey area | Website analytics (Google Analytics) is not video, but BB sells EU video analytics. Possible hook, not a report section yet. |
 
 ## Scoring model
 
@@ -50,7 +63,7 @@ scan.mjs --mode sovereignty
   └─ JSON: sovereignty { hosts, cookies, players, phases }
 sovereignty/resolve.mjs  host → CNAME chain → IP → ASN → operator → country
 sovereignty/score.mjs    vendor table + measurements → grade per player/site
-report-sovereignty.mjs   own templates → HTML → PDF
+report.mjs --topics a11y,privacy,sovereignty → HTML → PDF
 ```
 
 Data files (hand-kept, each row has `sources[]` + `lastVerified`):
@@ -73,15 +86,15 @@ ASN lookup: offline iptoasn.com dataset (public domain), cached in `videoscans/_
 7. Consent phases: phase A = first `max(20, 10%)` pages without accept/replay; then accept once and continue. Record `context.cookies()` + storage keys per page → verify: YouTube page shows pre-consent cookies (or none, with nocookie).
 8. Play sample: ≤3 pages per player type, unblock `media` in that context or log aborted media URLs, settle ~8 s → verify: Vimeo sample logs `vimeocdn`/`akamaized` hosts.
 9. `resolve.mjs`: DNS CNAME chain + ASN + operator, cached per scan → verify: unit tests with recorded DNS answers.
-10. `--third-party`: classify all non-player third-party hosts with the operator map → verify: flag off = no extra output.
+10. Whole-page third parties (always on): CMP/cookie wall, analytics, fonts, other hosts → operator map. Store in JSON, not in the report → verify: GA site lists `google-analytics.com` as US.
 11. `--seed-from <scan.json>`: video pages first in the queue, crawl fills up to max → verify: resume tests still pass.
 
 ### Chunk 3 — Report
-12. `report-sovereignty.mjs` + templates (Dutch): cover, site grade, per-player cards (grade, why, evidence hosts, pre-consent leaks), map of operators/countries, "BB as alternative" (BB Sovereign only if live), method + sources + date, disclaimer → verify: HTML + PDF of 2 real sites, visual check.
+12. `report.mjs --topics <a11y,privacy,sovereignty>` + segment presets (media = privacy+sovereignty; govt/corporate = all). Keep it short. New sovereignty template (Dutch): site grade, per-player cards (grade, why, evidence hosts, pre-consent leaks), map of operators/countries, "BB as alternative" (BB Sovereign only if live), method + sources + date, disclaimer → verify: HTML + PDF of 2 real sites, visual check.
 
 ### Chunk 4 — Runner, dashboard, DB
 13. Runner/server: `mode` option for start-videoscan; report spawn for the new report → verify: API start returns task.
-14. Dashboard: mode toggle + 500 default + "sovereignty report" button → verify: browser check.
+14. Dashboard: mode toggle + 500 default + topic choice for the report + internal "full findings" view (all third parties, EU vs non-EU ratio) for the follow-up meeting → verify: browser check.
 15. Supabase: add `scan_mode text`, `sovereignty jsonb` on `videoscans` (+ fix schema drift: `has_preview`, `has_preview_pdf`, `batch_id`, `batch_label` missing in `supabase-schema.sql`) → verify: upsert of a sovereignty scan.
 
 ## Risks
@@ -96,6 +109,8 @@ ASN lookup: offline iptoasn.com dataset (public domain), cached in `videoscans/_
 1. BB Sovereign: launch date, and which parts (storage, transcoding, CDN, player JS, analytics) change?
 2. Legal/marketing review of the report text before the first prospect?
 3. Weights: is Tracking (privacy) or Jurisdiction (CLOUD Act) the stronger sales angle per audience? Media sites care less about jurisdiction, more about ad-tech.
+4. Teaser line in the report about non-video findings (e.g. "we also found 7 non-EU services on your site")? Meeting left this open.
+5. Website analytics (GA) as a hook for BB EU video analytics: report section or sales talk only?
 
 ## Appendix A — What sovereignty means
 
