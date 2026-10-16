@@ -80,7 +80,16 @@ ASN lookup: offline iptoasn.com dataset (public domain), cached in `videoscans/_
 3. `score.mjs` pure functions + tests (weights, caps, unrated) → verify: `pnpm test` green.
 4. `scripts/sovereignty-from-scans.mjs`: desk-only grades for all existing scans (vendor table × `playerSummary`) → verify: CSV/markdown overview of 231 scans. Gives a market view now, before the scanner work.
 
-### Chunk 2 — Scanner mode
+### Chunk 2 — Scanner mode — **done 2026-10-16** (tasks 2 + 5–11)
+As built: `src/videoscan/sovereignty/{collect,resolve}.mjs`, `operators.json`, tests in `sovereignty.test.mjs`. Deviations:
+- Phases: `crawl` (with consent when `consent.given`), `pre` (≤20 pages reloaded without consent: start page, video pages round-robin, then others; only when consent took), `play`. Pre-consent leaks = `pre` when `consent.given`, else `crawl`.
+- Play: ≤3 pages per player, in the bundled Chromium (headless Chrome ignores the YouTube click). Only requests after the play start count as "play".
+- Sample contexts load images/media/fonts (pixels set cookies); the crawl keeps blocking them, so crawl cookie counts are a floor.
+- All players per page, except generic engines (Video.js, MediaElement.js, …) next to a vendor player.
+- Seeds ≤80% of max pages. Checkpoint carries mode, crawl data and unscanned seeds; a resume redoes the samples.
+- Live checks 2026-10-16: ondernemendschiedam.nl (no banner clicked; YouTube + Vimeo cookies on load), menzis.nl (consent given; YouTube gated, pre-consent GTM/Azure/webchat; googlevideo via play).
+- ASN: iptoasn.com db, auto-downloaded to `./_data/` (35-day refresh, `VIDEOSCAN_ASN_DB` overrides).
+- Not yet: runner/dashboard flag (chunk 4); `--urls` + sovereignty is refused.
 5. `--mode sovereignty`: default `--max-pages 500`, skip `filterToHighestTier` (keep all players per page) → verify: page with BB + YouTube reports both.
 6. Request inventory per page: host, resource type, frame URL, phase; attribute to player via frame origin + detector script hosts + post-play window → verify: test fixture with an iframe player.
 7. Consent phases: phase A = first `max(20, 10%)` pages without accept/replay; then accept once and continue. Record `context.cookies()` + storage keys per page → verify: YouTube page shows pre-consent cookies (or none, with nocookie).
@@ -109,8 +118,11 @@ ASN lookup: offline iptoasn.com dataset (public domain), cached in `videoscans/_
 1. BB Sovereign: launch date, and which parts (storage, transcoding, CDN, player JS, analytics) change?
 2. Legal/marketing review of the report text before the first prospect?
 3. Weights: is Tracking (privacy) or Jurisdiction (CLOUD Act) the stronger sales angle per audience? Media sites care less about jurisdiction, more about ad-tech.
-4. Teaser line in the report about non-video findings (e.g. "we also found 7 non-EU services on your site")? Meeting left this open.
-5. Website analytics (GA) as a hook for BB EU video analytics: report section or sales talk only?
+4. ~~Teaser line about non-video findings?~~ **Decided:** not in the teaser report; maybe in the full report.
+5. ~~GA as hook?~~ **Decided:** sales talk only for now.
+6. Report review: done by us (Claude self-review), no separate legal round for now.
+
+**Order:** scanner extension first (chunk 2 + resolver/operator map). Scoring, report and the other open questions later.
 
 ## Appendix A — What sovereignty means
 
