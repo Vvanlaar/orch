@@ -55,7 +55,7 @@ export async function dbListScans(): Promise<ScanSummary[]> {
     .eq('archived', false)
     .order('scan_date', { ascending: false });
 
-  if (error) return [];
+  if (error) throw new Error(`Failed to list videoscans: ${error.message}`);
   return (data as VideoscanRow[]).map(rowToSummary);
 }
 

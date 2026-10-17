@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DETECTORS, detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, isFilterControl, pickConsent, isTranslatedCopy, translationPrefix, normalizeUrl, restoreQueue, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, capQueue, writeCheckpoint, replaceFile, createCheckpointSaver, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource, detectResponseRateLimit, createRateLimitError, createRefusalTracker, weighBatch } from "./scan.mjs";
+import { DETECTORS, detectPlayers, ACTIVATE_SELECTORS, isCrawlerTrap, shouldSkipUrl, isFilterControl, pickConsent, isTranslatedCopy, translationPrefix, normalizeUrl, restoreRows, restoreQueue, reprioritizeQueue, orderQueue, urlSection, rebalanceQueue, capQueue, writeCheckpoint, replaceFile, createCheckpointSaver, spreadPick, orderSitemaps, discoverSitemapUrls, recordSubresource, detectResponseRateLimit, createRateLimitError, createRefusalTracker, weighBatch } from "./scan.mjs";
 
 const names = (result) => result.map((r) => r.player).sort();
 
@@ -334,6 +334,21 @@ test("player library CSS and a site-wide library load are NOT a player", () => {
     '<link rel="preload" as="style" href="/css/video-js.min.css"><p>x</p>';
   const net = ["https://cdn.jsdelivr.net/npm/video.js@8/dist/video.min.js", "https://x.nl/wp-includes/js/mediaelement/mediaelement-and-player.min.js"];
   assert.deepEqual(names(detectFromCorpus(rijnmond, "", net)), []);
+});
+
+test("video.js's own style switch in an inline script is NOT a player", () => {
+  // haarlemmerliederaad.haarlemmermeer.nl: library + this flag on all 16,386 pages,
+  // a player on the 2,330 agenda items with a recording
+  const flag = '<script nonce="">window.VIDEOJS_NO_DYNAMIC_STYLE = true</script>';
+  const libs = '<script src="https://static.gemeenteoplossingen.nl/1.0/js/libs/video.min.js"></script>' +
+    '<script src="https://static.gemeenteoplossingen.nl/1.0/js/libs/videojs-playlist.min.js"></script>';
+  const net = ["https://static.gemeenteoplossingen.nl/1.0/js/libs/video.min.js", "https://static.gemeenteoplossingen.nl/1.0/js/libs/videojs-playlist.min.js"];
+  assert.deepEqual(names(detectFromCorpus(`<head>${flag}${libs}</head><p>Agenda</p>`, "", net)), []);
+  // the same page with its recording
+  const player = '<div id="mediaplayer-vjs" class="video-js vjs-4-3 vjs-paused vjs-fluid"><video class="vjs-tech" src="blob:https://x.nl/3e5a"></video></div>';
+  assert.deepEqual(names(detectFromCorpus(`<head>${flag}${libs}</head>${player}`, "", net)), ["HTML5 native", "Video.js"]);
+  // an inline init call is still Video.js markup
+  assert.ok(names(detectFromCorpus(`${libs}<video id="v"></video><script>videojs("v")</script>`, "", net)).includes("Video.js"));
 });
 
 test("an unclosed or JSON-escaped <style> does not swallow a player", () => {
@@ -1036,6 +1051,34 @@ test("normalizeUrl keeps a real search and parameters that only resemble a tab",
   ]) {
     assert.equal(normalizeUrl(url, "https://example.nl/"), url, url);
   }
+});
+
+test("normalizeUrl drops the bare ? of an empty query", () => {
+  assert.equal(normalizeUrl("https://example.nl/pad?", "https://example.nl/"), "https://example.nl/pad");
+  assert.equal(normalizeUrl("https://example.nl/pad/?#top", "https://example.nl/"), "https://example.nl/pad");
+  assert.equal(normalizeUrl("https://example.nl/?", "https://example.nl/"), "https://example.nl/");
+  // Two blank parts and nothing else: as empty.
+  assert.equal(normalizeUrl("https://example.nl/pad?&", "https://example.nl/"), "https://example.nl/pad");
+});
+
+test("restoreRows merges the rows a report holds for one page", () => {
+  // jiphaarlemmermeer.nl, as written before normalizeUrl knew quicktabs.
+  const page = "https://www.jiphaarlemmermeer.nl/pesten-geweld/grooming-sexting";
+  const youtube = [{ name: "YouTube", evidence: "iframe" }];
+  const rows = restoreRows(
+    [
+      { url: `${page}?qt-vragen_formulier=0`, players: youtube },
+      { url: page, players: youtube },
+      { url: `${page}?qt-vragen_formulier=1`, players: [...youtube, { name: "Vimeo", evidence: "iframe" }] },
+      { url: "https://www.jiphaarlemmermeer.nl/over-jip", players: [{ name: "Vimeo", evidence: "script" }] },
+    ],
+    "https://www.jiphaarlemmermeer.nl/",
+  );
+  assert.deepEqual(rows, [
+    { url: page, players: [{ player: "YouTube", evidence: "iframe" }, { player: "Vimeo", evidence: "iframe" }] },
+    { url: "https://www.jiphaarlemmermeer.nl/over-jip", players: [{ player: "Vimeo", evidence: "script" }] },
+  ]);
+  assert.deepEqual(restoreRows([], "https://example.nl/"), []);
 });
 
 test("normalizeUrl still strips hash and trailing slash", () => {
