@@ -7,7 +7,7 @@
 // scan.mjs captures per page; the collector aggregates per host, cookie and
 // player, so 500 pages of request logs never sit in memory.
 
-const PHASES = ["crawl", "pre", "play"];
+export const PHASES = ["crawl", "pre", "play"];
 const zero = () => Object.fromEntries(PHASES.map((p) => [p, 0]));
 const MAX_EXAMPLES = 3;
 const MAX_STORAGE_KEYS = 50;
@@ -154,6 +154,7 @@ export function pickSamples(results, startUrl, { pre = 20, perPlayer = 3 } = {})
 
 // ── Aggregation ──────────────────────────────────────────────────────
 
+const emptyRequests = () => Object.fromEntries(PHASES.map((p) => [p, {}]));
 const emptyPhases = () => Object.fromEntries(PHASES.map((p) => [p, { requests: 0, pages: 0 }]));
 
 /**
@@ -187,7 +188,7 @@ export function createSovereigntyCollector({ domain, detectors, prev = null }) {
   const hosts = new Map();   // host → { phases, types, players, examples, pages }
   const cookies = new Map(); // name|domain → { name, domain, session, maxDays, phases }
   const storage = new Map(); // origin → { keys, phases }
-  const players = new Map(); // name → { phases: { crawl|pre|play: pages }, hosts }
+  const players = new Map(); // name → { phases: { crawl|pre|play: pages }, hosts, requests: { phase: { host: n } } }
   const pages = zero();
   // accepted: a banner button was clicked. given: that click left consent
   // cookies/storage behind, which every crawl page then carries.
@@ -218,12 +219,17 @@ export function createSovereigntyCollector({ domain, detectors, prev = null }) {
     }
     // Hosts are restored from the hosts that were seen in the crawl
     for (const [name, p] of Object.entries(prev.players || {})) {
-      if (p.pages?.crawl) players.set(name, { phases: crawlOnly(p.pages.crawl), hosts: new Set(p.hosts.filter((h) => hosts.has(h))) });
+      if (!p.pages?.crawl) continue;
+      players.set(name, {
+        phases: crawlOnly(p.pages.crawl),
+        hosts: new Set(p.hosts.filter((h) => hosts.has(h))),
+        requests: { ...emptyRequests(), crawl: { ...p.requests?.crawl } },
+      });
     }
   }
 
   function player(name) {
-    if (!players.has(name)) players.set(name, { phases: zero(), hosts: new Set() });
+    if (!players.has(name)) players.set(name, { phases: zero(), hosts: new Set(), requests: emptyRequests() });
     return players.get(name);
   }
 
@@ -258,7 +264,9 @@ export function createSovereigntyCollector({ domain, detectors, prev = null }) {
         const owner = attributeRequest(req, names, detectors);
         if (owner) {
           h.players.add(owner);
-          player(owner).hosts.add(host);
+          const p = player(owner);
+          p.hosts.add(host);
+          p.requests[reqPhase][host] = (p.requests[reqPhase][host] || 0) + 1;
         }
         const example = stripQuery(req.url).slice(0, 150);
         if (h.examples.length < MAX_EXAMPLES && !h.examples.some((e) => e.url === example)) {
@@ -324,7 +332,7 @@ export function createSovereigntyCollector({ domain, detectors, prev = null }) {
         hosts: hostJson,
         cookies: cookieJson,
         storage: Object.fromEntries([...storage].map(([o, s]) => [o, { keys: [...s.keys], phases: s.phases }])),
-        players: Object.fromEntries([...players].map(([n, p]) => [n, { pages: p.phases, hosts: [...p.hosts].sort() }])),
+        players: Object.fromEntries([...players].map(([n, p]) => [n, { pages: p.phases, hosts: [...p.hosts].sort(), requests: p.requests }])),
       };
     },
   };

@@ -12,6 +12,7 @@
 // half the points and says so; a player without a vendor row is "unrated",
 // never guessed.
 import { readFileSync } from "node:fs";
+import { PHASES } from "./collect.mjs";
 import { isEuCountry } from "./resolve.mjs";
 
 export const WEIGHTS = { J: 30, D: 25, T: 25, O: 10, C: 10 };
@@ -30,7 +31,7 @@ const CAP_TRACKING = 49; // top of D
 // Outside the EU but with an adequacy decision: personal data may go there,
 // but EU law does not govern the vendor. Half the jurisdiction points.
 const ADEQUACY = new Set(["GB", "CH", "CA", "JP", "KR", "NZ", "IL", "UY", "AR", "AD", "FO", "GG", "IM", "JE"]);
-const NATIONAL_SCHEMES = new Set(["NEN 7510", "BIO", "C5", "SecNumCloud", "ISO 27017", "ISO 27018"]);
+const NATIONAL_SCHEMES = new Set(["NEN 7510", "BIO", "C5", "SecNumCloud"]);
 
 const half = (n) => Math.round(n / 2);
 
@@ -58,7 +59,12 @@ export function measurePlayer(sov, player) {
   for (const host of p.hosts) {
     const h = sov.hosts[host];
     if (!h) continue;
-    const requests = h.phases.crawl.requests + h.phases.pre.requests + h.phases.play.requests;
+    // The player's own requests to the host; scans before per-player counts
+    // fall back to the host total
+    const requests = p.requests
+      ? PHASES.reduce((n, ph) => n + (p.requests[ph]?.[host] || 0), 0)
+      : PHASES.reduce((n, ph) => n + h.phases[ph].requests, 0);
+    if (!requests) continue;
     // EU only when both the service and the network under it are
     const isEu = h.eu === true && !h.nonEuInfra;
     if (h.eu == null) unknown += requests;
@@ -73,10 +79,16 @@ export function measurePlayer(sov, player) {
   // bot-check cookie (Cloudflare __cf_bm, 30 min) does not
   const tracking = cookies.filter((c) => !c.session && c.maxDays > 1);
   const storage = Object.entries(sov.storage || {})
-    .filter(([origin, s]) => s.phases[leak] > 0 && playerHosts.has(new URL(origin).hostname))
+    .filter(([origin, s]) => {
+      const host = new URL(origin).hostname;
+      return s.phases[leak] > 0 && playerHosts.has(host) && !sov.hosts[host]?.firstParty;
+    })
     .map(([origin, s]) => ({ origin, keys: s.keys }));
   return {
     leakPhase: leak,
+    // false when no page with this player was loaded in the leak phase (pre
+    // sample skipped, failed or left the player out): T falls back to desk
+    sampled: (p.pages?.[leak] || 0) > 0,
     hosts: hosts.sort((a, b) => b.requests - a.requests),
     euShare: eu + nonEu > 0 ? eu / (eu + nonEu) : null,
     unknownRequests: unknown,
@@ -130,7 +142,7 @@ export function scorePlayer(player, vendor, measured = null) {
   }
 
   // T
-  if (measured) {
+  if (measured?.sampled) {
     const pc = measured.preConsent;
     if (pc.trackingCookies.length || pc.adHosts.length) {
       dims.T = 0;
@@ -145,7 +157,7 @@ export function scorePlayer(player, vendor, measured = null) {
     if (pc.trackingCookies.length) caps.push({ max: CAP_TRACKING, why: `persistent third-party cookie before consent (${pc.trackingCookies[0]})` });
   } else {
     dims.T = { none: WEIGHTS.T, analytics: half(WEIGHTS.T), ads: 0 }[vendor.tracking] ?? half(WEIGHTS.T);
-    reasons.push(`tracking (not measured): ${vendor.tracking || "unknown"}`);
+    reasons.push(`tracking (${measured ? "not sampled before consent" : "not measured"}): ${vendor.tracking || "unknown"}`);
   }
 
   // O, C

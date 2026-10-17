@@ -40,7 +40,7 @@ Five dimensions, aligned with the EU Cloud Sovereignty Framework (SOV-1..8, SEAL
 | D Delivery path | 25 | crawl | Share of player requests (JS, API, manifest, segments, thumbnails) to hosts run by non-EU operators |
 | T Tracking | 25 | crawl | Player cookies/storage/third-party requests before consent; again after play |
 | O Openness & exit | 10 | mixed | HLS/DASH/MP4 seen, open-source player, export API (desk) |
-| C Certification | 10 | desk | ISO 27001, NEN 7510, BIO, C5, SecNumCloud |
+| C Certification | 10 | desk | ISO 27001 (6), any of NEN 7510, BIO, C5, SecNumCloud (4) |
 
 **Grade:** A (SEAL-4) ≥ 85, B (SEAL-3) ≥ 70, C (SEAL-2) ≥ 50, D (SEAL-1) ≥ 30, E (SEAL-0) < 30.
 
@@ -75,7 +75,7 @@ ASN lookup: offline iptoasn.com dataset (public domain), cached in `videoscans/_
 ## Tasks
 
 ### Chunk 1 — Data + scoring (no scanner changes)
-**Done 2026-10-16:** `sovereignty/vendors.json` (40 players; `verified` = ownership line sourced), `sovereignty/score.mjs` (desk + measured; unknown desk values score half), `scripts/sovereignty-from-scans.mjs` (market view → `<scanDir>/_reports`). Vendor facts were re-checked; corrections vs Appendix B: Kaltura EU regions predate Apr 2026; DailyMotion owner Canal+; Vidyard Canadian, hosted in US; JW Player is now JWX (JWP Connatix); iBabs 100% Euronext (EUR 53.2m, 2021); Vixy co-owner NEP NL belongs to US NEP Group (Carlyle, 26North); 23 Video on UpCloud/AWS IE with Fastly CDN; PingVP shows no ISO certificate. First market view (desk-only, 137 sites with video): 121 E, 16 unrated (self-hosted engines, not measured).
+**Done 2026-10-16:** `sovereignty/vendors.json` (44 players; `verified` = ownership line sourced; controlCountry follows a controlling parent), `sovereignty/score.mjs` (desk + measured; unknown desk values score half), `scripts/sovereignty-from-scans.mjs` (market view → `<scanDir>/_reports`). Vendor facts were re-checked; corrections vs Appendix B: Kaltura EU regions predate Apr 2026; DailyMotion owner Canal+; Vidyard Canadian, hosted in US; JW Player is now JWX (JWP Connatix); iBabs 100% Euronext (EUR 53.2m, 2021); Vixy co-owner NEP NL belongs to US NEP Group (Carlyle, 26North); 23 Video on UpCloud/AWS IE with Fastly CDN; PingVP shows no ISO certificate. First market view (desk-only, 137 sites with video): 121 E, 16 unrated (self-hosted engines, not measured). Review fixes 2026-10-17: per-player request counts (collect `players[].requests`), T falls back to desk when the player had no pre-consent sample, first-party storage left out, ISO 27017/27018 no longer count as national schemes.
 Open for BB: ownership/ISO 27001 are self-claims in the table (`verified: false`); openness/tracking for BB not filled.
 1. Create `vendors.json` from Appendix B; resolve all **[V]** rows → verify: every row has ≥1 source URL.
 2. Create `operators.json` (Google, Amazon, Microsoft, Akamai, Cloudflare, Fastly, Meta, ByteDance, Bunny, Leaseweb, OVH, Hetzner, Scaleway, KPN, …) → verify: unit test maps 20 known hosts.
@@ -140,52 +140,52 @@ See research summary in the chat log of 2026-10-16. Key points:
 
 ## Appendix B — Player sovereignty list (draft)
 
-Desk research + one DNS/ASN/header probe per host from NL (2026-10-16). **[V]** = unverified or vendor self-claim. "Sites" = count in 231 existing scans. Grades are provisional; the crawl measurement can lower them (tracking cap). Raw probe table + vendor sources: [2026-10-16-videoscan-sovereignty-probe.md](2026-10-16-videoscan-sovereignty-probe.md).
+Desk research + one DNS/ASN/header probe per host from NL (2026-10-16). **[V]** = unverified or vendor self-claim. "Sites" = count in 231 existing scans. Grades are the desk output of `score.mjs` (score in brackets, 2026-10-17); a measurement replaces D and T. A US vendor without an EU path gets J=0 and so lands in D/E by points alone; the US cap (max 69) only bites for a US vendor with EU delivery, no tracking and full O/C. Raw probe table + vendor sources: [2026-10-16-videoscan-sovereignty-probe.md](2026-10-16-videoscan-sovereignty-probe.md).
 
 ### Seen in existing scans
 
 | Player | Sites | HQ / owner | Front door (measured ASN) | US/CN control | Grade |
 |---|---|---|---|---|---|
 | YouTube | 120 | US, Alphabet | Google AS15169 | yes | **E** |
-| Vimeo | 43 | US op. entity; owner Bending Spoons (IT) since 24 Nov 2025 | Cloudflare + Fastly | yes | **D** (C with Enterprise EU residency) |
-| Spotify (podcast) | 18 | SE / Spotify Technology S.A. (LU) [V] | Fastly; backend GCP | no (EU) but all-US infra | **C** [V tracking] |
+| Vimeo | 43 | US op. entity; owner Bending Spoons (IT) since 24 Nov 2025 | Cloudflare + Fastly | yes | **E** (24; US control) |
+| Spotify (podcast) | 18 | SE / Spotify Technology S.A. (LU) [V] | Fastly; backend GCP | no (EU) but all-US infra | **D** (45) [V tracking] |
 | Video.js | 16 | OSS | depends on host → measure | depends | measured |
 | HTML5 native | 16 | n/a | depends on host → measure | depends | measured |
 | TikTok | 7 | ByteDance (CN), IE entity | Akamai AS20940 | yes (CN) | **E** |
-| PingVP | 6 | NL (Amersfoort), owner not stated | KPN AS1136; storage CloudNL, CDN Gcore (LU) | no | **B** [V ISO, owner] |
-| Brightcove | 5 | US; Bending Spoons since 4 Feb 2025 | Fastly | yes | **D** |
+| PingVP | 6 | NL (Amersfoort), owner not stated | KPN AS1136; storage CloudNL, CDN Gcore (LU) | no | **A** (85) [V ISO, owner] |
+| Brightcove | 5 | US; Bending Spoons since 4 Feb 2025 | Fastly | yes | **E** (24) |
 | OpenGemeenten | 5 | NL CMS, no own player found [V] | — | — | unrated → grade underlying source |
-| Kaltura | 4 | US/IL, listed | Akamai AS16625; EU region since Apr 2026 | yes | **D** (C with EU region) |
+| Kaltura | 4 | US/IL, listed | Akamai AS16625; EU region since Apr 2026 | yes | **E** (24) |
 | Instagram | 4 | US, Meta | Meta | yes | **E** |
 | Facebook Video | 4 | US, Meta | Meta | yes | **E** |
-| Blue Billywig | 2 | NL (Hilversum), independent since 2006 | `bbvms.com` → **AWS CloudFront AS16509**; `cdn.bluebillywig.com` → Bunny (SI); storage Scaleway (FR) | no | **B** standard; **A** target for BB Sovereign |
+| Blue Billywig | 2 | NL (Hilversum), independent since 2006 | `bbvms.com` → **AWS CloudFront AS16509**; `cdn.bluebillywig.com` → Bunny (SI); storage Scaleway (FR) | no | **C** (67) desk, B/C measured; **A** target for BB Sovereign |
 | X (Twitter) | 2 | US | — | yes | **E** |
 | LinkedIn | 2 | US, Microsoft | — | yes | **E** |
-| DailyMotion | 1 | FR, Canal+/Vivendi [V] | AWS CloudFront | no, but ad-tech heavy | **D** [V tracking] |
+| DailyMotion | 1 | FR, Canal+/Vivendi [V] | AWS CloudFront | no, but ad-tech heavy | **D** (31) [V tracking] |
 
 ### Detected but not seen yet
 
 | Player | HQ / owner | Front door | Grade |
 |---|---|---|---|
-| JW Player | US | CloudFront | D |
-| Wistia | US | CloudFront → Fastly | D |
+| JW Player | US | CloudFront | E |
+| Wistia | US | CloudFront → Fastly | E |
 | Vidyard | CA, US presence | Fastly | D |
 | Flowplayer | SE; Wowza (US, Clearhaven PE) since 2022 | — | D |
 | Panopto | US | — | D |
-| Hihaho | NL (Assen); app AWS EU, video stored at JW Player (US) | CloudFront | C [V ISO lapsed 2025-11] |
+| Hihaho | NL (Assen); app AWS EU, video stored at JW Player (US) | CloudFront | C (61; ISO lapsed 2025-11, not counted) |
 | Ivory | NL, 3 staff; hosting unknown | — | unrated |
-| Rijksoverheidsplayer | NL govt; media `*.rovid.nl` | Cloudflare / Akamai | C [V builder/host] |
-| Vixy | NL; NEP NL (US parent NEP Group) [V] | Cloudflare (site only) | C [V] |
-| Company Webcast | Euronext (NL/FR), 51%+ | AWS eu-west-1 | C |
-| iBabs | Euronext (100% since 2021 [V]) | AWS eu-west-1 | C |
+| Rijksoverheidsplayer | NL govt; media `*.rovid.nl` | Cloudflare / Akamai | D (48) [V builder/host] |
+| Vixy | NL; NEP NL (US parent NEP Group) [V] | Cloudflare (site only) | B (70) [V] |
+| Company Webcast | Euronext (NL/FR), 51%+ | AWS eu-west-1 | C (67) |
+| iBabs | Euronext (100% since 2021 [V]) | AWS eu-west-1 | C (61) |
 | StreamPartner | NL; owner unknown | Serverius AS50673 (NL) | B [V] |
 | 23 Video | DK, independent [V] | Fastly | C [V hosting] |
-| bunny.net Stream | SI, independent | Bunny / Datacamp (UK) [V] | B |
+| bunny.net Stream | SI, independent | Bunny / Datacamp (UK) [V] | B (81) |
 | PeerTube | OSS (Framasoft FR) | instance host → measure | measured |
-| Cloudflare Stream / Mux | US | Cloudflare / Fastly | D |
-| Loom | US, Atlassian | — | D |
+| Cloudflare Stream / Mux | US | Cloudflare / Fastly | E |
+| Loom | US, Atlassian | — | E |
 | Twitch | US, Amazon | — | E |
 | Mediasite | Enghouse (CA) | — | D |
 
 ### Key finding for BB
-BB claims "Scaleway + Bunny, EU", but the player front door `bbvms.com` answers via AWS CloudFront. A US CDN on the player path makes BB standard a **B**, not an **A**, in its own scan. Fix this in the sovereignty push before the first prospect report.
+BB claims "Scaleway + Bunny, EU", but the player front door `bbvms.com` answers via AWS CloudFront. A US CDN on the player path keeps BB standard at **B/C**, not **A**, in its own scan. Fix this in the sovereignty push before the first prospect report.

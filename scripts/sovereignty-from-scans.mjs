@@ -9,20 +9,22 @@
 
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { GRADE_ORDER, loadVendors, scoreSite } from '../src/videoscan/sovereignty/score.mjs';
+import { GRADE_ORDER, loadVendors, scorePlayer, scoreSite } from '../src/videoscan/sovereignty/score.mjs';
 
 const scanDir = process.argv[2] || process.env.VIDEOSCAN_DIR || 'videoscans';
 const outDir = process.argv[3] || join(scanDir, '_reports');
 const vendors = loadVendors();
 
-// Newest finished scan per domain. Filenames sort by timestamp within a domain.
+// Newest finished scan per domain, by scanDate: a --resume writes back into
+// the older file, so the filename timestamp can be stale
 const newest = new Map();
-for (const f of readdirSync(scanDir).sort()) {
+for (const f of readdirSync(scanDir)) {
   if (!/^videoscan-.*\.json$/.test(f) || /INPROGRESS|-summary|-merged/.test(f)) continue;
   let scan;
   try { scan = JSON.parse(readFileSync(join(scanDir, f), 'utf-8')); } catch { continue; }
   if (!scan.domain || scan.isSummary) continue;
-  newest.set(scan.domain, { file: f, scan });
+  const prev = newest.get(scan.domain);
+  if (!prev || (scan.scanDate || '') > (prev.scan.scanDate || '')) newest.set(scan.domain, { file: f, scan });
 }
 
 const sites = [...newest.values()].map(({ file, scan }) => ({ file, pages: scan.pagesScanned, ...scoreSite(scan, vendors) }));
@@ -31,9 +33,14 @@ const withVideo = sites.filter((s) => s.players.length);
 const count = (list, key) => list.reduce((m, x) => ((m[key(x)] = (m[key(x)] || 0) + 1), m), {});
 const siteGrades = count(withVideo, (s) => s.grade ?? 'unrated');
 const players = {};
+const deskGrade = (name) => {
+  const d = scorePlayer(name, vendors[name]);
+  return { grade: d.rated ? d.grade : 'unrated', verified: d.verified };
+};
 for (const s of withVideo) {
   for (const p of s.players) {
-    const e = (players[p.player] ??= { sites: 0, pages: 0, grade: p.rated ? p.grade : 'unrated', verified: p.verified });
+    // Desk column: the vendor row alone, not one site's measurement
+    const e = (players[p.player] ??= { sites: 0, pages: 0, ...deskGrade(p.player) });
     e.sites++;
     e.pages += p.pages;
   }

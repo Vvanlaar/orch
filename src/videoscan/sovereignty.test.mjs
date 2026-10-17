@@ -114,6 +114,7 @@ test("collector: hosts, cookies and players per phase", () => {
   assert.deepEqual(j.hosts["site.nl"].players, []);
   assert.equal(j.hosts["rr1.googlevideo.com"].phases.play.requests, 1);
   assert.deepEqual(j.players.YouTube.hosts, ["rr1.googlevideo.com", "www.youtube.com"]);
+  assert.deepEqual(j.players.YouTube.requests, { crawl: {}, pre: { "www.youtube.com": 2 }, play: { "rr1.googlevideo.com": 1 } });
   const cookie = j.cookies[0];
   assert.deepEqual([cookie.firstParty, cookie.eu, cookie.phases.pre, cookie.players], [false, false, 1, ["YouTube"]]);
   assert.ok(cookie.maxDays >= 179 && cookie.maxDays <= 180);
@@ -290,6 +291,47 @@ test("scorePlayer: self-hosted engine takes jurisdiction from its hosts", () => 
   assert.equal(scorePlayer("HTML5 native", engine).rated, false);
   const r = scorePlayer("HTML5 native", engine, measurePlayer(sovFixture(), "P"));
   assert.equal(r.dims.J, 24); // 30 × 0.8
+});
+
+test("measurePlayer: per-player request counts win; unknown hosts and first-party storage left out", () => {
+  const sov = sovFixture({
+    storage: { "https://site.nl": { keys: ["cart"], phases: { crawl: 1, pre: 1, play: 0 } } },
+  });
+  sov.hosts["site.nl"] = { firstParty: true, eu: null, phases: { crawl: { requests: 50, pages: 2 }, pre: { requests: 9, pages: 1 }, play: { requests: 0, pages: 0 } } };
+  sov.players.P.hosts.push("site.nl");
+  // Only 1 of the host's 50 crawl requests to cdn.eu.nl belongs to P
+  sov.players.P.requests = { crawl: { "cdn.eu.nl": 1, "edge.us.com": 1, "site.nl": 4 }, pre: {}, play: {} };
+  const m = measurePlayer(sov, "P");
+  assert.equal(m.euShare, 0.5);
+  assert.equal(m.unknownRequests, 4);
+  assert.deepEqual(m.preConsent.storage, []);
+});
+
+test("scorePlayer: no pre sample for the player → desk tracking, no cookie cap", () => {
+  const sov = sovFixture({
+    cookies: [{ name: "vuid", domain: "edge.us.com", session: false, maxDays: 400, firstParty: false, players: ["P"], eu: true, phases: { crawl: 1, pre: 0, play: 0 } }],
+  });
+  sov.players.P.pages.pre = 0;
+  const m = measurePlayer(sov, "P");
+  assert.equal(m.sampled, false);
+  const r = scorePlayer("P", { ...euVendor, tracking: "ads" }, m);
+  assert.equal(r.dims.T, 0);
+  assert.deepEqual(r.caps, []);
+  assert.match(r.reasons.join(" "), /not sampled before consent/);
+});
+
+test("scorePlayer: storage-only before consent is half T", () => {
+  const sov = sovFixture({
+    cookies: [],
+    storage: { "https://cdn.eu.nl": { keys: ["vol"], phases: { crawl: 1, pre: 1, play: 0 } } },
+  });
+  assert.equal(scorePlayer("P", euVendor, measurePlayer(sov, "P")).dims.T, 13);
+});
+
+test("scorePlayer: unknown desk facts get half points; no control country gets none", () => {
+  const r = scorePlayer("U", { controlCountry: "NL", delivery: "unknown", tracking: "unknown", openness: null, certifications: [] });
+  assert.deepEqual([r.dims.D, r.dims.T, r.dims.O, r.dims.C], [13, 13, 5, 0]);
+  assert.equal(scorePlayer("N", { ...euVendor, controlCountry: null }).dims.J, 0);
 });
 
 test("scoreSite: worst player is the site grade; pages count at their worst player", () => {
