@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
-  import { getScans, fetchScans, startScan, startGroupScan, resumeScan, addUrlsToScan, mergeDomainScans, deleteScans, syncScan, regenerateReport, regeneratePreview, isLoading, importDigiToegankelijk, classifyGroupUrls, wrapUpBatch, reopenBatch, getClosedBatches, fetchClosedBatches, type ScanSummary, type DigiImportResult, type ReportOptions } from '../stores/videoscan.svelte';
+  import { getScans, fetchScans, startScan, startGroupScan, resumeScan, addUrlsToScan, mergeDomainScans, deleteScans, syncScan, regenerateReport, regeneratePreview, isLoading, importDigiToegankelijk, classifyGroupUrls, wrapUpBatch, reopenBatch, getClosedBatches, fetchClosedBatches, type ScanSummary, type DigiImportResult, type ReportOptions, type ScanMode } from '../stores/videoscan.svelte';
   import { getTasks, getTaskOutput, isExpanded, toggleExpanded, pauseVideoscanTask } from '../stores/tasks.svelte';
   import VideoscanLiveProgress from './VideoscanLiveProgress.svelte';
   import VideoscanLiveBatch from './VideoscanLiveBatch.svelte';
@@ -24,6 +24,15 @@
   let url = $state('');
   let maxPages = $state(20000);
   let delay = $state(200);
+  // Sovereignty: every player per page, requests/cookies before and after
+  // consent, hosts → operator (scan.mjs --mode sovereignty). A quick scan.
+  let scanMode = $state<ScanMode>('video');
+  const DEFAULT_PAGES: Record<ScanMode, number> = { video: 20000, sovereignty: 500 };
+  const SOVEREIGNTY_TITLE = 'Sovereignty scan: all players per page, requests and cookies before and after consent, hosts resolved to operator and country';
+  function setScanMode(mode: ScanMode) {
+    scanMode = mode;
+    maxPages = DEFAULT_PAGES[mode];
+  }
   let starting = $state(false);
   let error = $state('');
 
@@ -229,7 +238,7 @@
     starting = true;
     error = '';
     try {
-      await startScan(url, maxPages, delay);
+      await startScan(url, maxPages, delay, undefined, scanMode);
       url = '';
       setTimeout(() => fetchScans(), 2000);
     } catch (err: any) {
@@ -394,7 +403,9 @@
       .map(l => l.trim())
       .filter(l => /^https?:\/\//i.test(l));
     const { crawls, explicit } = classifyGroupUrls(urls);
-    return { count: urls.length, crawls, explicit, total: crawls.length + (explicit.length > 0 ? 1 : 0) };
+    // A mode runs on crawls only: subpage lists are left out
+    const runsExplicit = explicit.length > 0 && scanMode === 'video';
+    return { count: urls.length, crawls, explicit, runsExplicit, total: crawls.length + (runsExplicit ? 1 : 0) };
   });
 
   function dismissUrlList() {
@@ -424,13 +435,13 @@
 
     for (const crawlUrl of urlListPlan.crawls) {
       try {
-        await startScan(crawlUrl, maxPages, delay, batch);
+        await startScan(crawlUrl, maxPages, delay, batch, scanMode);
       } catch (err: any) {
         errors.push(`crawl ${crawlUrl}: ${err.message}`);
       }
       urlListProgress++;
     }
-    if (urlListPlan.explicit.length > 0) {
+    if (urlListPlan.runsExplicit) {
       try {
         await startGroupScan(urlListPlan.explicit, maxPages, delay, batch);
       } catch (err: any) {
@@ -564,6 +575,13 @@
         </button>
       </div>
       <div class="cmd-opts">
+        <label class="cmd-opt" title={SOVEREIGNTY_TITLE}>
+          <span>Mode</span>
+          <select value={scanMode} onchange={(e) => setScanMode(e.currentTarget.value as ScanMode)}>
+            <option value="video">Video</option>
+            <option value="sovereignty">Sovereignty</option>
+          </select>
+        </label>
         <label class="cmd-opt">
           <span>Pages</span>
           <input type="number" min="1" max="50000" bind:value={maxPages} />
@@ -610,7 +628,7 @@
               <span class="digi-chip">{urlListPlan.crawls.length} crawl{urlListPlan.crawls.length !== 1 ? 's' : ''}</span>
             {/if}
             {#if urlListPlan.explicit.length > 0}
-              <span class="digi-chip">{urlListPlan.explicit.length} subpage{urlListPlan.explicit.length !== 1 ? 's' : ''}</span>
+              <span class="digi-chip">{urlListPlan.explicit.length} subpage{urlListPlan.explicit.length !== 1 ? 's' : ''}{urlListPlan.runsExplicit ? '' : ' — skipped: sovereignty mode crawls roots only'}</span>
             {/if}
             <span class="digi-chip accent">{urlListPlan.total} task{urlListPlan.total !== 1 ? 's' : ''}</span>
           {/if}
@@ -802,6 +820,9 @@
                       </div>
                     </div>
                     <div class="sc-right">
+                      {#if scan.scanMode === 'sovereignty'}
+                        <span class="sc-mode" title={SOVEREIGNTY_TITLE}>sovereignty</span>
+                      {/if}
                       {#if scan.queueCapped}
                         <span class="sc-capped" title={QUEUE_CAPPED_TITLE}>queue capped — not fully covered</span>
                       {/if}
@@ -983,6 +1004,9 @@
                   <div>
                     <span class="side-domain">{scan.domain}</span>
                     <span class="side-meta">{scan.pagesScanned} pg · {scan.pagesWithVideo} vid</span>
+                    {#if scan.scanMode === 'sovereignty'}
+                      <span class="sc-mode" title={SOVEREIGNTY_TITLE}>sovereignty</span>
+                    {/if}
                     {#if scan.queueCapped}
                       <span class="sc-capped" title={QUEUE_CAPPED_TITLE}>queue capped</span>
                     {/if}
@@ -1242,7 +1266,8 @@
     color: var(--text-muted);
   }
 
-  .cmd-opt input {
+  .cmd-opt input,
+  .cmd-opt select {
     width: 80px;
     background: var(--surface-deep);
     border: 1px solid var(--border-subtle);
@@ -1254,7 +1279,13 @@
     transition: border-color 0.15s;
   }
 
-  .cmd-opt input:focus {
+  .cmd-opt select {
+    width: auto;
+    font-family: inherit;
+  }
+
+  .cmd-opt input:focus,
+  .cmd-opt select:focus {
     outline: none;
     border-color: var(--accent-dim);
   }
@@ -1690,6 +1721,18 @@
     background: rgba(16, 185, 129, 0.1);
     padding: 2px 7px;
     border-radius: 4px;
+  }
+
+  .sc-mode {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--accent);
+    background: var(--accent-glow);
+    padding: 2px 7px;
+    border-radius: 4px;
+    cursor: help;
   }
 
   .sc-capped {

@@ -63,5 +63,6 @@ export function scanRow(data: any, filename: string, dir: string): ScanRow {
     queueCleared: data.queueCleared === true,
     batchId: typeof data.batchId === 'string' ? data.batchId : undefined,
     batchLabel: typeof data.batchLabel === 'string' ? data.batchLabel : undefined,
+    scanMode: data.mode === 'sovereignty' ? 'sovereignty' : undefined,
   };
 }

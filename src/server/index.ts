@@ -1767,19 +1767,26 @@ app.post('/api/actions/review-resolution', asyncHandler(async (req, res) => {
 // --- Videoscan API ---
 
 app.post('/api/actions/start-videoscan', asyncHandler(async (req, res) => {
-  const { url, maxPages, delay, batchId, batchLabel } = req.body;
+  const { url, maxPages, delay, batchId, batchLabel, mode } = req.body;
   if (!url || typeof url !== 'string') {
     res.status(400).json({ error: 'url required' });
     return;
   }
   try { new URL(url); } catch { res.status(400).json({ error: 'Invalid URL' }); return; }
+  if (mode !== undefined && mode !== 'sovereignty') {
+    res.status(400).json({ error: 'mode must be "sovereignty" or absent' });
+    return;
+  }
+  const sovereignty = mode === 'sovereignty';
 
   const task = await createTask('videoscan', url, getVideoscanDir(), {
     source: 'github', // placeholder — videoscan has no source
     event: 'videoscan',
-    title: `Videoscan: ${new URL(url).hostname}`,
+    title: `${sovereignty ? 'Sovereignty scan' : 'Videoscan'}: ${new URL(url).hostname}`,
     scanUrl: url,
-    maxPages: maxPages || 50,
+    // A sovereignty scan is a quick scan
+    maxPages: maxPages || (sovereignty ? 500 : 50),
+    ...(sovereignty ? { scanMode: 'sovereignty' as const } : {}),
     delay: delay ?? 200,
     ...(typeof batchId === 'string' && batchId ? { batchId } : {}),
     ...(typeof batchLabel === 'string' && batchLabel ? { batchLabel } : {}),
@@ -1790,7 +1797,12 @@ app.post('/api/actions/start-videoscan', asyncHandler(async (req, res) => {
 }));
 
 app.post('/api/actions/start-videoscan-urls', asyncHandler(async (req, res) => {
-  const { urls, maxPages, delay, batchId, batchLabel } = req.body;
+  const { urls, maxPages, delay, batchId, batchLabel, mode } = req.body;
+  // scan.mjs runs a mode on a crawl only (it seeds the crawl with known video pages instead)
+  if (mode !== undefined) {
+    res.status(400).json({ error: 'mode is only supported for a crawl (start-videoscan)' });
+    return;
+  }
   if (!Array.isArray(urls) || urls.length === 0 || urls.length > 500) {
     res.status(400).json({ error: 'urls must be an array of 1-500 URLs' });
     return;

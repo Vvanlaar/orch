@@ -7,6 +7,8 @@ import { fileURLToPath } from "url";
 import os from "node:os";
 import { acquire } from "./wake-lock.mjs";
 import { coverageFlags } from "./coverage.mjs";
+import { createSovereigntyCollector, startCapture, playVideos, pickSamples } from "./sovereignty/collect.mjs";
+import { resolveHosts, loadAsnDb } from "./sovereignty/resolve.mjs";
 
 // ── Video Player Detectors ──────────────────────────────────────────
 // Each detector checks page HTML + network requests for a specific player.
@@ -593,6 +595,16 @@ const DETECTOR_TIER = {
   "Video.js": 5, "MediaElement.js": 5, Plyr: 5, Clappr: 5, "Shaka Player": 5,
   "HTML5 native": 5,
 };
+
+/**
+ * Drop generic engines (tier 5) when a vendor player is on the page: they are
+ * usually its engine — Brightcove renders <video-js>, WordPress wraps YouTube
+ * in MediaElement.js — not a second player. Vendors of other tiers all stay.
+ */
+export function dropEnginesUnderVendors(players) {
+  if (!players.some((p) => (DETECTOR_TIER[p.player] ?? 5) < 5)) return players;
+  return players.filter((p) => (DETECTOR_TIER[p.player] ?? 5) < 5);
+}
 
 /** Keep only the highest-priority tier of players found on a page. */
 function filterToHighestTier(players) {
@@ -1695,6 +1707,11 @@ let anubisCookies = [];
 // site's own localStorage for CMPs that keep consent there); seeded into every
 // per-page context so the whole crawl browses with consent.
 let consentState = null;
+// The first page's banner was clicked (sovereignty meta; whether consent took
+// is consentState: what the click left behind)
+let consentAccepted = false;
+// Sovereignty collector (sovereignty/collect.mjs), set by --mode sovereignty
+let sovereignty = null;
 
 const cookieKey = (c) => `${c.name}|${c.domain}|${c.path}|${c.value}`;
 
@@ -1739,8 +1756,8 @@ async function gotoResilient(page, url, timeout) {
 // but page.content() and evaluate() don't, and a page that pins its main
 // thread blocks them forever (an archief.amsterdam beeldbank page stalled a
 // crawl for 5 hours). Closing the context rejects every pending call on it.
-async function withScanContext(browser, deadlineMs, scan) {
-  const context = await createScanContext(browser);
+async function withScanContext(browser, deadlineMs, scan, contextOptions) {
+  const context = await createScanContext(browser, contextOptions);
   let timer;
   const deadline = new Promise((_, reject) => {
     timer = setTimeout(() => reject(new Error(`page took over ${Math.round(deadlineMs / 1000)}s`)), deadlineMs);
@@ -1763,10 +1780,14 @@ function scanOnePage(browser, url, timeout) {
   return withScanContext(browser, timeout * 6, (context) => scanPageIn(context, url, timeout));
 }
 
-async function scanPageIn(context, url, timeout) {
+// activate: click "load video" placeholders (off for the pre-consent sample:
+// that click is a visitor's choice). play: a player name — start it and keep
+// what it loads (sovereignty play sample).
+async function scanPageIn(context, url, timeout, { activate = true, play = null } = {}) {
   const page = await context.newPage();
   const networkRequests = [];
   page.on("request", recordSubresource(page, networkRequests));
+  const capture = sovereignty ? startCapture(page) : null;
 
   let response;
   try {
@@ -1810,11 +1831,20 @@ async function scanPageIn(context, url, timeout) {
     networkRequests.push(src);
   }
 
+  // A click-to-load placeholder often starts the video itself (autoplay=1):
+  // the play window opens before it
+  if (play && capture) capture.mark();
+
   // Click curated activation placeholders so deferred players hydrate
-  const activated = await activatePlayButtons(page);
-  for (const src of [...activated.scripts, ...activated.iframes]) {
-    networkRequests.push(src);
+  let hydrated = false;
+  if (activate) {
+    const activated = await activatePlayButtons(page);
+    for (const src of [...activated.scripts, ...activated.iframes]) {
+      networkRequests.push(src);
+    }
+    hydrated = activated.iframes.length > 0;
   }
+  if (play && capture) await playVideos(page, DETECTORS[play], { click: !hydrated });
 
   // Re-grab HTML after dynamic content has loaded
   const html = await page.content();
@@ -1824,7 +1854,7 @@ async function scanPageIn(context, url, timeout) {
   const detected = await detectWithConsent(page, corpus, networkRequests);
   const links = await collectLinks(page);
 
-  return { detected, links, status: response.status() };
+  return { detected, links, status: response.status(), ...(capture ? { sov: await capture.snapshot() } : {}) };
 }
 
 // Filter controls rendered as links: each one adds a facet to the current URL,
@@ -1864,6 +1894,7 @@ async function scanFirstPageIn(context, url, timeout) {
   const page = await context.newPage();
   const networkRequests = [];
   page.on("request", recordSubresource(page, networkRequests));
+  const capture = sovereignty ? startCapture(page) : null;
 
   let response;
   try {
@@ -1897,6 +1928,10 @@ async function scanFirstPageIn(context, url, timeout) {
   const cookiesBefore = await page.context().cookies().catch(() => []);
   const storageBefore = await readLocalStorage(page);
   if (await acceptCookies(page)) {
+    consentAccepted = true;
+    // The crawl record of this page is the consented reload; the page without
+    // consent comes from the pre sample
+    capture?.reset();
     await gotoResilient(page, url, timeout);
     // Re-check redirect after post-consent navigation
     try {
@@ -1937,7 +1972,12 @@ async function scanFirstPageIn(context, url, timeout) {
   const detected = await detectWithConsent(page, corpus, networkRequests);
   const links = await collectLinks(page);
 
-  return { detected, links, status: response.status() };
+  return {
+    detected,
+    links,
+    status: response.status(),
+    ...(capture ? { sov: await capture.snapshot() } : {}),
+  };
 }
 
 // Initial guess before AutoTuner takes over (it'll converge within ~2 batches).
@@ -2331,15 +2371,18 @@ async function applyResourceBlocking(context) {
 
 // Build a scan context with our shadow init script + resource blocking wired
 // in. One per page (a fresh connection) — see scanOnePage for why.
-async function createScanContext(browser) {
+// consent: carry the first page's consent. block: skip images/media/fonts —
+// off for the sovereignty samples, where an aborted pixel or <video> source
+// sets no cookie and follows no redirect.
+async function createScanContext(browser, { consent = true, block = true } = {}) {
   const context = await browser.newContext({
     userAgent:
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     viewport: { width: 1920, height: 1080 },
   });
   await context.addInitScript(SHADOW_INIT_SCRIPT);
-  await applyResourceBlocking(context);
-  if (consentState) {
+  if (block) await applyResourceBlocking(context);
+  if (consent && consentState) {
     // A cookie Playwright rejects (expired mid-crawl) must not fail the page
     if (consentState.cookies.length) await context.addCookies(consentState.cookies).catch(() => {});
     if (Object.keys(consentState.storage).length) {
@@ -2437,7 +2480,7 @@ export function replaceFile(from, to, rename = renameSync, wait = sleepSync) {
 // of a new one.
 // coverage: the crawl's coverage flags (coverage.mjs). Stored, so the run that
 // resumes from here still knows links were dropped before it.
-export function writeCheckpoint(domain, results, visited, queue, { file = checkpointPath(domain), coverage = {} } = {}) {
+export function writeCheckpoint(domain, results, visited, queue, { file = checkpointPath(domain), coverage = {}, extra = {} } = {}) {
   const details = results
     .filter((r) => r.players.length > 0)
     .map((r) => ({ url: r.url, players: r.players.map((p) => ({ name: p.player, evidence: p.evidence })) }));
@@ -2448,6 +2491,7 @@ export function writeCheckpoint(domain, results, visited, queue, { file = checkp
       scanDate: new Date().toISOString(),
       pagesScanned: visited.size,
       ...coverageFlags(coverage),
+      ...extra,
     },
     null,
     2,
@@ -2500,7 +2544,7 @@ export function createCheckpointSaver(write = writeCheckpoint, log = console.log
   };
 }
 
-async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile = null, concurrency = DEFAULT_CONCURRENCY, delay = 200, sitemap = true, maxSitemapUrls = 5000, controlFile = null, maxQueue = MAX_QUEUE } = {}) {
+async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile = null, concurrency = DEFAULT_CONCURRENCY, delay = 200, sitemap = true, maxSitemapUrls = 5000, controlFile = null, maxQueue = MAX_QUEUE, mode = null, seeds = [] } = {}) {
   let browser = await launchScanBrowser();
   // Recycle the whole browser process every N pages. Over a long crawl the
   // single browser accumulates state (and Chrome's DNS resolver can degrade,
@@ -2510,6 +2554,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
 
   const baseUrl = new URL(startUrl);
   const domain = baseUrl.hostname.replace(/^www\./, "");
+  let prevSovereignty = null;
   let visited = new Set();
   let queue = [normalizeUrl(startUrl, startUrl)];
   let results = [];
@@ -2534,6 +2579,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   if (resumeFile) {
     const prev = JSON.parse(readFileSync(resumeFile, "utf-8"));
     carried = coverageFlags(prev);
+    prevSovereignty = prev.sovereignty || null;
     queueFull = carried.queueCapped === true;
 
     // `visited` is normalized with the same function as the queue below. Both
@@ -2598,6 +2644,10 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     console.log(chalk.blue(`\nStarting scan of ${domain}`));
   }
   console.log(chalk.gray(`Max pages: ${maxPages}, Timeout per page: ${timeout}ms, Concurrency: ${concurrency}, Delay: ${delay}ms\n`));
+  if (mode === "sovereignty") {
+    sovereignty = createSovereigntyCollector({ domain, detectors: DETECTORS, prev: prevSovereignty });
+    console.log(chalk.gray(`  Sovereignty mode: every player per page, requests/cookies/storage per consent phase${seeds.length ? `, ${seeds.length} seed page(s) first` : ""}`));
+  }
   // After the resume parse: a corrupt resume file must not leave a heartbeat
   // behind that reads as a live scan.
   autoTuner.beat(throttle, domain);
@@ -2629,6 +2679,10 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
         ? `  Cookie consent carried to every page (${consentState.cookies.length} cookie(s))`
         : "  No cookie consent captured — later pages are scanned without it"));
       results.push({ url: firstUrl, players: detected });
+      if (sovereignty) {
+        sovereignty.setConsent({ accepted: consentAccepted, given: Boolean(consentState), cookies: consentState?.cookies.length || 0 });
+        sovereignty.recordPage({ url: firstUrl, phase: "crawl", players: detected, capture: first.sov });
+      }
 
       // A Set: header and footer both link /contact, and the re-sort puts
       // identical URLs side by side, so both copies would land in one batch
@@ -2672,6 +2726,19 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
 
   // Parallel crawl loop
   const queuedSet = new Set([...queue, ...retryNext]);
+  // Pages an earlier scan found video on: scanned before the queue, so a
+  // capped quick scan covers them (sovereignty mode). Held out of the queue,
+  // whose re-sort would file them back under their section.
+  // At most 80% of the pages: the crawl still explores, and the pre sample
+  // gets pages without video too.
+  const seedQueue = [];
+  const maxSeeds = Math.floor(maxPages * 0.8);
+  for (const u of seeds) {
+    if (seedQueue.length >= maxSeeds) break;
+    const norm = normalizeUrl(u, startUrl);
+    if (norm && !visited.has(norm) && isSameDomain(norm, domain) && !shouldSkipUrl(norm, startUrl) && !seedQueue.includes(norm)) seedQueue.push(norm);
+  }
+  for (const u of seedQueue) queuedSet.add(u);
 
   // Seed queue from sitemap (skip when resuming — already in state)
   if (sitemap && !resumeFile) {
@@ -2718,7 +2785,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   // we'd divide *all* visited pages (including pre-resume ones) by *this run's* elapsed time.
   const resumeBaseline = visited.size;
 
-  while ((queue.length > 0 || refusals.waiting().length > 0) && visited.size < maxPages && !interrupted) {
+  while ((queue.length > 0 || seedQueue.length > 0 || refusals.waiting().length > 0) && visited.size < maxPages && !interrupted) {
     // Inter-batch delay (skip first batch)
     if (batchNum > 0 && throttle.delay > 0) {
       await sleep(throttle.delay);
@@ -2733,8 +2800,8 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     // through the queue, the re-sort below would file the ones that don't fit
     // back under their section (see rebalanceQueue).
     const batch = refusals.takeDue(Math.min(throttle.concurrency, maxPages - visited.size));
-    while (batch.length < throttle.concurrency && queue.length > 0 && visited.size + batch.length < maxPages) {
-      const url = queue.shift();
+    while (batch.length < throttle.concurrency && (seedQueue.length > 0 || queue.length > 0) && visited.size + batch.length < maxPages) {
+      const url = seedQueue.length > 0 ? seedQueue.shift() : queue.shift();
       if (!url || visited.has(url)) continue;
       batch.push(url);
     }
@@ -2776,6 +2843,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
           console.log(chalk.green(`  ✓ ${truncate(url, 65)}  [${detected.map((d) => d.player).join(", ")}]`));
         }
         results.push({ url, players: detected });
+        sovereignty?.recordPage({ url, phase: "crawl", players: detected, capture: result.value.sov });
 
         // Add discovered links to queue
         for (const link of links) {
@@ -2837,7 +2905,11 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       const etaMin = ppm > 0 ? (remaining / ppm).toFixed(1) : "?";
       console.log(chalk.cyan(`  ── ${ppm} pages/min | queue=${queue.length} | ~${etaMin}min left | delay=${throttle.delay}ms | auto-conc=${throttle.concurrency} (base=${throttle.baseConcurrency})${queueFull ? " | queue full" : ""}${checkpointSaved ? "" : " | checkpoint NOT saved"}`));
       lastProgressAt = Date.now();
-      checkpointSaved = saveCheckpoint(domain, results, visited, [...refusals.waiting(), ...queue], { coverage: coverage() });
+      checkpointSaved = saveCheckpoint(domain, results, visited, [...refusals.waiting(), ...seedQueue, ...queue], {
+        coverage: coverage(),
+        // A resume from the checkpoint stays a sovereignty scan, with its crawl data
+        ...(sovereignty ? { extra: { mode: "sovereignty", sovereignty: sovereignty.toJSON() } } : {}),
+      });
     }
 
     // Recycle the browser between batches once we've scanned enough pages — a
@@ -2853,14 +2925,23 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   }
 
   // Stopped (page cap, pause) before their retry: back in the queue, so a
-  // resume asks again instead of losing them.
-  queue.unshift(...refusals.waiting());
+  // resume asks again instead of losing them. Unscanned seeds too.
+  queue.unshift(...refusals.waiting(), ...seedQueue);
   if (queueFull) {
     console.log(chalk.yellow(`  Queue was full (bound ${maxQueue}): URLs were dropped unscanned, so this crawl did not cover the site`));
   }
 
+  // A paused scan skips them: the resume redoes the samples (collect.mjs).
+  // A failure here must not cost the crawl its report.
+  if (sovereignty && !interrupted) {
+    await runSovereigntySamples(browser, results, normalizeUrl(startUrl, startUrl), timeout).catch((err) => {
+      console.log(chalk.red(`  Sovereignty samples failed: ${err.message}`));
+    });
+  }
+
   await browser.close();
   autoTuner.cleanup();
+  const sovereigntyJson = sovereignty && (await finishSovereignty());
   try { unlinkSync(checkpointPath(domain)); } catch { /* no checkpoint to clean */ }
   // Left by an earlier run of this domain that was killed mid-write
   try { unlinkSync(`${checkpointPath(domain)}.tmp`); } catch { /* none */ }
@@ -2872,7 +2953,76 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
     _state: { visited: [...visited], queue },
     rateLimits: buildRateLimits(throttle),
     coverage: coverage(),
+    ...(sovereigntyJson ? { sovereignty: sovereigntyJson } : {}),
   };
+}
+
+// ── Sovereignty passes ──────────────────────────────────────────────
+
+// After the crawl: re-load a sample without consent (what leaks before the
+// banner is answered), and start each player type on a few pages (the media
+// path only shows on play). When no consent took, the crawl itself ran
+// without it, so the pre pass would repeat it.
+async function runSovereigntySamples(browser, results, startUrl, timeout) {
+  const { pre, play } = pickSamples(results, startUrl);
+  const preJobs = consentState ? pre.map((url) => ({ url, phase: "pre" })) : [];
+  const playJobs = play.flatMap(({ player, urls }) => urls.map((url) => ({ url, phase: "play", player })));
+  const jobs = [...preJobs, ...playJobs];
+  if (!jobs.length) return;
+  console.log(chalk.blue(`\n  Sovereignty samples: ${preJobs.length} page(s) without consent, ${playJobs.length} play sample(s)`));
+  // Play runs in the bundled Chromium: in headless Chrome the YouTube embed
+  // ignores the click and loads no video (checked 2026-10-16), so the media
+  // path would stay unseen
+  let playBrowser = browser;
+  if (playJobs.length) {
+    playBrowser = await chromium.launch({ headless: true }).catch((err) => {
+      console.log(chalk.yellow(`  Bundled Chromium unavailable (${err.message.split("\n")[0]}): play samples run in the scan browser`));
+      return browser;
+    });
+  }
+  let failed = 0;
+  let next = 0;
+  async function worker() {
+    while (next < jobs.length && !interrupted) {
+      const job = jobs[next++];
+      try {
+        const r = await withScanContext(
+          job.phase === "play" ? playBrowser : browser,
+          timeout * 6,
+          (ctx) => scanPageIn(ctx, job.url, timeout, job.phase === "pre" ? { activate: false } : { play: job.player }),
+          { consent: job.phase !== "pre", block: false },
+        );
+        if (!r.sov) continue; // skipped (download, off-domain redirect)
+        if (job.phase === "pre") {
+          sovereignty.recordPage({ url: job.url, phase: "pre", players: r.detected, capture: r.sov });
+        } else {
+          // Only what the play start loaded; the page load itself is the crawl's
+          sovereignty.recordPage({
+            url: job.url,
+            phase: "play",
+            players: r.detected,
+            capture: { ...r.sov, requests: r.sov.requests.filter((q) => q.play) },
+          });
+        }
+      } catch {
+        failed++;
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(4, jobs.length) }, worker));
+  if (playBrowser !== browser) await playBrowser.close().catch(() => {});
+  if (failed) console.log(chalk.yellow(`  ${failed} sample page(s) failed to load`));
+}
+
+async function finishSovereignty() {
+  const hosts = sovereignty.hosts();
+  console.log(chalk.gray(`  Resolving ${hosts.length} host(s) to their operators...`));
+  try {
+    return sovereignty.toJSON(await resolveHosts(hosts, { asnDb: await loadAsnDb() }));
+  } catch (err) {
+    console.log(chalk.red(`  Host resolution failed (${err.message}): hosts saved unresolved`));
+    return sovereignty.toJSON();
+  }
 }
 
 // Strip <a href="..."> values so player-domain regexes don't match link
@@ -3024,7 +3174,10 @@ export function detectPlayers(html, networkRequests) {
   // Confirm/strip unconfirmed social embeds BEFORE tier-filtering: a tier-2
   // social that later fails confirmation would otherwise have already
   // annihilated the lower-tier real player, leaving an empty result.
-  return filterToHighestTier(filterNonVideoSocials(found, searchable, requestPaths));
+  const confirmed = filterNonVideoSocials(found, searchable, requestPaths);
+  // Sovereignty mode rates every player on the page: a YouTube embed next to
+  // a Blue Billywig one still sends data to Google
+  return sovereignty ? dropEnginesUnderVendors(confirmed) : filterToHighestTier(confirmed);
 }
 
 // ── Explicit URL scanning (no crawl) ────────────────────────────────
@@ -3158,7 +3311,7 @@ async function scanExplicitUrls(urls, { timeout = 15000, concurrency = DEFAULT_C
 
 // ── Report ──────────────────────────────────────────────────────────
 
-function generateReport({ domain, results, pagesScanned, _state, rateLimits, coverage, batchId, batchLabel, resumeFile }) {
+function generateReport({ domain, results, pagesScanned, _state, rateLimits, coverage, batchId, batchLabel, resumeFile, sovereignty: sovereigntyJson }) {
   const playerSummary = {};
   const pagesWithPlayers = [];
   const pagesWithoutPlayers = [];
@@ -3293,6 +3446,7 @@ function generateReport({ domain, results, pagesScanned, _state, rateLimits, cov
       players: players.map((p) => ({ name: p.player, evidence: p.evidence })),
     })),
     rateLimits,
+    ...(sovereigntyJson ? { mode: "sovereignty", sovereignty: sovereigntyJson } : {}),
     _state,
   };
   writeFileSync(jsonFile, JSON.stringify(jsonReport, null, 2));
@@ -3323,7 +3477,10 @@ ${chalk.bold("Gebruik:")}
   node scan.mjs --urls <url1,url2,...|file.json> [opties]
 
 ${chalk.bold("Opties:")}
-  --max-pages <n>       Max pagina's te scannen (standaard: 50)
+  --max-pages <n>       Max pagina's te scannen (standaard: 50, sovereignty: 500)
+  --mode sovereignty    Soevereiniteitsscan: alle players per pagina, requests/cookies/storage
+                        voor en na consent, play-steekproef, hosts → operator/land (JSON: sovereignty)
+  --seed-from <file|auto|none>  Sovereignty: video-pagina's uit een eerdere scan eerst (standaard: auto)
   --timeout <ms>        Timeout per pagina in ms (standaard: 15000)
   --delay <ms>          Vertraging tussen batches in ms (standaard: 200)
   --resume <json-file>  Hervat scan vanuit eerder resultaat
@@ -3345,6 +3502,34 @@ ${chalk.bold("Voorbeelden:")}
   node scan.mjs --urls https://example.com/page1,https://example.com/page2
   node scan.mjs --urls urls.json
 `);
+}
+
+// Video pages of an earlier scan of the domain, to scan first. "auto": the
+// newest finished scan file in the working dir; "none": no seeds.
+export function loadSeeds(from, url, dir = ".") {
+  if (from === "none") return [];
+  let file = from;
+  if (from === "auto") {
+    const domain = new URL(url).hostname.replace(/^www\./, "");
+    const prefix = `videoscan-${domain}-`;
+    const candidates = readdirSync(dir)
+      .filter((f) => f.startsWith(prefix) && f.endsWith(".json") && !/INPROGRESS|-summary|-merged/.test(f))
+      // The timestamp follows the domain: a dotted subdomain of it starts with
+      // the same prefix but has no digit there
+      .filter((f) => /^\d{4}-/.test(f.slice(prefix.length)))
+      .sort();
+    if (!candidates.length) return [];
+    file = join(dir, candidates[candidates.length - 1]);
+  }
+  try {
+    const prev = JSON.parse(readFileSync(file, "utf-8"));
+    const urls = (prev.details || []).map((d) => d.url);
+    console.log(chalk.gray(`  Seeds: ${urls.length} video page(s) from ${basename(file)}`));
+    return urls;
+  } catch (err) {
+    console.log(chalk.yellow(`  Seeds: ${file} unreadable (${err.message}), crawling without`));
+    return [];
+  }
 }
 
 async function main() {
@@ -3373,9 +3558,18 @@ async function main() {
   };
   let batchId = flagValue("--batch-id");
   let batchLabel = flagValue("--batch-label");
+  let mode = flagValue("--mode");
+  if (args.includes("--mode") && mode !== "sovereignty") {
+    console.error(chalk.red(`Onbekende --mode: ${mode} (alleen: sovereignty)`));
+    process.exit(1);
+  }
 
   // --urls mode: scan explicit URLs without crawling
   const urlsIdx = args.indexOf("--urls");
+  if (urlsIdx !== -1 && args[urlsIdx + 1] && mode) {
+    console.error(chalk.red("--mode sovereignty werkt alleen met een crawl, niet met --urls (gebruik --seed-from)"));
+    process.exit(1);
+  }
   if (urlsIdx !== -1 && args[urlsIdx + 1]) {
     const urlsArg = args[urlsIdx + 1];
     let urls;
@@ -3415,6 +3609,7 @@ async function main() {
     // so resumed scans don't drift out of their batch on next list/sync.
     if (!batchId && typeof prevData.batchId === "string") batchId = prevData.batchId;
     if (!batchLabel && typeof prevData.batchLabel === "string") batchLabel = prevData.batchLabel;
+    if (!mode && prevData.mode === "sovereignty") mode = "sovereignty";
   } else {
     url = args[0];
     if (!url.startsWith("http")) {
@@ -3423,14 +3618,16 @@ async function main() {
     }
   }
 
-  const maxPages = parseInt(args[args.indexOf("--max-pages") + 1]) || 50;
+  // A sovereignty scan is a quick scan: 500 pages give the player mix
+  const maxPages = parseInt(args[args.indexOf("--max-pages") + 1]) || (mode ? 500 : 50);
   const sitemap = !args.includes("--no-sitemap");
   const maxSitemapUrls = parseInt(args[args.indexOf("--max-sitemap-urls") + 1]) || 5000;
   const maxQueueArg = parseInt(flagValue("--max-queue"));
   const maxQueue = maxQueueArg > 0 ? maxQueueArg : MAX_QUEUE;
 
   try {
-    const scanResult = await crawlSite(url, { maxPages, timeout, resumeFile, concurrency, delay, sitemap, maxSitemapUrls, controlFile, maxQueue });
+    const seeds = mode && !resumeFile ? loadSeeds(flagValue("--seed-from") || "auto", url) : [];
+    const scanResult = await crawlSite(url, { maxPages, timeout, resumeFile, concurrency, delay, sitemap, maxSitemapUrls, controlFile, maxQueue, mode, seeds });
     generateReport({ ...scanResult, batchId, batchLabel, resumeFile });
   } catch (err) {
     console.error(chalk.red(`Scan mislukt: ${err.message}`));
