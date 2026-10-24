@@ -23,6 +23,7 @@ interface VideoscanRow {
   created_at: string;
   batch_id: string | null;
   batch_label: string | null;
+  scan_mode: string | null;
 }
 
 function rowToSummary(row: VideoscanRow): ScanSummary {
@@ -42,6 +43,7 @@ function rowToSummary(row: VideoscanRow): ScanSummary {
     ...(row.batch_label ? { batchLabel: row.batch_label } : {}),
     ...(row.queue_capped ? { queueCapped: true } : {}),
     ...(row.queue_cleared ? { queueCleared: true } : {}),
+    ...(row.scan_mode === 'sovereignty' ? { scanMode: 'sovereignty' as const } : {}),
   };
 }
 
@@ -49,7 +51,7 @@ export async function dbListScans(): Promise<ScanSummary[]> {
   // Only select columns used by rowToSummary — exclude large details/scan_state/player_summary JSONB
   const { data, error } = await getSupabase()
     .from('videoscans')
-    .select('filename, domain, scan_date, pages_scanned, pages_with_video, unique_players, has_report, has_pdf, has_preview, has_preview_pdf, can_resume, batch_id, batch_label, queue_capped, queue_cleared')
+    .select('filename, domain, scan_date, pages_scanned, pages_with_video, unique_players, has_report, has_pdf, has_preview, has_preview_pdf, can_resume, batch_id, batch_label, queue_capped, queue_cleared, scan_mode')
     .eq('archived', false)
     .order('scan_date', { ascending: false });
 
@@ -76,6 +78,7 @@ export async function dbUpsertVideoscan(scan: {
   queueCleared: boolean;
   batchId?: string;
   batchLabel?: string;
+  scanMode?: string;
 }): Promise<void> {
   const { error } = await getSupabase()
     .from('videoscans')
@@ -99,6 +102,7 @@ export async function dbUpsertVideoscan(scan: {
         queue_cleared: scan.queueCleared,
         batch_id: scan.batchId ?? null,
         batch_label: scan.batchLabel ?? null,
+        scan_mode: scan.scanMode ?? null,
       },
       { onConflict: 'filename' }
     );

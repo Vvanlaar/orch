@@ -126,6 +126,8 @@ export interface VideoscanOptions {
   targetFilename?: string;
   batchId?: string;
   batchLabel?: string;
+  /** Crawl only: scan.mjs refuses a mode with --urls. A resume keeps the file's own mode. */
+  mode?: 'sovereignty';
 }
 
 export async function runVideoscan(taskId: number, options: VideoscanOptions): Promise<VideoscanResult> {
@@ -163,6 +165,7 @@ async function scanAndReport(taskId: number, options: VideoscanOptions): Promise
   if (options.delay) args.push('--delay', String(options.delay));
   if (options.batchId) args.push('--batch-id', options.batchId);
   if (options.batchLabel) args.push('--batch-label', options.batchLabel);
+  if (options.mode && !tempUrlFile && !options.resumeFile) args.push('--mode', options.mode);
 
   // Per-task control file for live concurrency/delay overrides
   const controlFile = controlFilePath(taskId);
@@ -170,7 +173,7 @@ async function scanAndReport(taskId: number, options: VideoscanOptions): Promise
   args.push('--control-file', controlFile);
   controlFiles.set(taskId, controlFile);
 
-  log.info(`Task #${taskId} Starting videoscan: ${tempUrlFile ? `${options.urls!.length} explicit URLs` : options.scanUrl} (max ${options.maxPages || 50} pages)`);
+  log.info(`Task #${taskId} Starting videoscan: ${tempUrlFile ? `${options.urls!.length} explicit URLs` : options.scanUrl} (max ${options.maxPages || (options.mode ? 500 : 50)} pages${options.mode ? `, ${options.mode}` : ''})`);
 
   const startedAtMs = Date.now();
   return new Promise((resolve) => {
@@ -1034,6 +1037,8 @@ export interface ScanSummary {
   queueCapped?: boolean;
   /** Wrap-up emptied a queue the crawl had left: not fully covered, though it reads as done. */
   queueCleared?: boolean;
+  /** scan.mjs --mode the scan ran in; absent for a plain videoscan. */
+  scanMode?: 'sovereignty';
 }
 
 /** What a listing takes from inside the scan JSON; the has* flags are other files in the dir. */
@@ -1095,6 +1100,7 @@ function summarizeScanJson(filename: string, size: number): ScanJsonSummary {
       ...(typeof data.batchLabel === 'string' && data.batchLabel ? { batchLabel: data.batchLabel } : {}),
       ...(data.queueCapped === true ? { queueCapped: true } : {}),
       ...(data.queueCleared === true ? { queueCleared: true } : {}),
+      ...(data.mode === 'sovereignty' ? { scanMode: 'sovereignty' as const } : {}),
     };
   } catch {
     return unknownScan(filename);
@@ -1145,6 +1151,7 @@ function summarizeScanJsonEnds(filename: string, path: string, size: number): Sc
     ...(batchLabel ? { batchLabel } : {}),
     ...(top('queueCapped', 'true') !== undefined ? { queueCapped: true } : {}),
     ...(top('queueCleared', 'true') !== undefined ? { queueCleared: true } : {}),
+    ...(str('mode') === 'sovereignty' ? { scanMode: 'sovereignty' as const } : {}),
   };
 }
 

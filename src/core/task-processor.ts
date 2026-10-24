@@ -394,6 +394,7 @@ async function processVideoscan(task: Task): Promise<void> {
         targetFilename: ctx.targetFilename,
         batchId: ctx.batchId,
         batchLabel: ctx.batchLabel,
+        mode: ctx.scanMode,
       });
     } catch (err) {
       result = { success: false, error: err instanceof Error ? err.message : String(err) };
