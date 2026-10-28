@@ -834,7 +834,8 @@ export interface WrapUpResult {
   mergedDomains: string[];
 }
 
-async function ensureLocal(filenames: string[]): Promise<void> {
+/** Fetches scan files missing on disk from Supabase storage. */
+export async function ensureLocal(filenames: string[]): Promise<void> {
   for (const f of filenames) {
     if (existsSync(join(VIDEOSCAN_DIR, f))) continue;
     const ok = await downloadFile(f, VIDEOSCAN_DIR);

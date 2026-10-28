@@ -28,6 +28,7 @@
   // consent, hosts → operator (scan.mjs --mode sovereignty). A quick scan.
   let scanMode = $state<ScanMode>('video');
   const DEFAULT_PAGES: Record<ScanMode, number> = { video: 20000, sovereignty: 500 };
+  const BBCORE_TITLE = 'Started from bb-core: a bb-core job follows this scan and gets its result';
   const SOVEREIGNTY_TITLE = 'Sovereignty scan: all players per page, requests and cookies before and after consent, hosts resolved to operator and country';
   function setScanMode(mode: ScanMode) {
     scanMode = mode;
@@ -974,6 +975,9 @@
             {#each activeItems as item (item.kind === 'batch' ? `b:${item.batchId}` : `t:${item.task.id}`)}
               {#if item.kind === 'batch'}
                 <div class="side-item">
+                  {#if item.tasks.some(t => t.context?.bbCoreJobId)}
+                    <span class="sc-bbcore side-bbcore" title={BBCORE_TITLE}>via bb-core</span>
+                  {/if}
                   <VideoscanLiveBatch batchId={item.batchId} label={item.label} tasks={item.tasks} />
                 </div>
               {:else}
@@ -981,6 +985,9 @@
                 {@const output = getTaskOutput(task.id)}
                 {@const exp = isExpanded(task.id)}
                 <div class="side-item">
+                  {#if task.context?.bbCoreJobId}
+                    <span class="sc-bbcore side-bbcore" title={BBCORE_TITLE}>via bb-core</span>
+                  {/if}
                   <VideoscanLiveProgress {task} expanded={exp} onToggleExpand={() => toggleExpanded(task.id)} />
                   {#if exp && output}
                     <pre class="side-out">{output}</pre>
@@ -1037,6 +1044,9 @@
                     {task.status === 'completed' ? '✓' : '✗'}
                   </span>
                   <span class="side-title">#{task.id} {task.context?.title || 'Videoscan'}</span>
+                  {#if task.context?.bbCoreJobId}
+                    <span class="sc-bbcore" title={BBCORE_TITLE}>via bb-core</span>
+                  {/if}
                 </button>
                 {#if exp && (output || task.result)}
                   <pre class="side-out">{output || task.result}</pre>
@@ -1723,6 +1733,22 @@
     border-radius: 4px;
   }
 
+  .sc-bbcore {
+    flex-shrink: 0;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    padding: 1px 6px;
+    border-radius: 4px;
+    cursor: help;
+  }
+  .side-bbcore {
+    display: inline-block;
+    margin: 6px 14px 0;
+  }
   .sc-mode {
     font-size: 9px;
     font-weight: 700;

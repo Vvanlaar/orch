@@ -56,6 +56,8 @@ export interface Task {
     urls?: string[];
     batchId?: string;
     batchLabel?: string;
+    /** Started by a bb-core job (orch runs as a bb-core runner) */
+    bbCoreJobId?: string;
     /** @deprecated auto-tuned at runtime — kept for legacy task rows */
     concurrency?: number;
   };

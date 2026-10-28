@@ -76,6 +76,9 @@ export interface TaskContext {
   batchLabel?: string; // human-readable label for the batch group header
   scanMode?: 'sovereignty'; // scan.mjs --mode; a resume takes it from the scan file
   targetMachineId?: string; // pin task to a specific machine; only that machine claims it
+  // bb-core runner
+  bbCoreJobId?: string; // the bb-core job this task runs for
+  bbCoreReported?: boolean; // the job's outcome reached bb-core (or the job was gone)
 }
 
 export interface Config {
@@ -124,6 +127,11 @@ export interface Config {
     autoInvestigate: boolean;
     investigateProperty: string;
     scanIntervalMs: number;
+  };
+  bbCore: {
+    // Both set = orch runs as a bb-core runner (src/core/bbcore-runner.ts)
+    url: string;
+    runnerKey: string;
   };
 }
 

@@ -10,7 +10,8 @@ const hostOf = (url) => bare(new URL(url).hostname);
  * Per host: its root URL is a crawl seed, anything else is scanned as the
  * listed pages only (a login page or one municipality's path on a supplier's
  * domain is not a reason to crawl the whole host). Mirrors classifyGroupUrls in
- * src/dashboard/stores/videoscan.svelte.ts — keep the two in step.
+ * src/dashboard/stores/videoscan.svelte.ts and the server port in
+ * src/core/videoscan-batch-plan.ts — keep them in step.
  */
 export function classifyGroupUrls(urls) {
   const buckets = new Map();

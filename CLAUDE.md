@@ -38,6 +38,7 @@ Single-file Express server (~1200 lines) with WebSocket. All API routes, webhook
 - **github-api.ts** - Octokit wrapper with `GITHUB_TOKEN` PAT + `gh` CLI fallback
 - **orchestrator.ts** - Gathers PRs + work items → Claude prompt → prioritized action list. State machine: `idle → gathering → analyzing → ready`
 - **config.ts** - Env var loading, terminal detection, platform detection
+- **bbcore-runner.ts** / **bbcore-recipes.ts** - bb-core runner: hello heartbeat + long-poll claim against `BB_CORE_URL`; videoscan recipes become tasks tagged `context.bbCoreJobId`
 - **types.ts** - All shared types (`Task`, `TaskContext`, `OrchestratorAction`, `TerminalId`)
 
 ### Dashboard (`src/dashboard/`)
@@ -78,7 +79,7 @@ Ref: https://github.com/orgs/supabase/discussions/45329
 
 ## Key Env Vars
 
-`GITHUB_TOKEN`, `ADO_PAT`, `ADO_ORG`, `REPOS_BASE_DIR` (default `../`), `POLLING_ENABLED` (default `true`), `MAX_CONCURRENT_TASKS` (default `2`), `CLAUDE_TIMEOUT` (default `300000`ms)
+`GITHUB_TOKEN`, `ADO_PAT`, `ADO_ORG`, `REPOS_BASE_DIR` (default `../`), `POLLING_ENABLED` (default `true`), `MAX_CONCURRENT_TASKS` (default `2`), `CLAUDE_TIMEOUT` (default `300000`ms), `BB_CORE_URL` + `BB_CORE_RUNNER_KEY` (both set → orch runs as a bb-core runner offering the videoscan recipes; off otherwise)
 
 ## Generated Files
 

@@ -9,7 +9,6 @@ import path, { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocket, WebSocketServer } from 'ws';
 
-import { killTask } from '../core/claude-runner.js';
 import { config, WORKSPACES_DIR } from '../core/config.js';
 import { cloneRepo, checkoutPRInWorktree } from '../core/git-ops.js';
 import {
@@ -27,17 +26,21 @@ import { startPoller } from '../core/poller.js';
 import { runHubspotInvestigateScan, stampCycleCrash } from '../core/hubspot-poller.js';
 import { getEffectiveRepoMapping, getScannedRepos } from '../core/repo-scanner.js';
 import { getAuthenticatedUser, getPull, listPullReviewComments, listOrgRepos } from '../core/github-api.js';
-import { applyStreamingOutput, approveSuggestion, completeTask, createTask, deleteTask, dismissSuggestion, failTask, getAllTasks, getAllTasksWithOutput, getLatestVideoscanWithBatch, getTask, getTasksByIds, getTasksWithPids, pauseTask, pinTask, retryTask, updateTaskContext, updateTaskRepoPath, updateTaskStatus } from '../core/task-queue.js';
+import { applyStreamingOutput, approveSuggestion, completeTask, createTask, deleteTask, dismissSuggestion, getAllTasks, getAllTasksWithOutput, getLatestVideoscanWithBatch, getTask, getTasksByIds, getTasksWithPids, pauseTask, pinTask, retryTask, updateTaskContext, updateTaskRepoPath, updateTaskStatus } from '../core/task-queue.js';
 import { checkpointElsewhere, retryRefusal } from '../core/task-pin.js';
 import { initSettings } from '../core/settings.js';
 import { isSupabaseConfigured, MACHINE_ID } from '../core/db/client.js';
 import { dbGetNotifications, dbInsertNotification } from '../core/db/notifications.js';
-import { killStrayTaskProcess, setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
-import { getVideoscanDir, isDerivedScan, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, killVideoscan, pauseVideoscan, findScanFileOfRun, scanDomain, isVideoscanRunning, deleteScans, wrapUpBatch, type ReportOptions } from '../core/videoscan-runner.js';
+import { setOutputCallback, setTaskUpdateCallback, startProcessor, steerTask, triggerUpdate } from '../core/task-processor.js';
+import { getVideoscanDir, isDerivedScan, listScans, mergeScans, generateReport, generatePreview, syncScanToSupabase, pauseVideoscan, findScanFileOfRun, scanDomain, isVideoscanRunning, deleteScans, wrapUpBatch, type ReportOptions } from '../core/videoscan-runner.js';
 import { getClosedBatches, markBatchClosed, markBatchOpen } from '../core/batch-state.js';
+import { startVideoscanTask, startVideoscanUrlsTask, VideoscanRequestError } from '../core/videoscan-start.js';
+import { importDigitoegankelijk } from '../core/digitoegankelijk.js';
+import { stopRunningTask } from '../core/task-stop.js';
+import { getBbCoreRunnerState, startBbCoreRunner } from '../core/bbcore-recipes.js';
 import { createSignedUrl, downloadFile } from '../core/db/storage.js';
 import { dbArchiveVideoscans } from '../core/db/videoscans.js';
-import type { TerminalId } from '../core/types.js';
+import type { Task, TerminalId } from '../core/types.js';
 import { getCurrentAdoUser, getMyAdoWorkItems, getMyGitHubPRs, getMyResolvedWorkItems, getResolvedWithPRComments, getReviewedItemsInSprint, getTeamMembers, getWorkItemsBySprints, type OwnerFilter } from '../core/user-items.js';
 import { startNtfyListener } from '../core/ntfy-listener.js';
 import { acceptAction, dismissAction, getOrchestratorState, runChatQuery, runOrchestrator, setNotificationGetter, setOrchestratorUpdateCallback } from '../core/orchestrator.js';
@@ -360,17 +363,7 @@ app.post('/api/tasks/:id/stop', asyncHandler(async (req, res) => {
     res.status(400).json({ error: 'Task not running' });
     return;
   }
-  const isLocal = !task.machineId || task.machineId === MACHINE_ID;
-  let killError: string | undefined;
-  if (isLocal) {
-    const killed = task.type === 'videoscan' ? killVideoscan(id) : killTask(id);
-    // Fallback when typed-kill no-ops (process spawned by a prior server instance).
-    if (!killed) killError = await killStrayTaskProcess(task);
-  }
-  const failReason = killError
-    ? `Stop requested but process ${task.pid} still alive: ${killError}`
-    : isLocal ? 'Stopped by user' : `Stopped by user (was remote on ${task.machineId})`;
-  await failTask(id, failReason);
+  const killError = await stopRunningTask(task, 'user');
   await broadcastTasks([id]);
   if (killError) {
     res.status(500).json({ success: false, error: killError, stillAlive: true });
@@ -1109,6 +1102,11 @@ app.get('/api/config/machine-id', (_req, res) => {
   res.json({ machineId: MACHINE_ID });
 });
 
+// bb-core runner connection (null when BB_CORE_URL/BB_CORE_RUNNER_KEY are unset)
+app.get('/api/config/bbcore', (_req, res) => {
+  res.json({ runner: getBbCoreRunnerState() });
+});
+
 app.get('/api/config/terminal', (_req, res) => {
   const preferred = getTerminalPreference();
   const interactiveSession = getTerminalInteractiveSession();
@@ -1767,65 +1765,31 @@ app.post('/api/actions/review-resolution', asyncHandler(async (req, res) => {
 // --- Videoscan API ---
 
 app.post('/api/actions/start-videoscan', asyncHandler(async (req, res) => {
-  const { url, maxPages, delay, batchId, batchLabel, mode } = req.body;
-  if (!url || typeof url !== 'string') {
-    res.status(400).json({ error: 'url required' });
-    return;
-  }
-  try { new URL(url); } catch { res.status(400).json({ error: 'Invalid URL' }); return; }
-  if (mode !== undefined && mode !== 'sovereignty') {
-    res.status(400).json({ error: 'mode must be "sovereignty" or absent' });
-    return;
-  }
-  const sovereignty = mode === 'sovereignty';
-
-  const task = await createTask('videoscan', url, getVideoscanDir(), {
-    source: 'github', // placeholder — videoscan has no source
-    event: 'videoscan',
-    title: `${sovereignty ? 'Sovereignty scan' : 'Videoscan'}: ${new URL(url).hostname}`,
-    scanUrl: url,
-    // A sovereignty scan is a quick scan
-    maxPages: maxPages || (sovereignty ? 500 : 50),
-    ...(sovereignty ? { scanMode: 'sovereignty' as const } : {}),
-    delay: delay ?? 200,
-    ...(typeof batchId === 'string' && batchId ? { batchId } : {}),
-    ...(typeof batchLabel === 'string' && batchLabel ? { batchLabel } : {}),
-  });
-  triggerUpdate();
-  await broadcastTasks([task.id]);
-  res.json({ taskId: task.id, message: `Videoscan task #${task.id} created` });
+  await startVideoscanRoute(res, () => startVideoscanTask(req.body ?? {}), task => `Videoscan task #${task.id} created`);
 }));
 
 app.post('/api/actions/start-videoscan-urls', asyncHandler(async (req, res) => {
-  const { urls, maxPages, delay, batchId, batchLabel, mode } = req.body;
-  // scan.mjs runs a mode on a crawl only (it seeds the crawl with known video pages instead)
-  if (mode !== undefined) {
-    res.status(400).json({ error: 'mode is only supported for a crawl (start-videoscan)' });
-    return;
-  }
-  if (!Array.isArray(urls) || urls.length === 0 || urls.length > 500) {
-    res.status(400).json({ error: 'urls must be an array of 1-500 URLs' });
-    return;
-  }
-  const invalidUrl = urls.find((u: string) => { try { new URL(u); return false; } catch { return true; } });
-  if (invalidUrl) { res.status(400).json({ error: `Invalid URL: ${invalidUrl}` }); return; }
+  await startVideoscanRoute(res, () => startVideoscanUrlsTask(req.body ?? {}),
+    task => `Videoscan task #${task.id} created for ${new URL(task.context.scanUrl!).hostname} (${task.context.urls!.length} URLs)`);
+}));
 
-  const domain = new URL(urls[0]).hostname;
-  const task = await createTask('videoscan', urls[0], getVideoscanDir(), {
-    source: 'github',
-    event: 'videoscan',
-    title: `Videoscan: ${domain} (${urls.length} URLs)`,
-    scanUrl: urls[0],
-    urls,
-    maxPages: maxPages || 50,
-    delay: delay ?? 200,
-    ...(typeof batchId === 'string' && batchId ? { batchId } : {}),
-    ...(typeof batchLabel === 'string' && batchLabel ? { batchLabel } : {}),
-  });
+async function startVideoscanRoute(
+  res: express.Response,
+  start: () => Promise<Task>,
+  message: (task: Task) => string,
+): Promise<void> {
+  let task;
+  try {
+    task = await start();
+  } catch (err) {
+    if (!(err instanceof VideoscanRequestError)) throw err;
+    res.status(err.status).json({ error: err.message });
+    return;
+  }
   triggerUpdate();
   await broadcastTasks([task.id]);
-  res.json({ taskId: task.id, message: `Videoscan task #${task.id} created for ${domain} (${urls.length} URLs)` });
-}));
+  res.json({ taskId: task.id, message: message(task) });
+}
 
 app.post('/api/actions/resume-videoscan', asyncHandler(async (req, res) => {
   const { maxPages, delay } = req.body;
@@ -2141,156 +2105,13 @@ app.post('/api/videoscans/generate-preview', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-function parseCsvLine(line: string): string[] {
-  const fields: string[] = [];
-  let current = '';
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (inQuotes) {
-      if (ch === '"' && line[i + 1] === '"') { current += '"'; i++; }
-      else if (ch === '"') { inQuotes = false; }
-      else { current += ch; }
-    } else {
-      if (ch === '"') { inQuotes = true; }
-      else if (ch === ',') { fields.push(current.trim()); current = ''; }
-      else { current += ch; }
-    }
-  }
-  fields.push(current.trim());
-  return fields;
-}
-
-function ensureHttp(url: string): string {
-  return /^https?:\/\//.test(url) ? url : `https://${url}`;
-}
-
 app.post('/api/videoscans/import-digitoegankelijk', asyncHandler(async (req, res) => {
-  const { id } = req.body;
-  if (!Number.isInteger(id) || id < 1 || id > 999999) {
-    res.status(400).json({ error: 'id must be a positive integer' });
-    return;
+  try {
+    res.json(await importDigitoegankelijk(req.body?.id));
+  } catch (err) {
+    if (!(err instanceof VideoscanRequestError)) throw err;
+    res.status(err.status).json({ error: err.message });
   }
-
-  const csvUrl = `https://dashboard.digitoegankelijk.nl/organisaties/download/${id}`;
-  const csvRes = await fetch(csvUrl, { signal: AbortSignal.timeout(15_000) });
-  if (!csvRes.ok) {
-    res.status(502).json({ error: `Failed to fetch CSV: HTTP ${csvRes.status}` });
-    return;
-  }
-  const MAX_CSV_SIZE = 5 * 1024 * 1024;
-  const contentLength = parseInt(csvRes.headers.get('content-length') || '0', 10);
-  if (contentLength > MAX_CSV_SIZE) {
-    res.status(413).json({ error: 'CSV too large' });
-    return;
-  }
-  const csvText = await csvRes.text();
-  if (csvText.length > MAX_CSV_SIZE) {
-    res.status(413).json({ error: 'CSV too large' });
-    return;
-  }
-  const lines = csvText.split('\n').filter(l => l.trim());
-  if (lines.length < 2) {
-    res.status(400).json({ error: 'CSV has no data rows' });
-    return;
-  }
-
-  const headers = parseCsvLine(lines[0]);
-  const nameIdx = headers.findIndex(h => /^naam/i.test(h));
-  // Some exports carry the organisation itself as a column. Prefer it over any
-  // guess we make from the rows — but never confuse it with "Naam", which names
-  // the *website* on that row, not its owner.
-  // Anchored at both ends: a prefix match also hits "Organisatietype" and
-  // "Organisatiecode", which would name every batch after a category ("Gemeente")
-  // rather than an organisation.
-  const orgIdx = headers.findIndex(h => /^(organisatie|organization|instantie|bedrijf)$/i.test(h.trim()));
-  let urlIdx = headers.findIndex(h => /^url$/i.test(h));
-  const typeIdx = headers.findIndex(h => /site of app/i.test(h));
-  const statusIdx = headers.findIndex(h => /^status/i.test(h));
-
-  // "Naam/URL" combined header → col 0 = name, col 1 = url
-  if (urlIdx === -1 && nameIdx !== -1 && /\/url/i.test(headers[nameIdx])) {
-    urlIdx = nameIdx + 1;
-  }
-
-  // Last resort: find first column whose data looks like a URL
-  if (urlIdx === -1) {
-    const sample = parseCsvLine(lines[1]);
-    urlIdx = sample.findIndex(f => /^https?:\/\//i.test(f));
-  }
-
-  if (urlIdx === -1) {
-    res.status(400).json({ error: 'CSV missing URL column' });
-    return;
-  }
-
-  let skippedApps = 0;
-  const sites: { name: string; url: string; status: string; rootDomain: string; org: string }[] = [];
-
-  for (let i = 1; i < lines.length; i++) {
-    const fields = parseCsvLine(lines[i]);
-    if (typeIdx !== -1 && /app/i.test(fields[typeIdx] || '')) {
-      skippedApps++;
-      continue;
-    }
-    const siteUrl = fields[urlIdx] || '';
-    if (!siteUrl) continue;
-    let hostname: string;
-    try { hostname = new URL(ensureHttp(siteUrl)).hostname; } catch { continue; }
-    const parts = hostname.replace(/^www\./, '').split('.');
-    const rootDomain = parts.length >= 2 ? parts.slice(-2).join('.') : hostname;
-    sites.push({
-      name: nameIdx !== -1 ? (fields[nameIdx] || '') : '',
-      url: ensureHttp(siteUrl),
-      status: statusIdx !== -1 ? (fields[statusIdx] || '') : '',
-      rootDomain,
-      org: orgIdx !== -1 ? (fields[orgIdx] || '').trim() : '',
-    });
-  }
-
-  // Group by root domain
-  const groupMap = new Map<string, typeof sites>();
-  for (const site of sites) {
-    if (!groupMap.has(site.rootDomain)) groupMap.set(site.rootDomain, []);
-    groupMap.get(site.rootDomain)!.push(site);
-  }
-
-  const groups = [...groupMap.entries()]
-    // Site count first, then domain name, so a tie resolves the same way every
-    // time instead of by CSV row order — orgName below reads groups[0].
-    .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
-    .map(([rootDomain, domainSites]) => ({
-      rootDomain,
-      sites: domainSites.map(({ name, url, status }) => ({ name, url, status })),
-    }));
-
-  // The organisation this import is named after. `Naam` is the name of the
-  // website on that row, so reading row 0 named whole batches after whichever
-  // site happened to sort first \u2014 a Krimpenerwaard import came out as
-  // "Agenda vergaderingen Krimpenerwaard", and that name propagates all the way
-  // into the merged scan's filename and the dashboard's domain column.
-  //
-  // Prefer an explicit organisation column; otherwise fall back to the domain
-  // the most sites share, which is what the batch actually spans (four of
-  // Krimpenerwaard's eight sites sit on krimpenerwaard.nl). `groups` is sorted
-  // by site count, so groups[0] is that domain.
-  //
-  // The fallback is only taken when one domain OUTNUMBERS the rest. On a tie
-  // there is no dominant domain to speak of, and picking either one would be the
-  // same arbitrary choice this replaced — so the import stays explicitly unnamed
-  // instead of asserting something wrong.
-  //
-  // Known limit: this names the batch after the most common domain, which for an
-  // organisation whose sites are mostly hosted by one supplier is the supplier's
-  // domain, not theirs. An explicit organisation column is the only real fix;
-  // today's digitoegankelijk export has no such column.
-  const orgFromColumn = sites.find(s => s.org)?.org;
-  const hasDominantDomain = groups.length > 0 && (groups.length === 1 || groups[0].sites.length > groups[1].sites.length);
-  // rootDomain is always "name.tld", so the first label is the name.
-  const domainName = hasDominantDomain ? groups[0].rootDomain.split('.')[0] : '';
-  const orgName = orgFromColumn || domainName || `Organisation ${id}`;
-
-  res.json({ orgName, totalSites: sites.length, skippedApps, groups });
 }));
 
 // --- Orchestrator API ---
@@ -2474,4 +2295,6 @@ server.listen(config.server.port, config.server.host, () => {
   }
 
   startNtfyListener();
+
+  if (config.bbCore.url && config.bbCore.runnerKey) startBbCoreRunner(config.bbCore.url, config.bbCore.runnerKey);
 });

@@ -51,6 +51,10 @@ export const config: Config = {
     investigateProperty: envOr('HUBSPOT_INVESTIGATE_PROPERTY', 'ai_investigate_bbsupport'),
     scanIntervalMs: parseInt(envOr('HUBSPOT_SCAN_INTERVAL_MS', '600000')),
   },
+  bbCore: {
+    url: envOr('BB_CORE_URL', ''),
+    runnerKey: envOr('BB_CORE_RUNNER_KEY', ''),
+  },
 };
 
 export const WORKSPACES_DIR = path.resolve(
