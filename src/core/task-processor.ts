@@ -788,6 +788,8 @@ async function resolveDeadVideoscan(t: Task, why: string): Promise<void> {
         resumeFile: resumePath,
         ...(t.context.batchId ? { batchId: t.context.batchId } : {}),
         ...(t.context.batchLabel ? { batchLabel: t.context.batchLabel } : {}),
+        // the bb-core runner follows the job to the resumed task, on this machine
+        ...(t.context.bbCoreJobId ? { bbCoreJobId: t.context.bbCoreJobId, targetMachineId: t.context.targetMachineId } : {}),
       });
     } catch (err) {
       // The row is already failed, so nothing retries this: say how to resume by hand.
