@@ -25,14 +25,15 @@ export const DETECTORS = {
   "Blue Billywig": {
     patterns: [
       /bbvms\.com/i,
-      // A subdomain (cdn., stats.): the company's own www. is its website, and
-      // matched every page of bluebillywig.com (19 of 25 without a player)
-      /(?<![\w.-])(?!www\.)[\w-]+\.bluebillywig\.com/i,
+      // A subdomain (cdn., stats.). The company's own www. and support. are
+      // websites: www. matched every page of bluebillywig.com (19 of 25 without
+      // a player), also URL-encoded in its share links (%2Fwww.bluebillywig.com)
+      /(?<=[\w-]\.)(?<!(?:www|support)\.)bluebillywig\.com/i,
       /\.bbvms\./i,
       /bb-player/i,
       /data-bb-/i,
     ],
-    scripts: [/bbvms\.com/i, /(?<![\w.-])(?!www\.)[\w-]+\.bluebillywig\.com/i, /\/bluebillywig\//i],
+    scripts: [/bbvms\.com/i, /(?<=[\w-]\.)(?<!(?:www|support)\.)bluebillywig\.com/i, /\/bluebillywig\//i],
   },
   Brightcove: {
     patterns: [
@@ -3062,10 +3063,16 @@ async function finishSovereignty() {
 // must follow whitespace (not data-href); \\\" covers HTML inside a JSON prop.
 const ESCAPED_ANCHOR_HREF =
   /(\\u003ca(?:\s|\\[nrt])(?:(?!\\u003[ce]).)*?)(?<=\s|\\[nrt])href\s*=\s*(?:\\\\)*\\"[^"]*?(?:\\\\)*\\"/gi;
+// A CMS link object in the payload is the same anchor before rendering:
+// louwmanmuseum.nl's "video op YouTube bekijken" link is also
+// `"externalLink":{"value":"https://www.youtube.com/embed/…"}`, and a page with
+// no player graded the whole site E.
+const JSON_LINK_OBJECT = /"externalLink\\*"\s*:\s*\{[^{}<]*\}/g;
 function stripAnchorHrefs(html) {
   return html
     .replace(/(<a\b[^>]*?)\s+href\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "$1")
-    .replace(ESCAPED_ANCHOR_HREF, "$1");
+    .replace(ESCAPED_ANCHOR_HREF, "$1")
+    .replace(JSON_LINK_OBJECT, "");
 }
 
 // Strip IE downlevel-hidden conditional comments (`<!--[if ...]> ... <![endif]-->`).
@@ -3551,8 +3558,8 @@ export function loadSeeds(from, url, dir = ".") {
   try {
     const prev = JSON.parse(readFileSync(file, "utf-8"));
     // Pages with network evidence first: a page budget can end long before the
-    // real embeds of an older scan's weak matches (louwmanmuseum.nl: 1604
-    // string-only pages ahead of 13 real YouTube embeds, none reached in 60)
+    // stronger pages of an older scan's weak matches (louwmanmuseum.nl: 1604
+    // string-only pages ahead of 13 with a network hit, none reached in 60)
     const hasNetwork = (d) => (d.players || []).some((p) => String(p.evidence).includes("Network:"));
     const details = prev.details || [];
     const urls = [...details.filter(hasNetwork), ...details.filter((d) => !hasNetwork(d))].map((d) => d.url);

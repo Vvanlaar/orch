@@ -169,6 +169,10 @@ test("Blue Billywig detector: the company's own website is not a player", () => 
   const hit = (s) => [...bb.patterns, ...bb.scripts].some((re) => re.test(s));
   assert.equal(hit("https://www.bluebillywig.com/nl/workshops"), false);
   assert.equal(hit("https://bluebillywig.com/"), false);
+  assert.equal(hit("https%3A%2F%2Fwww.bluebillywig.com%2Fnl"), false);
+  assert.equal(hit("https://support.bluebillywig.com/kb/x"), false);
+  assert.equal(hit("https%3A%2F%2Fcdn.bluebillywig.com%2Fp.js"), true);
+  assert.equal(hit("https://a.cdn.bluebillywig.com/p.js"), true);
   assert.equal(hit("https://cdn.bluebillywig.com/apps/player.js"), true);
   assert.equal(hit("https:\\/\\/stats.bluebillywig.com\\/x"), true);
   assert.equal(hit("https://d2rvackbgybhru.cloudfront.net/bluebillywig/media/a.mp4"), true);

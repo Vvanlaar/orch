@@ -192,6 +192,22 @@ test("JSON-escaped Blue Billywig embed script still detected", () => {
   assert.deepEqual(names(detectFromCorpus(payload)), ["Blue Billywig"]);
 });
 
+test("CMS link object in a payload is a link, not an embed", () => {
+  const link = '\\\\\\"displayAs\\\\\\":\\\\\\"link\\\\\\",\\\\\\"externalLink\\\\\\":{\\\\\\"openInNewTab\\\\\\":false,\\\\\\"value\\\\\\":\\\\\\"https://www.youtube.com/embed/UFkmTZ2S1cc\\\\\\"},\\\\\\"internalLink\\\\\\":null';
+  assert.deepEqual(names(detectFromCorpus(link)), []);
+  assert.deepEqual(names(detectFromCorpus('"externalLink":{"value":"https://www.youtube.com/embed/UFkmTZ2S1cc"}')), []);
+  // The same URL in a real embed still counts
+  assert.deepEqual(names(detectFromCorpus('"externalLink":{"value":"x"}<iframe src="https://www.youtube.com/embed/UFkmTZ2S1cc"></iframe>')), ["YouTube"]);
+  // An unclosed object doesn't swallow the markup after it
+  assert.deepEqual(names(detectFromCorpus('"externalLink":{"value":"x"</script><iframe src="https://www.youtube.com/embed/UFkmTZ2S1cc"></iframe><script>}')), ["YouTube"]);
+});
+
+test("CMS link stripping stays linear on a long backslash run", () => {
+  const t0 = performance.now();
+  detectFromCorpus("\\".repeat(200000));
+  assert.ok(performance.now() - t0 < 2000, "a backslash run went superlinear");
+});
+
 test("JSON-escaped anchor: data-href first, double-escaped prop HTML", () => {
   const dataHref = nextPayload('<a data-href="#" href="https://cbr.bbvms.com/p/x.html">video</a>');
   assert.deepEqual(names(detectFromCorpus(dataHref)), []);
