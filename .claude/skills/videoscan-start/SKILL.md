@@ -78,6 +78,12 @@ delivery rather than which pages have video.
   reporting it: a "YouTube embed" has turned out to be a plain link.
 - **Do not read a sovereignty grade from a thin sample as fact.** Say how many
   media requests D rests on.
+- **"HTML5 native" means no vendor was recognised, not self-hosted.** Check a busy
+  media host's response headers: `videoplayer.thejournal.ie` answers `server:
+  Cloudinary`, and `*.cdn.redbee.live` is a vendor's domain.
+- **A site that rate limits can still fail the sample passes.** They run after the
+  crawl, so `--delay` protects the crawl only: `thejournal.ie` at 3s and 200 pages
+  lost all its play pages and 12 of 20 pre-consent pages to 429s. Report that.
 - **A merge loses the measurements.** Once a batch has two completed scans the
   service merges them, the merged file has no `sovereignty` block, and it reads as
   desk-only. The sources move to `videoscans/archived/`: read the grade from those.
