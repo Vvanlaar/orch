@@ -499,7 +499,9 @@ export const DETECTORS = {
     // `window.VIDEOJS_NO_DYNAMIC_STYLE = true` sits on every page of a site that
     // loads video.js site-wide (haarlemmerliederaad.haarlemmermeer.nl flagged
     // 5,833 pages without a <video>), and it is markup, so NEEDS_MARKUP lets it by.
-    patterns: [/(?<![\w-])video\.js\b/i, /videojs(?!_NO_DYNAMIC_STYLE)/i, /(?:^|[\s"'\/.])vjs-/i, /(?<![\w-])video-js\b/i],
+    // Nor the start of "VideoJson": a Next.js component `EmbedMediaVideoJsonLd` in
+    // rtbf.be's payload flagged 32 pages.
+    patterns: [/(?<![\w-])video\.js\b/i, /videojs(?!on|_NO_DYNAMIC_STYLE)/i, /(?:^|[\s"'\/.])vjs-/i, /(?<![\w-])video-js\b/i],
     // `scripts` patterns see the request URL without its query string (see
     // detectPlayers), so a query blob can no longer reach them. Residual: `_` and
     // `-` are in the base64url alphabet, so a path segment like `…_vjs_…` can
@@ -1299,6 +1301,8 @@ export const CONSENT_SELECTORS = [
   "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
   // Cookiebot's newer dialog: stedelijk.nl, labelled "Allow all" in an English browser
   "#CybotCookiebotDialogBodyButtonAccept",
+  // Google Funding Choices, labelled "Consent": thejournal.ie
+  ".fc-cta-consent",
   'button:has-text("Accepteren")',
   'button:has-text("Alle cookies accepteren")',
   'button:has-text("Alle cookies")',
@@ -1632,6 +1636,8 @@ const WAF_TITLE_PATTERNS = [
   /checking your browser/i, /ddos protection/i,
 ];
 
+const EMPTY_RATE_LIMIT = "HTTP rate limit with an empty body:";
+
 const CONNECTION_ERROR_PATTERNS = [
   'ERR_CONNECTION_REFUSED', 'ERR_CONNECTION_RESET', 'ERR_CONNECTION_CLOSED',
   'ECONNRESET', 'ECONNREFUSED',
@@ -1647,6 +1653,7 @@ const CONNECTION_ERROR_PATTERNS = [
   // the periodic browser recycle usually clear it.
   'ERR_NAME_NOT_RESOLVED', 'ERR_NAME_RESOLUTION_FAILED', 'ERR_NETWORK_CHANGED',
   'ERR_INTERNET_DISCONNECTED',
+  EMPTY_RATE_LIMIT,
 ];
 
 function detectConnectionRateLimit(err) {
@@ -1744,8 +1751,22 @@ async function passAnubis(page, timeout) {
   anubisCookies = (await page.context().cookies().catch(() => [])).filter((c) => /anubis/i.test(c.name));
 }
 
+// A 429 with an empty body never becomes a response for page.goto: Chrome reports
+// ERR_HTTP_RESPONSE_CODE_FAILURE, and only the response event knows the status.
+// thejournal.ie: 403 of 412 pages lost this way, with no back-off at all.
+export function isEmptyRateLimit(err, status) {
+  return (status === 429 || status === 503) && /ERR_HTTP_RESPONSE_CODE_FAILURE/.test(err?.message || "");
+}
+
 async function gotoResilient(page, url, timeout) {
-  const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout });
+  let status;
+  const onResponse = (r) => {
+    if (r.request().isNavigationRequest() && r.frame() === page.mainFrame()) status = r.status();
+  };
+  page.on("response", onResponse);
+  const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout }).catch((err) => {
+    throw isEmptyRateLimit(err, status) ? new Error(`${EMPTY_RATE_LIMIT} ${status}`) : err;
+  }).finally(() => page.off("response", onResponse));
   await passAnubis(page, timeout);
   await page
     .waitForLoadState("networkidle", { timeout: Math.min(8000, timeout) })
@@ -1945,7 +1966,10 @@ async function scanFirstPageIn(context, url, timeout) {
     // The crawl record of this page is the consented reload; the page without
     // consent comes from the pre sample
     capture?.reset();
-    await gotoResilient(page, url, timeout);
+    await gotoResilient(page, url, timeout).catch((err) => {
+      const rlReason = detectConnectionRateLimit(err);
+      throw rlReason ? createRateLimitError(rlReason) : err;
+    });
     // Re-check redirect after post-consent navigation
     try {
       if (didRedirectOffDomain(page, url)) {
@@ -2142,6 +2166,29 @@ function buildRateLimits(throttle) {
     events: throttle.events.map(e => ({ time: new Date(e.time).toISOString(), url: e.url, reason: e.reason })),
   };
 }
+
+// The first page is the one visit that captures consent: a retry through the
+// crawl loop would scan the whole site without it, and a site that only shows
+// video after consent would read as having none.
+const FIRST_PAGE_RETRIES = 3;
+const FIRST_PAGE_WAIT_MS = 20_000;
+async function scanFirstPageRetrying(browser, url, timeout, throttle) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await scanFirstPage(browser, url, timeout);
+    } catch (err) {
+      if (!err._rateLimit || attempt >= FIRST_PAGE_RETRIES) throw err;
+      onRateLimit(throttle, url, err._rateLimit);
+      await sleep(Math.max(throttle.delay, FIRST_PAGE_WAIT_MS));
+    }
+  }
+}
+
+// Rate-limit answers in a row with no page served between them: the site is
+// blocking this crawl, and every queued URL would still get its retries at 30s
+// each. A page served resets the count, so a site that only limits bursts is
+// not stopped.
+export const BLOCKED_STOP_HITS = 15;
 
 function onRateLimit(throttle, url, reason) {
   throttle.rateLimitHits++;
@@ -2678,7 +2725,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
       chalk.gray(`[${visited.size}/${maxPages}] `) + chalk.white(truncate(firstUrl, 80)) + " "
     );
     try {
-      const first = await scanFirstPage(browser, firstUrl, timeout);
+      const first = await scanFirstPageRetrying(browser, firstUrl, timeout, throttle);
       const { detected, links, skippedReason } = first;
       if (servedPage(first)) refusals.pageLoaded(firstUrl);
       if (skippedReason) {
@@ -2729,7 +2776,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
         onRateLimit(throttle, firstUrl, err._rateLimit);
         visited.delete(firstUrl);
         retryNext.push(firstUrl);
-        console.log(chalk.yellow(`  ⚠ First page rate-limited, will retry`));
+        console.log(chalk.yellow(`  ⚠ First page rate-limited, will retry — without consent: only the first page's visit can capture it`));
       } else {
         console.log(chalk.red(`  ERROR: ${err.message.slice(0, 60)}`));
         results.push({ url: firstUrl, players: [], error: err.message });
@@ -2797,6 +2844,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
   // Used to keep pages/min and ETA accurate after a resume — without this,
   // we'd divide *all* visited pages (including pre-resume ones) by *this run's* elapsed time.
   const resumeBaseline = visited.size;
+  let blockedHits = 0;
 
   while ((queue.length > 0 || seedQueue.length > 0 || refusals.waiting().length > 0) && visited.size < maxPages && !interrupted) {
     // Inter-batch delay (skip first batch)
@@ -2857,6 +2905,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
         }
         results.push({ url, players: detected });
         sovereignty?.recordPage({ url, phase: "crawl", players: detected, capture: result.value.sov });
+        blockedHits = 0;
 
         // Add discovered links to queue
         for (const link of links) {
@@ -2879,6 +2928,7 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
           visited.delete(url);
         } else if (err?._rateLimit) {
           batchHadRateLimit = true;
+          blockedHits++;
           onRateLimit(throttle, url, err._rateLimit);
           visited.delete(url);
           const retries = retryCount.get(url) || 0;
@@ -2894,6 +2944,11 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
           results.push({ url, players: [], error: errMsg });
         }
       }
+    }
+
+    if (blockedHits >= BLOCKED_STOP_HITS) {
+      console.log(chalk.red(`  ✗ Stopped: ${blockedHits} rate-limit answers in a row and no page served. The rest of the queue (${queue.length + retryNext.length}) was not scanned.`));
+      break;
     }
 
     // Re-balance after each batch: new links join their section, and the

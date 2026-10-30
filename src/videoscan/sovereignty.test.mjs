@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CONSENT_SELECTORS, DETECTORS, isBrowserRefusal, loadSeeds, dropEnginesUnderVendors } from "./scan.mjs";
+import { CONSENT_SELECTORS, DETECTORS, isBrowserRefusal, isEmptyRateLimit, loadSeeds, dropEnginesUnderVendors } from "./scan.mjs";
 import { attributeRequest, createSovereigntyCollector, isFirstParty, pickSamples, playVideos, startCapture } from "./sovereignty/collect.mjs";
 import { classifyInfra, classifyService, loadAsnDb, parseAsnDb, resolveDns, resolveHosts } from "./sovereignty/resolve.mjs";
 import { gzipSync } from "node:zlib";
@@ -178,8 +178,18 @@ test("Blue Billywig detector: the company's own website is not a player", () => 
   assert.equal(hit("https://d2rvackbgybhru.cloudfront.net/bluebillywig/media/a.mp4"), true);
 });
 
-test("consent: the scan's selectors find Cookiebot's newer accept button", () => {
+test("consent: the scan's selectors find Cookiebot's newer button and Google Funding Choices", () => {
   assert.ok(CONSENT_SELECTORS.some((s) => s === "#CybotCookiebotDialogBodyButtonAccept"));
+  assert.ok(CONSENT_SELECTORS.some((s) => s === ".fc-cta-consent"));
+});
+
+test("isEmptyRateLimit: a 429 with no body is a rate limit, an empty 404 is not", () => {
+  const empty = new Error("page.goto: net::ERR_HTTP_RESPONSE_CODE_FAILURE at https://x/");
+  assert.equal(isEmptyRateLimit(empty, 429), true);
+  assert.equal(isEmptyRateLimit(empty, 503), true);
+  assert.equal(isEmptyRateLimit(empty, 404), false);
+  assert.equal(isEmptyRateLimit(empty, undefined), false);
+  assert.equal(isEmptyRateLimit(new Error("net::ERR_ABORTED"), 429), false);
 });
 
 test("isBrowserRefusal: a protocol reset is retried, a rate limit or a left page is not", () => {

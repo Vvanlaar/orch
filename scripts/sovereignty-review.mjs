@@ -231,7 +231,8 @@ function printScan(file, scan, vendors) {
   printGapList('Non-public hosts in live pages', gaps.nonPublic, 'the site, not a table', (r) =>
     `${chalk.white(r.host.padEnd(44))} ${String(r.requests).padStart(5)} req`);
 
-  const clean = gaps.resolved && !gaps.unrated.length && !gaps.unresolved.length && !gaps.unattributed.length && !gaps.unsampled.length && !gaps.noPlay.length && !gaps.sampleFailures.length && !gaps.siteWide.length && !gaps.nonPublic.length;
+  if (sov.pages?.crawl === 0) console.log(chalk.bold.red('\n  No page loaded: this run says nothing about the site. Check rate limiting and re-scan.'));
+  const clean = sov.pages?.crawl !== 0 && gaps.resolved && !gaps.unrated.length && !gaps.unresolved.length && !gaps.unattributed.length && !gaps.unsampled.length && !gaps.noPlay.length && !gaps.sampleFailures.length && !gaps.siteWide.length && !gaps.nonPublic.length;
   if (clean) console.log(chalk.green('\n  Nothing unresolved — the tables covered every host and player this run saw.'));
 
   return metrics(file, scan, site, gaps);
