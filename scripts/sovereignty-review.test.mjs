@@ -67,6 +67,40 @@ test("findGaps: a player with no play pages is listed, one with play pages is no
   assert.deepEqual(gaps.noPlay, ["P"]);
 });
 
+test("findGaps: play pages without media hide nothing, whichever phase brought the media", () => {
+  const pages = { crawl: 2, pre: 0, play: 3 };
+  const players = {
+    Idle: { pages, hosts: [], mediaRequests: 0 },
+    Auto: { pages, hosts: [], mediaRequests: 4 },
+    Old: { pages, hosts: [] },
+  };
+  const gaps = findGaps(scanWith({}, players), site([rated("Idle"), rated("Auto"), rated("Old")]), new Map());
+  assert.deepEqual(gaps.noPlay, ["Idle"]);
+});
+
+test("findGaps: a markup-only player on every page is flagged as site-wide, a network hit is not", () => {
+  const row = (name, evidence) => ({ url: "u", players: [{ name, evidence }] });
+  const scan = scanWith({}, {});
+  scan.sovereignty.pages.crawl = 2;
+  scan.details = [row("Shared", "HTML: x"), row("Shared", "HTML: x")];
+  assert.deepEqual(findGaps(scan, site([rated("Shared")]), new Map()).siteWide, ["Shared"]);
+  scan.details = [row("Shared", "HTML: x"), row("Shared", "HTML: x,Network: y")];
+  assert.deepEqual(findGaps(scan, site([rated("Shared")]), new Map()).siteWide, []);
+});
+
+test("findGaps: a .local host is the site's bug, not an operators.json gap", () => {
+  const gaps = findGaps(scanWith({ "bbwlocal.local": host({ eu: null }), localhost: host({ eu: null }), "real.nl": host({ eu: null }) }), site(), new Map());
+  assert.deepEqual(gaps.unresolved.map((u) => u.host), ["real.nl"]);
+  assert.deepEqual(gaps.nonPublic.map((u) => u.host).sort(), ["bbwlocal.local", "localhost"]);
+});
+
+test("metrics: failed sample pages are counted", () => {
+  const scan = scanWith({});
+  scan.sovereignty.sampleFailures = [{ url: "u", phase: "play", error: "boom" }];
+  const gaps = findGaps(scan, site(), new Map());
+  assert.equal(metrics("f.json", scan, site(), gaps).sampleFailures, 1);
+});
+
 test("findGaps: unsampled comes from the measurement, so an unmeasured player is not listed", () => {
   const measured = new Map([["P", { sampled: false }], ["Q", { sampled: true }], ["R", null]]);
   const gaps = findGaps(scanWith({}), site([rated("P"), rated("Q"), rated("R")]), measured);

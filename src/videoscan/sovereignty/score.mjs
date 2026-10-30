@@ -87,8 +87,12 @@ export function measurePlayer(sov, player) {
   return {
     leakPhase: leak,
     // false when no page with this player was loaded in the leak phase (pre
-    // sample skipped, failed or left the player out): T falls back to desk
-    sampled: (p.pages?.[leak] || 0) > 0,
+    // sample skipped, failed or left the player out) or the player sent nothing
+    // in any phase (stedelijk.nl's Vimeo got full marks for a player that never
+    // loaded): T falls back to desk. Quiet in the leak phase but active later is
+    // a clean measurement: a site holding the embed back until consent or a
+    // click. Scans before per-player counts have only the pages.
+    sampled: (p.pages?.[leak] || 0) > 0 && (!p.requests || PHASES.some((ph) => Object.values(p.requests[ph] || {}).some(Boolean))),
     hosts: hosts.sort((a, b) => b.requests - a.requests),
     euShare: eu + nonEu > 0 ? eu / (eu + nonEu) : null,
     unknownRequests: unknown,

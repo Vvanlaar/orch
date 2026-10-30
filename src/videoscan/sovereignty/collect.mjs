@@ -87,9 +87,11 @@ async function readFrameStorage(page) {
 
 /**
  * Start one player on a page, so its media path (manifest, segments, CDN)
- * shows up. Iframe player: a click in the middle of up to 3 iframes that match
- * its detector, plus muted play() inside them. No matching iframe: the player
- * is in the page, so muted play() on the page's own <video> elements.
+ * shows up. Click-to-load link: a click on it, even hidden, since it is the
+ * only way this page ever loads the player. Iframe player: a click in the
+ * middle of up to 3 iframes that match its detector, plus muted play() inside
+ * them. No matching iframe: the player is in the page, so muted play() on the
+ * page's own <video> elements, and a click on those still paused after it.
  * click: false when an activation placeholder already started it — a second
  * click on the playing iframe would pause it.
  */
@@ -99,9 +101,24 @@ export async function playVideos(page, detector, { settleMs = 8000, click = true
     return re.test(src);
   });
   const main = page.mainFrame();
-  const playerFrames = page.frames().filter((f) => f !== main && matches(f.url()));
   let clicked = 0;
-  for (const handle of click ? await page.$$("iframe[src]").catch(() => []) : []) {
+  // data-video-url: normally a script owns this link. Without the attribute it
+  // is likely a plain link to the vendor, and a click would leave the page; if
+  // the script is missing the click still leaves, which scanPageIn catches.
+  // A new tab is out of the capture's sight.
+  for (const handle of click ? await page.$$('a[data-video-url]:not([target="_blank"])').catch(() => []) : []) {
+    if (clicked >= 3) break;
+    const src = (await handle.getAttribute("data-video-url").catch(() => null)) || "";
+    if (!matches(src)) continue;
+    await handle.evaluate((a) => a.click()).catch(() => {});
+    clicked++;
+  }
+  // The link started the player: another click would pause it, or hit a
+  // different player. Its iframe may only just be there.
+  const clickOn = click && !clicked;
+  if (clicked) await page.waitForTimeout(1500);
+  const playerFrames = page.frames().filter((f) => f !== main && matches(f.url()));
+  for (const handle of clickOn ? await page.$$("iframe[src]").catch(() => []) : []) {
     if (clicked >= 3) break;
     const src = (await handle.getAttribute("src").catch(() => null)) || "";
     if (!matches(src)) continue;
@@ -118,6 +135,23 @@ export async function playVideos(page, detector, { settleMs = 8000, click = true
         v.play?.()?.catch?.(() => {});
       }
     }).catch(() => {});
+  }
+  // A player that sets its source on its own play button ignores play(), though
+  // paused turns false on a <video> without a source: the JW Player on
+  // zaanstad.raadsinformatie.nl stayed idle until clicked, its stream never seen.
+  // A video inside a link is a card: a click would leave the page.
+  if (clickOn && !playerFrames.length) {
+    await page.waitForTimeout(500);
+    for (const handle of await page.$$("video").catch(() => [])) {
+      if (clicked >= 3) break;
+      const idle = await handle.evaluate((v) => (v.paused || !v.currentSrc) && !v.closest("a[href]")).catch(() => false);
+      if (!idle) continue;
+      await handle.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+      const box = await handle.boundingBox().catch(() => null);
+      if (!box || box.width < 100 || box.height < 60) continue;
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2).catch(() => {});
+      clicked++;
+    }
   }
   await page.waitForTimeout(settleMs);
   return clicked;
@@ -175,10 +209,12 @@ export function attributeRequest(req, pagePlayers, detectors) {
       if (frame && re.test(frame)) return name;
     }
   }
-  const media = req.type === "media" || /\.(m3u8|mpd|mp4|webm|m4s|ts)$/i.test(url);
-  if (media && pagePlayers.length === 1) return pagePlayers[0];
+  if (isMediaRequest(req) && pagePlayers.length === 1) return pagePlayers[0];
   return null;
 }
+
+/** A manifest, segment or <video> source, not the player's loader or a beacon. */
+const isMediaRequest = (req) => req.type === "media" || /\.(m3u8|mpd|mp4|webm|m4s|ts)$/i.test(stripQuery(req.url));
 
 /**
  * Collector for one scan. `prev` is an earlier run's toJSON() (a resumed
@@ -193,6 +229,7 @@ export function createSovereigntyCollector({ domain, detectors, prev = null }) {
   // accepted: a banner button was clicked. given: that click left consent
   // cookies/storage behind, which every crawl page then carries.
   const meta = { accepted: false, given: false, cookies: 0 };
+  let sampleFailures = []; // not restored: a resumed scan redoes its samples
 
   if (prev) restore(prev);
 
@@ -224,18 +261,23 @@ export function createSovereigntyCollector({ domain, detectors, prev = null }) {
         phases: crawlOnly(p.pages.crawl),
         hosts: new Set(p.hosts.filter((h) => hosts.has(h))),
         requests: { ...emptyRequests(), crawl: { ...p.requests?.crawl } },
+        mediaRequests: 0, // spans phases, so it restarts: samples are redone anyway
       });
     }
   }
 
   function player(name) {
-    if (!players.has(name)) players.set(name, { phases: zero(), hosts: new Set(), requests: emptyRequests() });
+    if (!players.has(name)) players.set(name, { phases: zero(), hosts: new Set(), requests: emptyRequests(), mediaRequests: 0 });
     return players.get(name);
   }
 
   return {
     setConsent({ accepted, given, cookies: count }) {
       Object.assign(meta, { accepted, given, cookies: count });
+    },
+
+    setSampleFailures(failures) {
+      sampleFailures = failures;
     },
 
     /** One page load. players: detectPlayers() output; capture: startCapture().snapshot(). */
@@ -267,6 +309,7 @@ export function createSovereigntyCollector({ domain, detectors, prev = null }) {
           const p = player(owner);
           p.hosts.add(host);
           p.requests[reqPhase][host] = (p.requests[reqPhase][host] || 0) + 1;
+          if (isMediaRequest(req)) p.mediaRequests++;
         }
         const example = stripQuery(req.url).slice(0, 150);
         if (h.examples.length < MAX_EXAMPLES && !h.examples.some((e) => e.url === example)) {
@@ -329,10 +372,11 @@ export function createSovereigntyCollector({ domain, detectors, prev = null }) {
       return {
         consent: meta,
         pages,
+        sampleFailures,
         hosts: hostJson,
         cookies: cookieJson,
         storage: Object.fromEntries([...storage].map(([o, s]) => [o, { keys: [...s.keys], phases: s.phases }])),
-        players: Object.fromEntries([...players].map(([n, p]) => [n, { pages: p.phases, hosts: [...p.hosts].sort(), requests: p.requests }])),
+        players: Object.fromEntries([...players].map(([n, p]) => [n, { pages: p.phases, hosts: [...p.hosts].sort(), requests: p.requests, mediaRequests: p.mediaRequests }])),
       };
     },
   };

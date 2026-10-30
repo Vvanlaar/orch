@@ -53,6 +53,7 @@ const hostRequests = (h) => PHASES.reduce((n, p) => n + (h.phases?.[p]?.requests
 // an unclaimed host of any of these types is worth a look. Tag managers and
 // analytics beacons land here too — the list is a prompt, not a defect count.
 const INTERESTING_TYPES = new Set(['media', 'xhr', 'fetch', 'script']);
+const NON_PUBLIC_HOST = /^(localhost|127\.0\.0\.1)$|\.(local|localhost|internal|test)$/;
 
 /**
  * True when resolveHosts() ran for this scan. It writes `chain` on every host
@@ -74,9 +75,12 @@ export function findGaps(scan, site, measured) {
   const hosts = Object.entries(sov.hosts || {});
   const thirdParty = hosts.filter(([, h]) => !h.firstParty && hostRequests(h) > 0);
 
+  // A dev URL left in a live page: no table can own it, the site has to fix it
+  const nonPublic = thirdParty.filter(([host]) => NON_PUBLIC_HOST.test(host)).map(([host, h]) => ({ host, requests: hostRequests(h) }));
+
   // operators.json: no service suffix, no CNAME, no ASN could name an owner
   const unresolved = thirdParty
-    .filter(([, h]) => h.eu == null)
+    .filter(([host, h]) => h.eu == null && !NON_PUBLIC_HOST.test(host))
     .map(([host, h]) => ({
       host,
       requests: hostRequests(h),
@@ -101,12 +105,24 @@ export function findGaps(scan, site, measured) {
 
   // pickSamples: a player the pre pass never loaded falls back to desk tracking
   const unsampled = site.players.filter((p) => measured.get(p.player) && !measured.get(p.player).sampled).map((p) => p.player);
+  // A play page alone proves nothing: the JW Player on zaanstad had 3 and sent
+  // no media. Media in any phase will do: autoplay and preload bring it with the
+  // page load. Scans before the media count have only the play pages.
   const noPlay = site.players.filter((p) => {
-    const pages = sov.players?.[p.player]?.pages;
-    return pages && !pages.play;
+    const player = sov.players?.[p.player];
+    if (!player?.pages) return false;
+    return player.mediaRequests === undefined ? !player.pages.play : !player.mediaRequests;
   }).map((p) => p.player);
 
-  return { unresolved, unattributed, nonEuInfra, unsampled, noPlay, unrated: site.unrated, resolved: resolutionRan(hosts), thirdParty: thirdParty.length };
+  // One hidden element in a shared header counts as a video on every page
+  // (stedelijk: 56 of 56, one video). The site's player is right, the count is not.
+  const crawled = sov.pages?.crawl || 0;
+  const siteWide = site.players.filter((p) => {
+    const onPlayer = (scan.details || []).flatMap((d) => (d.players || []).filter((x) => x.name === p.player));
+    return crawled > 1 && onPlayer.length === crawled && onPlayer.every((x) => !String(x.evidence).includes('Network:'));
+  }).map((p) => p.player);
+
+  return { unresolved, nonPublic, unattributed, nonEuInfra, unsampled, noPlay, siteWide, sampleFailures: sov.sampleFailures || [], unrated: site.unrated, resolved: resolutionRan(hosts), thirdParty: thirdParty.length };
 }
 
 // ── printing ─────────────────────────────────────────────────────────
@@ -152,7 +168,8 @@ function printScan(file, scan, vendors) {
     } else {
       console.log(chalk.green(`  Consent  accepted, ${c.cookies} consent cookie(s) — the pre pass is the pre-consent evidence`));
     }
-    if (!pages.pre) console.log(chalk.yellow('  No pre pass ran: every player falls back to desk tracking facts'));
+    // Without consent the crawl is the before-consent measurement: nothing falls back
+    if (c?.given && !pages.pre) console.log(chalk.yellow('  No pre page loaded: every player falls back to desk tracking facts'));
     if (!pages.play) console.log(chalk.yellow('  No play pass ran: the media path (manifest, segments, CDN) is unmeasured'));
   }
 
@@ -206,9 +223,14 @@ function printScan(file, scan, vendors) {
   printGapList('Busy third-party hosts no player claimed', gaps.unattributed, 'scan.mjs DETECTORS / attributeRequest', (r) =>
     `${chalk.white(r.host.padEnd(44))} ${String(r.requests).padStart(5)} req  ${chalk.gray(`${r.types}${r.service ? ` · ${r.service}` : ''}`)}`);
   printGapList('Players never loaded before consent', gaps.unsampled.map((p) => ({ p })), 'sovereignty/collect.mjs pickSamples', (r) => chalk.white(r.p));
-  printGapList('Players with no play sample', gaps.noPlay.map((p) => ({ p })), 'sovereignty/collect.mjs playVideos', (r) => chalk.white(r.p));
+  printGapList('Players whose media path was never seen', gaps.noPlay.map((p) => ({ p })), 'sovereignty/collect.mjs playVideos', (r) => chalk.white(r.p));
+  printGapList('Sample pages that failed', gaps.sampleFailures, 'scan.mjs runSovereigntySamples', (r) =>
+    `${chalk.white(`${r.phase} ${r.url}`)} ${chalk.gray(r.error)}`);
+  printGapList('Player on every page, markup only', gaps.siteWide.map((p) => ({ p })), 'likely a shared element: read the page count as one', (r) => chalk.white(r.p));
+  printGapList('Non-public hosts in live pages', gaps.nonPublic, 'the site, not a table', (r) =>
+    `${chalk.white(r.host.padEnd(44))} ${String(r.requests).padStart(5)} req`);
 
-  const clean = gaps.resolved && !gaps.unrated.length && !gaps.unresolved.length && !gaps.unattributed.length && !gaps.unsampled.length && !gaps.noPlay.length;
+  const clean = gaps.resolved && !gaps.unrated.length && !gaps.unresolved.length && !gaps.unattributed.length && !gaps.unsampled.length && !gaps.noPlay.length && !gaps.sampleFailures.length && !gaps.siteWide.length && !gaps.nonPublic.length;
   if (clean) console.log(chalk.green('\n  Nothing unresolved — the tables covered every host and player this run saw.'));
 
   return metrics(file, scan, site, gaps);
@@ -242,6 +264,7 @@ export function metrics(file, scan, site, gaps) {
     playersUnrated: gaps.unrated.length,
     playersUnsampled: gaps.unsampled.length,
     playersNoPlay: gaps.noPlay.length,
+    sampleFailures: gaps.sampleFailures.length,
     hostsUnattributed: gaps.unattributed.length,
   };
 }
@@ -291,7 +314,7 @@ function printTrend(file) {
       const moves = prev && gradeKey(prev) !== gradeKey(r.grades) ? gradeMoves(prev, r.grades) : [];
       console.log(
         `    ${r.scanDate?.slice(0, 16) || '?'}  site ${g}  ` +
-        chalk.gray(`unresolved ${r.hostsUnresolved} (${Math.round(r.unresolvedRequestShare * 100)}% of req) · unrated ${r.playersUnrated} · unsampled ${r.playersUnsampled} · unclaimed hosts ${r.hostsUnattributed}`) +
+        chalk.gray(`unresolved ${r.hostsUnresolved} (${Math.round(r.unresolvedRequestShare * 100)}% of req) · unrated ${r.playersUnrated} · unsampled ${r.playersUnsampled} · no media ${r.playersNoPlay} · failed samples ${r.sampleFailures ?? '?'} · unclaimed hosts ${r.hostsUnattributed}`) +
         (r.measured && !r.resolved ? chalk.redBright('  ← host resolution failed') : '') +
         (moves.length ? chalk.redBright(`  ← ${moves.join(', ')}`) : '')
       );

@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DETECTORS, loadSeeds, dropEnginesUnderVendors } from "./scan.mjs";
-import { attributeRequest, createSovereigntyCollector, isFirstParty, pickSamples } from "./sovereignty/collect.mjs";
+import { CONSENT_SELECTORS, DETECTORS, isBrowserRefusal, loadSeeds, dropEnginesUnderVendors } from "./scan.mjs";
+import { attributeRequest, createSovereigntyCollector, isFirstParty, pickSamples, playVideos } from "./sovereignty/collect.mjs";
 import { classifyInfra, classifyService, loadAsnDb, parseAsnDb, resolveDns, resolveHosts } from "./sovereignty/resolve.mjs";
 import { gzipSync } from "node:zlib";
 import { gradeOf, measurePlayer, scorePlayer, scoreSite } from "./sovereignty/score.mjs";
@@ -146,6 +146,133 @@ test("pickSamples: start page, video pages round-robin, then the rest", () => {
   const { pre, play } = pickSamples(results, "https://s.nl/", { pre: 4, perPlayer: 1 });
   assert.deepEqual(pre, ["https://s.nl/", "https://s.nl/y1", "https://s.nl/v1", "https://s.nl/y2"]);
   assert.deepEqual(play, [{ player: "YouTube", urls: ["https://s.nl/y1"] }, { player: "Vimeo", urls: ["https://s.nl/v1"] }]);
+});
+
+test("loadSeeds: pages with network evidence come first", () => {
+  const dir = mkdtempSync(join(tmpdir(), "seeds-"));
+  try {
+    const file = join(dir, "seed.json");
+    const row = (url, evidence) => ({ url, players: [{ name: "YouTube", evidence }] });
+    writeFileSync(file, JSON.stringify({ details: [
+      row("https://s.nl/weak1", "HTML: youtube-player"),
+      row("https://s.nl/real", "HTML: youtube.com/embed,Network: https://www.youtube.com/embed/x"),
+      row("https://s.nl/weak2", "HTML: youtube-player"),
+    ] }));
+    assert.deepEqual(loadSeeds(file, "https://s.nl", dir), ["https://s.nl/real", "https://s.nl/weak1", "https://s.nl/weak2"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Blue Billywig detector: the company's own website is not a player", () => {
+  const bb = DETECTORS["Blue Billywig"];
+  const hit = (s) => [...bb.patterns, ...bb.scripts].some((re) => re.test(s));
+  assert.equal(hit("https://www.bluebillywig.com/nl/workshops"), false);
+  assert.equal(hit("https://bluebillywig.com/"), false);
+  assert.equal(hit("https://cdn.bluebillywig.com/apps/player.js"), true);
+  assert.equal(hit("https:\\/\\/stats.bluebillywig.com\\/x"), true);
+  assert.equal(hit("https://d2rvackbgybhru.cloudfront.net/bluebillywig/media/a.mp4"), true);
+});
+
+test("consent: the scan's selectors find Cookiebot's newer accept button", () => {
+  assert.ok(CONSENT_SELECTORS.some((s) => s === "#CybotCookiebotDialogBodyButtonAccept"));
+});
+
+test("isBrowserRefusal: a protocol reset is retried, a rate limit or a left page is not", () => {
+  assert.equal(isBrowserRefusal(new Error("page.goto: net::ERR_HTTP2_PROTOCOL_ERROR at https://www.ing.be/")), true);
+  assert.equal(isBrowserRefusal(new Error("play sample left the page for https://x/")), false);
+  assert.equal(isBrowserRefusal(new Error("Rate limited: connection: ERR_HTTP2_PROTOCOL_ERROR")), true, "how the page load reports it");
+  assert.equal(isBrowserRefusal(new Error("Rate limited: HTTP 429")), false);
+});
+
+// A page with just enough surface for playVideos
+function fakePlayPage({ links = [], videos = [] }) {
+  const clicks = [];
+  const main = { evaluate: async () => {} };
+  const link = (l) => ({
+    getAttribute: async () => l.url,
+    evaluate: async () => { clicks.push(`link:${l.url}`); },
+  });
+  // evaluate runs the real predicate against a stand-in <video>
+  const video = (v) => ({
+    evaluate: async (fn) => fn({ paused: v.paused, currentSrc: v.src ?? "", closest: () => (v.inLink ? {} : null) }),
+    scrollIntoViewIfNeeded: async () => {},
+    boundingBox: async () => v.box,
+  });
+  return {
+    clicks,
+    mainFrame: () => main,
+    frames: () => [main],
+    $$: async (sel) => (sel.startsWith("a[data-video-url]") ? links.map(link) : sel === "video" ? videos.map(video) : []),
+    mouse: { click: async (x, y) => { clicks.push(`mouse:${x},${y}`); } },
+    waitForTimeout: async () => {},
+  };
+}
+const VIMEO = { patterns: [/player\.vimeo\.com/], scripts: [] };
+const BOX = { x: 0, y: 0, width: 200, height: 100 };
+
+test("playVideos: clicks a click-to-load link of this player, and no other", async () => {
+  const page = fakePlayPage({ links: [{ url: "https://player.vimeo.com/video/1" }, { url: "https://other.example/2" }] });
+  assert.equal(await playVideos(page, VIMEO, { settleMs: 0 }), 1);
+  assert.deepEqual(page.clicks, ["link:https://player.vimeo.com/video/1"]);
+});
+
+test("playVideos: a started link is not followed by a click on another player", async () => {
+  const page = fakePlayPage({ links: [{ url: "https://player.vimeo.com/video/1" }], videos: [{ paused: true, src: "a.mp4", box: BOX }] });
+  assert.equal(await playVideos(page, VIMEO, { settleMs: 0 }), 1);
+  assert.deepEqual(page.clicks, ["link:https://player.vimeo.com/video/1"]);
+});
+
+test("playVideos: clicks a video play() could not start: paused, or without a source", async () => {
+  const none = { patterns: [], scripts: [] };
+  const clicks = async (videos) => {
+    const page = fakePlayPage({ videos });
+    await playVideos(page, none, { settleMs: 0 });
+    return page.clicks.length;
+  };
+  assert.equal(await clicks([{ paused: true, src: "a.mp4", box: BOX }]), 1);
+  assert.equal(await clicks([{ paused: false, src: "", box: BOX }]), 1, "paused turns false on a <video> with no source");
+  assert.equal(await clicks([{ paused: false, src: "a.mp4", box: BOX }]), 0, "really playing");
+  assert.equal(await clicks([{ paused: true, src: "a.mp4", box: { ...BOX, width: 10 } }]), 0, "too small");
+  assert.equal(await clicks([{ paused: true, src: "a.mp4", box: BOX, inLink: true }]), 0, "a card: the click would leave the page");
+});
+
+test("playVideos: click false starts nothing by clicking", async () => {
+  const page = fakePlayPage({ links: [{ url: "https://player.vimeo.com/video/1" }], videos: [{ paused: true, box: { x: 0, y: 0, width: 200, height: 100 } }] });
+  assert.equal(await playVideos(page, VIMEO, { settleMs: 0, click: false }), 0);
+  assert.deepEqual(page.clicks, []);
+});
+
+test("collector: sample failures reach the scan file", () => {
+  const c = createSovereigntyCollector({ domain: "s.nl", detectors: {} });
+  assert.deepEqual(c.toJSON().sampleFailures, []);
+  c.setSampleFailures([{ url: "https://s.nl/", phase: "play", error: "boom" }]);
+  assert.equal(c.toJSON().sampleFailures[0].error, "boom");
+});
+
+test("measurePlayer: only a player that sent nothing in any phase is unsampled", () => {
+  const sov = (requests, given = false) => ({
+    consent: { given },
+    hosts: {},
+    cookies: [],
+    storage: {},
+    players: { Vimeo: { pages: { crawl: 56, pre: 3, play: 0 }, hosts: [], ...(requests ? { requests } : {}) } },
+  });
+  assert.equal(measurePlayer(sov({ crawl: {}, pre: {}, play: {} }), "Vimeo").sampled, false);
+  assert.equal(measurePlayer(sov({ crawl: { "a.nl": 1 }, pre: {}, play: {} }), "Vimeo").sampled, true);
+  assert.equal(measurePlayer(sov({ crawl: { "a.nl": 1 }, pre: {}, play: {} }, true), "Vimeo").sampled, true, "held back until consent: a clean measurement");
+  assert.equal(measurePlayer(sov({ crawl: {}, pre: {}, play: { "a.nl": 1 } }, true), "Vimeo").sampled, true, "held back until a click");
+  assert.equal(measurePlayer(sov(null), "Vimeo").sampled, true, "older scans have only the pages");
+});
+
+test("collector: media requests are counted per player, a loader is not media", () => {
+  const c = createSovereigntyCollector({ domain: "s.nl", detectors: { JW: { patterns: [/jwpcdn/], scripts: [] } } });
+  const capture = { requests: [
+    { url: "https://x.jwpcdn.com/player.js", type: "script", frameUrl: "" },
+    { url: "https://s.nl/stream/a.m3u8?t=1", type: "xhr", frameUrl: "" },
+  ], cookies: [], storage: {} };
+  c.recordPage({ url: "https://s.nl/", phase: "crawl", players: [{ player: "JW" }], capture });
+  assert.equal(c.toJSON().players.JW.mediaRequests, 1);
 });
 
 test("loadSeeds: newest finished scan of the domain, not a subdomain's", () => {

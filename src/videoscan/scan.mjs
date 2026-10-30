@@ -25,12 +25,14 @@ export const DETECTORS = {
   "Blue Billywig": {
     patterns: [
       /bbvms\.com/i,
-      /bluebillywig\.com/i,
+      // A subdomain (cdn., stats.): the company's own www. is its website, and
+      // matched every page of bluebillywig.com (19 of 25 without a player)
+      /(?<![\w.-])(?!www\.)[\w-]+\.bluebillywig\.com/i,
       /\.bbvms\./i,
       /bb-player/i,
       /data-bb-/i,
     ],
-    scripts: [/bbvms\.com/i, /bluebillywig/i],
+    scripts: [/bbvms\.com/i, /(?<![\w.-])(?!www\.)[\w-]+\.bluebillywig\.com/i, /\/bluebillywig\//i],
   },
   Brightcove: {
     patterns: [
@@ -1291,21 +1293,24 @@ export function capQueue(queue, queuedSet, max = MAX_QUEUE) {
   return dropped;
 }
 
+export const CONSENT_SELECTORS = [
+  "#onetrust-accept-btn-handler",
+  "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
+  // Cookiebot's newer dialog: stedelijk.nl, labelled "Allow all" in an English browser
+  "#CybotCookiebotDialogBodyButtonAccept",
+  'button:has-text("Accepteren")',
+  'button:has-text("Alle cookies accepteren")',
+  'button:has-text("Alle cookies")',
+  'button:has-text("Akkoord")',
+  'button:has-text("Accept all")',
+  'button:has-text("Accept")',
+  ".cc-accept",
+  "#accept-cookies",
+  '[data-action="accept"]',
+];
+
 async function acceptCookies(page) {
-  const selectors = [
-    "#onetrust-accept-btn-handler",
-    "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
-    'button:has-text("Accepteren")',
-    'button:has-text("Alle cookies accepteren")',
-    'button:has-text("Alle cookies")',
-    'button:has-text("Akkoord")',
-    'button:has-text("Accept all")',
-    'button:has-text("Accept")',
-    ".cc-accept",
-    "#accept-cookies",
-    '[data-action="accept"]',
-  ];
-  for (const sel of selectors) {
+  for (const sel of CONSENT_SELECTORS) {
     try {
       const btn = await page.$(sel);
       if (btn && await btn.isVisible()) {
@@ -1780,6 +1785,8 @@ function scanOnePage(browser, url, timeout) {
   return withScanContext(browser, timeout * 6, (context) => scanPageIn(context, url, timeout));
 }
 
+const pagePath = (url) => url.split(/[?#]/)[0];
+
 // activate: click "load video" placeholders (off for the pre-consent sample:
 // that click is a visitor's choice). play: a player name — start it and keep
 // what it loads (sovereignty play sample).
@@ -1844,7 +1851,12 @@ async function scanPageIn(context, url, timeout, { activate = true, play = null 
     }
     hydrated = activated.iframes.length > 0;
   }
-  if (play && capture) await playVideos(page, DETECTORS[play], { click: !hydrated });
+  if (play && capture) {
+    const before = pagePath(page.url());
+    await playVideos(page, DETECTORS[play], { click: !hydrated });
+    // A click that left the page: what loaded next is not this player's media
+    if (pagePath(page.url()) !== before) throw new Error(`play sample left the page for ${page.url()}`);
+  }
 
   // Re-grab HTML after dynamic content has loaded
   const html = await page.content();
@@ -2959,6 +2971,12 @@ async function crawlSite(startUrl, { maxPages = 50, timeout = 15000, resumeFile 
 
 // ── Sovereignty passes ──────────────────────────────────────────────
 
+// Some edges refuse the bundled Chromium outright (ing.be: every load
+// ERR_HTTP2_PROTOCOL_ERROR, the scan browser loads the same page fine). The
+// page load reports that as a connection "rate limit", so go by the message: an
+// HTTP 429 or a page that left is not the browser's doing, and gets no second try.
+export const isBrowserRefusal = (err) => /ERR_(HTTP2|QUIC|SSL|CONNECTION)/.test(err?.message || "");
+
 // After the crawl: re-load a sample without consent (what leaks before the
 // banner is answered), and start each player type on a few pages (the media
 // path only shows on play). When no consent took, the crawl itself ran
@@ -2980,18 +2998,23 @@ async function runSovereigntySamples(browser, results, startUrl, timeout) {
       return browser;
     });
   }
-  let failed = 0;
+  const failures = [];
   let next = 0;
+  const loadSample = (job, sampleBrowser) => withScanContext(
+    sampleBrowser,
+    timeout * 6,
+    (ctx) => scanPageIn(ctx, job.url, timeout, job.phase === "pre" ? { activate: false } : { play: job.player }),
+    { consent: job.phase !== "pre", block: false },
+  );
   async function worker() {
     while (next < jobs.length && !interrupted) {
       const job = jobs[next++];
       try {
-        const r = await withScanContext(
-          job.phase === "play" ? playBrowser : browser,
-          timeout * 6,
-          (ctx) => scanPageIn(ctx, job.url, timeout, job.phase === "pre" ? { activate: false } : { play: job.player }),
-          { consent: job.phase !== "pre", block: false },
-        );
+        const r = await (job.phase === "play" ? loadSample(job, playBrowser) : loadSample(job, browser)).catch((err) => {
+          if (job.phase !== "play" || playBrowser === browser || interrupted || !isBrowserRefusal(err)) throw err;
+          console.log(chalk.gray(`  Play sample retried in the scan browser (${err.message.split("\n")[0]}): ${job.url}`));
+          return loadSample(job, browser);
+        });
         if (!r.sov) continue; // skipped (download, off-domain redirect)
         if (job.phase === "pre") {
           sovereignty.recordPage({ url: job.url, phase: "pre", players: r.detected, capture: r.sov });
@@ -3004,14 +3027,18 @@ async function runSovereigntySamples(browser, results, startUrl, timeout) {
             capture: { ...r.sov, requests: r.sov.requests.filter((q) => q.play) },
           });
         }
-      } catch {
-        failed++;
+      } catch (err) {
+        failures.push({ url: job.url, phase: job.phase, error: String(err?.message || err).split("\n")[0].slice(0, 200) });
       }
     }
   }
   await Promise.all(Array.from({ length: Math.min(4, jobs.length) }, worker));
   if (playBrowser !== browser) await playBrowser.close().catch(() => {});
-  if (failed) console.log(chalk.yellow(`  ${failed} sample page(s) failed to load`));
+  sovereignty.setSampleFailures(failures);
+  if (failures.length) {
+    console.log(chalk.yellow(`  ${failures.length} sample page(s) failed to load`));
+    for (const f of failures) console.log(chalk.gray(`    ${f.phase} ${f.url}: ${f.error}`));
+  }
 }
 
 async function finishSovereignty() {
@@ -3523,7 +3550,12 @@ export function loadSeeds(from, url, dir = ".") {
   }
   try {
     const prev = JSON.parse(readFileSync(file, "utf-8"));
-    const urls = (prev.details || []).map((d) => d.url);
+    // Pages with network evidence first: a page budget can end long before the
+    // real embeds of an older scan's weak matches (louwmanmuseum.nl: 1604
+    // string-only pages ahead of 13 real YouTube embeds, none reached in 60)
+    const hasNetwork = (d) => (d.players || []).some((p) => String(p.evidence).includes("Network:"));
+    const details = prev.details || [];
+    const urls = [...details.filter(hasNetwork), ...details.filter((d) => !hasNetwork(d))].map((d) => d.url);
     console.log(chalk.gray(`  Seeds: ${urls.length} video page(s) from ${basename(file)}`));
     return urls;
   } catch (err) {

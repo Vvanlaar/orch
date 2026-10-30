@@ -100,6 +100,7 @@
     { "suffix": "jwpcdn.com", "service": "JW Player", "category": "video", "company": "JW Player" },
     { "suffix": "jwpsrv.com", "service": "JW Player", "category": "video", "company": "JW Player" },
     { "suffix": "jwplatform.com", "service": "JW Player", "category": "video", "company": "JW Player" },
+    { "suffix": "jwpltx.com", "service": "JW Player", "category": "analytics", "company": "JW Player" },
     { "suffix": "kaltura.com", "service": "Kaltura", "category": "video", "company": "Kaltura" },
     { "suffix": "wistia.com", "service": "Wistia", "category": "video", "company": "Wistia" },
     { "suffix": "wistia.net", "service": "Wistia", "category": "video", "company": "Wistia" },
