@@ -1,6 +1,6 @@
 ---
 name: videoscan-start
-description: Start a videoscan on the running orch service for a DigiToegankelijk organisation (dashboard.digitoegankelijk.nl/organisaties/<id>) or a single site, report what else the server has open, watch the batch until it settles, then hand over to videoscan-validate. Triggers on "start een videoscan voor <gemeente>", "scan <gemeente>", "start videoscan", a digitoegankelijk organisation URL, "houd de scan in de gaten", "start a videoscan", "watch the scan".
+description: Start a videoscan or sovereignty scan on the running orch service for a DigiToegankelijk organisation (dashboard.digitoegankelijk.nl/organisaties/<id>) or a single site, report what else the server has open, watch the batch until it settles, then hand over to videoscan-validate. Triggers on "start een videoscan voor <gemeente>", "scan <gemeente>", "start videoscan", a digitoegankelijk organisation URL, "houd de scan in de gaten", "start a videoscan", "watch the scan".
 ---
 
 # Start and watch a videoscan
@@ -58,6 +58,33 @@ launching:
   archive) run to the page cap. That is what `--max-pages` is for; the default
   20000 is the dashboard's, and a capped crawl is reported as cut off, not as
   finished.
+
+## Sovereignty scans
+
+`--mode sovereignty` also measures who delivers the video and gives each player
+and the site an A–E grade. Use it when the question is about sovereignty or EU
+delivery rather than which pages have video.
+
+- **Crawls only.** A plan with single pages is refused: `--exclude` them.
+- **Default cap 500 pages**, not 20000: the grade rests on a sample, and it adds a
+  pre-consent pass (20 pages) and a play pass (3 pages per player).
+- **The service runs its own checkout.** Check before launching that the detector
+  and scoring fix you are relying on is in `C:\dev\orch` and in the running service;
+  a fix on a branch does not change what the service measures.
+- **Read the grade with `scripts/sovereignty-review.mjs <scan.json> --log <file>`.**
+  It lists what the run could not answer: a grade can look fine while resting on
+  nothing. Look at "Players whose media path was never seen" and "Sample pages that
+  failed" first, and check a surprising player in the live page's markup before
+  reporting it: a "YouTube embed" has turned out to be a plain link.
+- **Do not read a sovereignty grade from a thin sample as fact.** Say how many
+  media requests D rests on.
+- **A merge loses the measurements.** Once a batch has two completed scans the
+  service merges them, the merged file has no `sovereignty` block, and it reads as
+  desk-only. The sources move to `videoscans/archived/`: read the grade from those.
+  So keep each sovereignty site in a batch of its own, and do not run
+  `scan-retry-failed.mjs --apply` on one: that adds a second scan to its batch.
+- **`--batch` carries over the batch's mode and cap**, and refuses a `--mode` that
+  differs.
 
 ## Ask the user
 

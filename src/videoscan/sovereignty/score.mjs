@@ -3,7 +3,7 @@
 // vendors.json, measured ones from a --mode sovereignty scan, and a measured
 // value always wins over the desk default.
 //   J jurisdiction  30  who controls the vendor (CLOUD Act / national law reach)
-//   D delivery      25  share of the player's requests to EU-run hosts
+//   D delivery      25  share of the player's media requests to EU-run hosts
 //   T tracking      25  what the player sets or sends before consent
 //   O openness      10  open formats, export, open-source player
 //   C certification 10  ISO 27001 and national schemes
@@ -44,8 +44,8 @@ export function loadVendors(path = new URL("./vendors.json", import.meta.url)) {
 }
 
 /**
- * What the scan measured for one player: its hosts (EU or not, by request
- * count) and what it left before consent. null when the scan has no
+ * What the scan measured for one player: its hosts (EU or not, by media
+ * request count) and what it left before consent. null when the scan has no
  * sovereignty data for it (a plain videoscan: desk facts only).
  */
 export function measurePlayer(sov, player) {
@@ -54,6 +54,7 @@ export function measurePlayer(sov, player) {
   // Before consent: the pre sample when consent took, else the crawl itself
   const leak = sov.consent?.given ? "pre" : "crawl";
   let eu = 0, nonEu = 0, unknown = 0;
+  let hostsEu = 0, hostsTotal = 0;
   const hosts = [];
   const adHosts = [];
   for (const host of p.hosts) {
@@ -67,9 +68,17 @@ export function measurePlayer(sov, player) {
     if (!requests) continue;
     // EU only when both the service and the network under it are
     const isEu = h.eu === true && !h.nonEuInfra;
-    if (h.eu == null) unknown += requests;
-    else if (isEu) eu += requests;
-    else nonEu += requests;
+    // Delivery is where the video comes from: beacons and loader scripts would
+    // outweigh it (bluebillywig.com: 5916 stats pings in 10783 requests;
+    // zaanstad: 192 loader requests against 14 of stream). Scans before the
+    // media counts have only all requests, and say so in the reason.
+    const counted = p.mediaRequests ? PHASES.reduce((n, ph) => n + (p.mediaRequests[ph]?.[host] || 0), 0) : requests;
+    if (h.eu == null) unknown += counted;
+    else if (isEu) eu += counted;
+    else nonEu += counted;
+    hostsTotal += requests;
+    // An unknown host gets half, like every unconfirmed value here
+    hostsEu += h.eu == null ? requests / 2 : isEu ? requests : 0;
     hosts.push({ host, requests, eu: h.eu == null ? null : isEu, country: h.country, company: h.service?.company || h.infra?.company || null });
     if (h.service?.category === "ads" && h.phases[leak].requests > 0) adHosts.push(host);
   }
@@ -87,10 +96,17 @@ export function measurePlayer(sov, player) {
   return {
     leakPhase: leak,
     // false when no page with this player was loaded in the leak phase (pre
-    // sample skipped, failed or left the player out): T falls back to desk
-    sampled: (p.pages?.[leak] || 0) > 0,
+    // sample skipped, failed or left the player out) or the player sent nothing
+    // in any phase (stedelijk.nl's Vimeo got full marks for a player that never
+    // loaded): T falls back to desk. Quiet in the leak phase but active later is
+    // a clean measurement: a site holding the embed back until consent or a
+    // click. Scans before per-player counts have only the pages.
+    sampled: (p.pages?.[leak] || 0) > 0 && (!p.requests || PHASES.some((ph) => Object.values(p.requests[ph] || {}).some(Boolean))),
     hosts: hosts.sort((a, b) => b.requests - a.requests),
     euShare: eu + nonEu > 0 ? eu / (eu + nonEu) : null,
+    shareOf: p.mediaRequests ? "media requests" : "measured requests",
+    // All the player's requests: who runs a self-hosted engine when its media went unseen
+    hostShare: hostsTotal > 0 ? hostsEu / hostsTotal : null,
     unknownRequests: unknown,
     preConsent: {
       cookies: cookies.map((c) => ({ name: c.name, domain: c.domain, days: c.session ? 0 : c.maxDays, eu: c.eu ?? null })),
@@ -114,9 +130,12 @@ export function scorePlayer(player, vendor, measured = null) {
 
   // J — for a self-hosted engine the host's operator is the vendor
   if (vendor.type === "engine") {
-    if (measured?.euShare == null) return { player, rated: false, reasons: ["self-hosted player: no host measured"] };
-    dims.J = Math.round(WEIGHTS.J * measured.euShare);
-    reasons.push(`self-hosted: ${Math.round(measured.euShare * 100)}% of requests to EU-run hosts`);
+    // Unseen media must not unrate it: the site takes its worst rated player, so
+    // a failed play click would improve the site's grade
+    const share = measured?.euShare ?? measured?.hostShare;
+    if (share == null) return { player, rated: false, reasons: ["self-hosted player: no host measured"] };
+    dims.J = Math.round(WEIGHTS.J * share);
+    reasons.push(`self-hosted: ${Math.round(share * 100)}% of ${measured.euShare != null ? measured.shareOf : "all requests, unresolved hosts at half,"} to EU-run hosts`);
   } else {
     const cc = vendor.controlCountry;
     if (isEuCountry(cc)) {
@@ -135,7 +154,7 @@ export function scorePlayer(player, vendor, measured = null) {
   // D
   if (measured?.euShare != null) {
     dims.D = Math.round(WEIGHTS.D * measured.euShare);
-    reasons.push(`delivery: ${Math.round(measured.euShare * 100)}% of measured requests to EU-run hosts`);
+    reasons.push(`delivery: ${Math.round(measured.euShare * 100)}% of ${measured.shareOf} to EU-run hosts${measured.unknownRequests ? `, ${measured.unknownRequests} more to unresolved hosts left out` : ""}`);
   } else {
     dims.D = { eu: WEIGHTS.D, mixed: half(WEIGHTS.D), "non-eu": 0 }[vendor.delivery] ?? half(WEIGHTS.D);
     reasons.push(`delivery (not measured): ${vendor.delivery || "unknown"}`);

@@ -7,6 +7,8 @@
 //                         but only up to --shared-max-pages (www. ignored)
 //   --shared-max-pages N  default 499
 //   --exclude host,host   leave these hosts out altogether
+//   --mode sovereignty    also measure who delivers the video: the A–E grade. Crawls
+//                         only; a plan with single pages is refused. Default cap 500
 //   --max-pages N         per crawl task (default 20000, the dashboard's default)
 //   --delay MS            per-request delay (default 200)
 //   --title "Gemeente X"  report title, kept in the launch manifest for scan-report.mjs
@@ -26,12 +28,18 @@ import { api, fail, parseArgs, readManifest, writeManifest, OPEN_STATUSES } from
 import { bare, buildPlan } from './logic.mjs';
 import { videoscanDir, heartbeats } from '../../videoscan-validate/scripts/lib.mjs';
 
-const USAGE = 'usage: scan-start.mjs <digitoegankelijk org url | org id | site url> [--shared h1,h2] [--shared-max-pages N] [--exclude h1,h2] [--max-pages N] [--delay MS] [--title "…"] [--cover <url>] [--batch <batchId>] [--apply]';
+const USAGE = 'usage: scan-start.mjs <digitoegankelijk org url | org id | site url> [--mode sovereignty] [--shared h1,h2] [--shared-max-pages N] [--exclude h1,h2] [--max-pages N] [--delay MS] [--title "…"] [--cover <url>] [--batch <batchId>] [--apply]';
 const { target, flags } = parseArgs(process.argv.slice(2), {
   '--shared': 'value', '--shared-max-pages': 'value', '--exclude': 'value', '--max-pages': 'value',
-  '--delay': 'value', '--title': 'value', '--cover': 'value', '--batch': 'value', '--apply': 'bool',
+  '--delay': 'value', '--title': 'value', '--cover': 'value', '--batch': 'value', '--apply': 'bool', '--mode': 'value',
 }, USAGE);
-const maxPages = Number(flags['--max-pages'] ?? 20000);
+// --batch: the batch this crawl joins, as its launch manifest describes it. Its
+// mode and cap carry over: a plain crawl in a sovereignty batch has no grade.
+const joined = flags['--batch'] ? readManifest(flags['--batch']) : null;
+if (joined && flags['--mode'] && flags['--mode'] !== joined.mode) fail(`--mode ${flags['--mode']} does not match batch "${joined.batchId}" (${joined.mode ?? 'plain videoscan'})`);
+const mode = flags['--mode'] ?? joined?.mode;
+if (mode && mode !== 'sovereignty') fail('--mode can only be "sovereignty"');
+const maxPages = Number(flags['--max-pages'] ?? joined?.maxPages ?? (mode ? 500 : 20000));
 const sharedMaxPages = Number(flags['--shared-max-pages'] ?? 499);
 const delay = Number(flags['--delay'] ?? 200);
 const apply = !!flags['--apply'];
@@ -58,8 +66,6 @@ const digi = target.match(/^https?:\/\/dashboard\.digitoegankelijk\.nl\/organisa
 let groups;
 let batch;
 let orgSlug = '';
-// --batch: the batch this crawl joins, as its launch manifest describes it.
-const joined = flags['--batch'] ? readManifest(flags['--batch']) : null;
 if (flags['--batch'] && (digi || !joined)) fail(digi ? '--batch adds one site to a batch; it takes a site URL, not an organisation' : `No launch manifest for batch "${flags['--batch']}"`);
 
 if (digi) {
@@ -82,7 +88,9 @@ if (digi) {
 const { plan, skipped, unknown } = buildPlan(groups, { excluded, shared, maxPages, sharedMaxPages });
 if (unknown.length) fail(`--exclude / --shared name hosts this plan does not crawl: ${unknown.join(', ')}`);
 
-console.log(`\n── Plan: ${plan.length} tasks, max ${maxPages} pages per crawl, delay ${delay}ms ──`);
+console.log(`\n── Plan: ${plan.length} tasks, max ${maxPages} pages per crawl, delay ${delay}ms${mode ? `, ${mode}` : ''} ──`);
+// scan.mjs runs a mode on a crawl only; a page-list scan would have no grade
+if (mode && plan.some(p => p.kind === 'urls')) fail(`--mode ${mode} takes crawls only, this plan has single pages: ${plan.filter(p => p.kind === 'urls').map(p => p.domain).join(', ')}. Leave them out with --exclude.`);
 const dir = videoscanDir();
 const live = new Set(heartbeats(dir).filter(h => h.live && h.hostname).map(h => bare(h.hostname)));
 const liveInPlan = [];
@@ -115,7 +123,7 @@ for (const p of plan) {
   const what = p.kind === 'crawl' ? p.url : p.urls.join(' ');
   try {
     const r = p.kind === 'crawl'
-      ? await api('/api/actions/start-videoscan', { url: p.url, maxPages: p.maxPages, delay, ...batch })
+      ? await api('/api/actions/start-videoscan', { url: p.url, maxPages: p.maxPages, delay, ...(mode ? { mode } : {}), ...batch })
       : await api('/api/actions/start-videoscan-urls', { urls: p.urls, maxPages, delay, ...batch });
     if (!Number.isInteger(r.taskId)) throw new Error(`no task id in the reply: ${JSON.stringify(r).slice(0, 120)}`);
     started.push({ taskId: r.taskId, kind: p.kind, target: what, ...(p.kind === 'crawl' ? { maxPages: p.maxPages } : {}) });
@@ -134,7 +142,7 @@ if (started.length || (joined && notStarted.length)) {
   const base = flags['--batch'] ? readManifest(flags['--batch']) : null;
   writeManifest(base
     ? { ...base, tasks: [...base.tasks, ...started], notStarted: [...(base.notStarted ?? []), ...notStarted] }
-    : { ...batch, target, maxPages, delay, startedAt: new Date().toISOString(), tasks: started, skipped, notStarted, report });
+    : { ...batch, target, ...(mode ? { mode } : {}), maxPages, delay, startedAt: new Date().toISOString(), tasks: started, skipped, notStarted, report });
   console.log(`batch: ${batch.batchId}`);
   console.log(`watch: node .claude/skills/videoscan-start/scripts/scan-watch.mjs ${batch.batchId}`);
 }
