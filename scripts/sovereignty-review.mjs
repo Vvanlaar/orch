@@ -111,7 +111,8 @@ export function findGaps(scan, site, measured) {
   const noPlay = site.players.filter((p) => {
     const player = sov.players?.[p.player];
     if (!player?.pages) return false;
-    return player.mediaRequests === undefined ? !player.pages.play : !player.mediaRequests;
+    if (!player.mediaRequests) return !player.pages.play;
+    return !PHASES.some((ph) => Object.values(player.mediaRequests[ph] || {}).some(Boolean));
   }).map((p) => p.player);
 
   // One hidden element in a shared header counts as a video on every page
@@ -187,10 +188,10 @@ function printScan(file, scan, vendors) {
     if (m) {
       // euShare is also null when every host resolved to an unknown country,
       // which is a different thing from having measured no hosts at all
-      const eu = m.euShare != null ? `${Math.round(m.euShare * 100)}% EU-run`
-        : m.hosts.length ? 'no host placed in or out of the EU'
+      const eu = m.euShare != null ? `${Math.round(m.euShare * 100)}% of ${m.shareOf} EU-run`
+        : m.hosts.length ? `no ${m.shareOf} placed in or out of the EU`
           : 'no hosts measured';
-      console.log(chalk.gray(`     ${eu}, ${m.hosts.length} host(s)${m.unknownRequests ? `, ${m.unknownRequests} request(s) to unresolved hosts` : ''}${m.sampled ? '' : ', not sampled before consent'}`));
+      console.log(chalk.gray(`     ${eu}, ${m.hosts.length} host(s)${m.unknownRequests ? `, ${m.unknownRequests} of the ${m.shareOf} to unresolved hosts` : ''}${m.sampled ? '' : ', not sampled before consent'}`));
     }
     for (const r of p.reasons) console.log(chalk.gray(`     · ${r}`));
     for (const cap of p.caps) console.log(chalk.redBright(`     ! capped: ${cap}`));

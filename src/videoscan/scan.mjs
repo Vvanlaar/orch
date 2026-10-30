@@ -3026,6 +3026,7 @@ async function runSovereigntySamples(browser, results, startUrl, timeout) {
             phase: "play",
             players: r.detected,
             capture: { ...r.sov, requests: r.sov.requests.filter((q) => q.play) },
+            allRequests: r.sov.requests,
           });
         }
       } catch (err) {

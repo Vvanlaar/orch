@@ -70,8 +70,8 @@ test("findGaps: a player with no play pages is listed, one with play pages is no
 test("findGaps: play pages without media hide nothing, whichever phase brought the media", () => {
   const pages = { crawl: 2, pre: 0, play: 3 };
   const players = {
-    Idle: { pages, hosts: [], mediaRequests: 0 },
-    Auto: { pages, hosts: [], mediaRequests: 4 },
+    Idle: { pages, hosts: [], mediaRequests: { crawl: {}, pre: {}, play: {} } },
+    Auto: { pages, hosts: [], mediaRequests: { crawl: { "a.nl": 4 }, pre: {}, play: {} } },
     Old: { pages, hosts: [] },
   };
   const gaps = findGaps(scanWith({}, players), site([rated("Idle"), rated("Auto"), rated("Old")]), new Map());
