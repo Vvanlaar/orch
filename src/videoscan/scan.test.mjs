@@ -192,6 +192,11 @@ test("JSON-escaped Blue Billywig embed script still detected", () => {
   assert.deepEqual(names(detectFromCorpus(payload)), ["Blue Billywig"]);
 });
 
+test("a VideoJsonLd component name is not Video.js", () => {
+  assert.deepEqual(names(detectFromCorpus('18e:"EmbedMediaVideoJsonLd"\n<script type="application/ld+json">{"@type":"VideoObject"}</script>')), []);
+  assert.ok(names(detectFromCorpus('<video id="v"></video><script>videojs("v")</script>')).includes("Video.js"));
+});
+
 test("CMS link object in a payload is a link, not an embed", () => {
   const link = '\\\\\\"displayAs\\\\\\":\\\\\\"link\\\\\\",\\\\\\"externalLink\\\\\\":{\\\\\\"openInNewTab\\\\\\":false,\\\\\\"value\\\\\\":\\\\\\"https://www.youtube.com/embed/UFkmTZ2S1cc\\\\\\"},\\\\\\"internalLink\\\\\\":null';
   assert.deepEqual(names(detectFromCorpus(link)), []);
